@@ -1,5 +1,6 @@
 import jax
 import jax.numpy as jnp
+import jax.scipy as jscipy
 import os
 import numpy as np
 
@@ -39,8 +40,10 @@ class CIBTracer(BaseTracer):
         self.cib_model = cib_model
 
         if s_nu is None:
+            s_nu_z_path = os.path.join(get_default_data_path(), "auxiliary_files", "filtered_snu_planck_z_fine.txt")
+            s_nu_nu_path = os.path.join(get_default_data_path(), "auxiliary_files", "filtered_snu_planck_nu_fine.txt")
             s_nu_path = os.path.join(get_default_data_path(), "auxiliary_files", "filtered_snu_planck_fine.txt")
-            self.s_nu = np.loadtxt(s_nu_path)
+            self.s_nu = (np.loadtxt(s_nu_z_path), np.loadtxt(s_nu_nu_path), np.loadtxt(s_nu_path))
         else:
             self.s_nu = s_nu
         
@@ -105,19 +108,6 @@ class CIBTracer(BaseTracer):
         
         return Theta
 
-    def s_nu(self, z, m, nu, params=None):
-
-        params = merge_with_defaults(params)
-        
-        chi = self.halo_model.emulator.angular_diameter_distance(z, params = params)
-
-        L_sat_nu = self.l_sat(z, m, nu, params=params) 
-        L_cen_nu = self.l_cen(z, m, nu, params=params) 
-        L_nu = L_sat_nu + L_cen_nu
-
-        S_nu = L_nu / (4 * jnp.pi * (1 + z) * chi**2)
-
-        return S_nu
 
     def m_dot(self, z, m, params=None):
 
@@ -177,7 +167,13 @@ class CIBTracer(BaseTracer):
     
         return sfr
 
+    def s_nu_maniyar(self, z, nu, params=None):
+        ln_x_grid, ln_nu_grid, ln_s_nu_grid = jnp.log(1 + self.s_nu[0]), jnp.log(self.s_nu[1]), jnp.log(self.s_nu[2])
+        _s_nu_interp = jscipy.interpolate.RegularGridInterpolator((ln_x_grid, ln_nu_grid), ln_s_nu_grid)  
+        s_nu = jnp.exp(_s_nu_interp((jnp.log(1 + z), jnp.log(nu))))
+        return s_nu
 
+        
 
     def l_gal(self, z, m, nu, params=None):
         params = merge_with_defaults(params)
@@ -194,11 +190,10 @@ class CIBTracer(BaseTracer):
             
 
         elif self.cib_model == "maniyar":
-            #S_nu = self.s_nu(z, m, nu, params=params)  # Need a way to compute this value
+            s_nu = self.s_nu_maniyar(z, nu, params=None)
             sfr = self.sfr_maniyar(z, m, params=params)
-            raise NotImplementedError("Maniyar is still in progress")
-            
-        
+    
+            return 4 * jnp.pi * s_nu * sfr
 
         else:
             raise ValueError(f"Unknown CIB model: {self.cib_model}. Please select either 'shang' or 'maniyar'")
@@ -234,14 +229,13 @@ class CIBTracer(BaseTracer):
 
          if self.cib_model == "maniyar":
              f_sub = params["maniyar_cib_fsub"]
-             m_central = m * (1 - f_sub)
-         else:
-             m_central = m
+             m *= (1 - f_sub)
+         
              
          N_cen = jnp.where(m > M_min, 1.0, 0.0)
 
          # Galaxy luminosity for each subhalo mass
-         L_gal = self.l_gal(z, m_central, nu, params=params)
+         L_gal = self.l_gal(z, m, nu, params=params)
          L_cen = N_cen * L_gal
          return L_cen
 

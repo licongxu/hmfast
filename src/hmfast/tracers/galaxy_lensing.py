@@ -10,6 +10,7 @@ from hmfast.halo_model import HaloModel
 from hmfast.tracers.base_tracer import BaseTracer
 from hmfast.defaults import merge_with_defaults
 from hmfast.download import get_default_data_path
+from hmfast.utils import Const
 
 jax.config.update("jax_enable_x64", True)
 
@@ -104,7 +105,7 @@ class GalaxyLensingTracer(BaseTracer):
         cparams = self.halo_model.emulator.get_all_cosmo_params(params=params)
         zq = jnp.atleast_1d(jnp.array(z, dtype=jnp.float64))  # Ensure z is an array
 
-        c_km_s = 299792.458  # Speed of light in km/s
+        c_km_s = Const._c_ / 1e3  #299792.458  # Speed of light in km/s
        
         # Cosmological constants
         H0 = params["H0"]  # Hubble constant in km/s/Mpc

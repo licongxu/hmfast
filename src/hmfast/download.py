@@ -106,6 +106,16 @@ AUX_FILES = [
         "filename": "nz_source_normalized_bin4.txt"
     },
     {
+        "url": "https://raw.githubusercontent.com/hmfast/hmfast/refs/heads/main/src/hmfast/data/filtered_snu_planck_z_fine.txt",
+        "subdir": "auxiliary_files",
+        "filename": "filtered_snu_planck_z_fine.txt"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/hmfast/hmfast/refs/heads/main/src/hmfast/data/filtered_snu_planck_nu_fine.txt",
+        "subdir": "auxiliary_files",
+        "filename": "filtered_snu_planck_nu_fine.txt"
+    },
+    {
         "url": "https://raw.githubusercontent.com/hmfast/hmfast/refs/heads/main/src/hmfast/data/filtered_snu_planck_fine.txt",
         "subdir": "auxiliary_files",
         "filename": "filtered_snu_planck_fine.txt"

@@ -9,7 +9,7 @@ from hmfast.halo_model import HaloModel
 from hmfast.tracers.base_tracer import BaseTracer
 from hmfast.defaults import merge_with_defaults
 from hmfast.download import get_default_data_path
-
+from hmfast.utils import Const
 jax.config.update("jax_enable_x64", True)
 
 
@@ -48,7 +48,7 @@ class CMBLensingTracer(BaseTracer):
         # Cosmological constants
         H0 = params["H0"]  # Hubble constant in km/s/Mpc
         Omega_m = cparams["Omega0_m"]  # Matter density parameter
-        c_km_s = 299792.458  # Speed of light in km/s        
+        c_km_s = Const._c_ / 1e3  # Speed of light in km/s        
         h = H0 / 100
         
         # Compute comoving distance and Hubble parameter
