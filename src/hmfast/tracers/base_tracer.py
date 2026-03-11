@@ -158,6 +158,11 @@ class BaseTracer(ABC):
     
         return k, u_k_m
 
+
+    
+   
+
+
     @abstractmethod
     def kernel(self, z, params=None):
         """
@@ -166,9 +171,9 @@ class BaseTracer(ABC):
         pass 
    
     @abstractmethod
-    def get_u_ell(self, z, m, k, moment=1, params=None):
+    def u_k(self, z, m, k, moment=1, params=None):
         """
-        Compute the tracer's profile u_ell(z,m,k). All child classes must have a version of this function implemented.
+        Compute the tracer's profile u_k(z,m,k). All child classes must have a version of this function implemented.
         """
         pass 
 

@@ -199,7 +199,7 @@ class kSZTracer(BaseTracer):
         return sigma_T_over_m_p * 1 / (1.0 + z)
         
 
-    def get_u_ell(self, z, m, ell, moment=1, params=None):
+    def u_k(self, z, m, k, moment=1, params=None):
         """
         Compute either the first or second moment of the kSZ power spectrum tracer u_ell.
         For kSZ:
@@ -217,6 +217,9 @@ class kSZTracer(BaseTracer):
         r_delta = self.halo_model.r_delta(z, m, delta, params=params) 
         ell_delta = d_A / r_delta
 
+        chi = d_A * (1 + z)
+        ell = k * chi - 0.5
+
 
         u_ell_native = u_k_native * jnp.sqrt(jnp.pi / (2 * k_native[None, :]))
         ell_native = k_native[None, :] * ell_delta[:, None] 
@@ -229,12 +232,9 @@ class kSZTracer(BaseTracer):
             lambda _: u_ell_base**2,       # moment = 2
         ]
         u_ell = jax.lax.switch(moment - 1, moment_funcs, None)
-    
-        # Interpolate onto input ell for all masses
-        def interpolate_single(ell_row, u_ell_row):
-            interpolator = jscipy.interpolate.RegularGridInterpolator((ell_row,), u_ell_row, method='linear', bounds_error=False, fill_value=None)
-            return interpolator(ell)
-        u_ell_interp = jax.vmap(interpolate_single)(ell_native, u_ell)
+
+        # Interpolate onto input ell for all masses 
+        u_ell_interp = jax.vmap(lambda x, y: jnp.interp(ell, x, y))(ell_native, u_ell)
     
         return ell, u_ell_interp
 

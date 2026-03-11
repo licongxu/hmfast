@@ -109,7 +109,7 @@ class GalaxyLensingTracer(BaseTracer):
        
         # Cosmological constants
         H0 = params["H0"]  # Hubble constant in km/s/Mpc
-        h = cparams["h"]
+        h = H0 / 100
         Omega_m = cparams["Omega0_m"]  # Matter density parameter
 
         # Compute comoving distance and Hubble parameter
@@ -128,39 +128,27 @@ class GalaxyLensingTracer(BaseTracer):
     
         return W_kappa_g 
 
-    
 
-    def get_u_ell(self, z, m, ell, moment=1, params=None):
-        """ 
-        Compute either the first or second moment of the CMB lensing tracer u_ell.
-        For galaxy lensing:, 
-            First moment:     W_k_g * u_ell_m
-            Second moment:    W_k_g^2 * u_ell_m^2 
-        """
-
+    def u_k(self, z, m, k, moment=1, params=None):
         params = merge_with_defaults(params)
         cparams = self.halo_model.emulator.get_all_cosmo_params(params)
-        W = self.kernel(z, params=params) 
-
-        # Compute u_m_ell from BaseTracer
-        chi = self.halo_model.emulator.angular_diameter_distance(z, params=params) * (1.0 + z) * cparams["h"]
-        k = (ell + 0.5) / chi
+        W = self.kernel(z, params=params)
+    
+        # z is scalar, m and ell are arrays
         ell, u_m = self.u_k_matter(z, m, k, params=params)
-
-        rho_mean_0 = cparams["Rho_crit_0"] * cparams["Omega0_m"] 
+    
+        rho_mean_0 = cparams["Rho_crit_0"] * cparams["Omega0_m"]
         m_over_rho_mean = (m / rho_mean_0)[:, None]  # shape (N_m, 1)
         m_over_rho_mean = jnp.broadcast_to(m_over_rho_mean, u_m.shape)
         u_m *= m_over_rho_mean
     
         moment_funcs = [
-            lambda _:  u_m,
-            lambda _:  u_m**2,
+            lambda _: u_m,
+            lambda _: u_m**2,
         ]
-    
         u_ell = jax.lax.switch(moment - 1, moment_funcs, None)
-    
         return ell, u_ell
-  
+      
   
 
 

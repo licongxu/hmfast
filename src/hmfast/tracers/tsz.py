@@ -17,7 +17,7 @@ class tSZTracer(BaseTracer):
     def __init__(self, halo_model, x=None):
 
         # Set tracer parameters
-        self.x = x if x is not None else jnp.logspace(jnp.log10(1e-4), jnp.log10(20.0), 512)
+        self.x = x if x is not None else jnp.logspace(jnp.log10(1e-5), jnp.log10(4.0), 256)
         self.hankel = HankelTransform(self.x, nu=0.5)
         self.profile = self.gnfw_pressure_profile
         
@@ -80,28 +80,32 @@ class tSZTracer(BaseTracer):
         mpc_per_h_to_cm =  Const._Mpc_over_m_ / h
         return (sigma_T / m_e) / (1+z) # Check this
     
-    def get_u_ell(self, z, m, ell, moment=1, params=None):
+
+    def u_k(self, z, m, k, moment=1, params=None):
         """
         Compute either the first or second moment of the tSZ power spectrum tracer u_ell.
         For tSZ:
-            1st moment:  u_ell
-            2nd moment:  u_ell^2
+            1st moment:  u_k
+            2nd moment:  u_k^2
         """
         params = merge_with_defaults(params)
         prefactor = self.prefactor(z, m, params=params)
-        k_native, u_k_native = self.u_k_hankel(z, m, params=params)
-
-        delta = self.halo_model.delta 
-        d_A = self.halo_model.emulator.angular_diameter_distance(z, params=params) * params['H0'] / 100
-        r_delta = self.halo_model.r_delta(z, m, delta, params=params) 
+    
+        h, B = params['H0']/100, params['B']
+        delta = self.halo_model.delta
+        d_A = self.halo_model.emulator.angular_diameter_distance(z, params=params) * h
+        r_delta = self.halo_model.r_delta(z, m, delta, params=params) / B**(1/3)
         ell_delta = d_A / r_delta
 
-
-        u_ell_native = u_k_native * jnp.sqrt(jnp.pi / (2 * k_native[None, :]))
-        ell_native = k_native[None, :] * ell_delta[:, None] 
-        
+        # This code currently converts k back into l via Limber to then use the l/l_delta definition, but there's probably a better solution
+        chi = d_A * (1 + z)
+        ell = k * chi - 0.5
     
-        ell_native *= params['B']**(1/3)
+        k_native, u_k_native = self.u_k_hankel(z, m, params=params)
+    
+        u_ell_native = u_k_native * jnp.sqrt(jnp.pi / (2 * k_native[None, :]))
+        ell_native = k_native[None, :] * ell_delta[:, None]
+    
         u_ell_base = prefactor[:, None] * u_ell_native
     
         moment_funcs = [
@@ -110,11 +114,8 @@ class tSZTracer(BaseTracer):
         ]
         u_ell = jax.lax.switch(moment - 1, moment_funcs, None)
     
-        # Interpolate onto input ell for all masses
-        def interpolate_single(ell_row, u_ell_row):
-            interpolator = jscipy.interpolate.RegularGridInterpolator((ell_row,), u_ell_row, method='linear', bounds_error=False, fill_value=None)
-            return interpolator(ell)
-        u_ell_interp = jax.vmap(interpolate_single)(ell_native, u_ell)
+        # Interpolate onto input ell for all masses 
+        u_ell_interp = jax.vmap(lambda ell_row, u_row: jnp.interp(ell, ell_row, u_row))(ell_native, u_ell)
     
         return ell, u_ell_interp
 
