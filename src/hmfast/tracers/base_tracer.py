@@ -1,10 +1,12 @@
 import jax
 import jax.numpy as jnp
+import jax.scipy as jscipy
+from jax.scipy.special import sici, erf
 import functools
 import mcfit
 from abc import ABC, abstractmethod
-import jax.scipy as jscipy
-from jax.scipy.special import sici, erf
+import numpy as np
+
 
 from hmfast.defaults import merge_with_defaults
 
@@ -38,6 +40,26 @@ class BaseTracer(ABC):
         """
         Initialize the radial grid and Hankel transform.
         """
+
+
+    def _load_dndz_data(self, path):
+        """
+        Loads dndz curves in the format (z, phi) for galaxy HOD and galaxy lensing tracers.
+        """
+        data = np.loadtxt(path)
+        x = data[:, 0]
+        y = data[:, 1]
+        return (jnp.array(x), jnp.array(y))
+
+        
+    def _normalize_dndz(self, value):
+        """
+        Normalizes dndz curves in the format (z, phi) for galaxy HOD and galaxy lensing tracers if needed.
+        """
+        z = jnp.atleast_1d(jnp.array(value[0]))
+        phi = jnp.atleast_1d(jnp.array(value[1]))
+        norm = jnp.trapezoid(phi, x=z)
+        return (z, phi / norm)
 
 
     def u_k_hankel(self, m, z, params=None):

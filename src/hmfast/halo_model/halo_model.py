@@ -27,7 +27,7 @@ class HaloModel:
     with automatic differentiation capabilities.
     """
     
-    def __init__(self, cosmo_model=0, delta = 200, delta_ref = "critical", mass_model = T08HaloMass(), bias_model = T10HaloBias(), concentration_relation=D08Concentration()):
+    def __init__(self, emulator=Emulator(cosmo_model=0), delta = 200, delta_ref = "critical", mass_model = T08HaloMass(), bias_model = T10HaloBias(), concentration_relation=D08Concentration()):
         """
         Initialize the halo model.
         
@@ -46,7 +46,7 @@ class HaloModel:
         """
         
         # Load emulator and make sure the required files are loaded outside of jitted functions
-        self.emulator = Emulator(cosmo_model=cosmo_model)
+        self.emulator = emulator 
         self.emulator._load_emulator("DAZ")
         self.emulator._load_emulator("HZ")
         self.emulator._load_emulator("PKL")
@@ -247,6 +247,36 @@ class HaloModel:
         params = merge_with_defaults(params)
         return self.concentration_relation.c_delta(self, m, z, params=params)
 
+
+    def counter_terms(self, m, z, params=None):
+        """
+        Compute n_min, b1_min, b2_min counter terms for halo model consistency.
+    
+        Args:
+            z: array-like, redshift(s)
+            m: array-like, mass grid 
+            params: dict, optional, cosmological parameters
+    
+        Returns:
+            n_min: array, shape (len(z),)
+            b1_min: array, shape (len(z),)
+            b2_min: array, shape (len(z),)
+        """
+        params = merge_with_defaults(params)
+        m = jnp.atleast_1d(m)
+        logm = jnp.log(m)
+    
+        # Compute dn/dlnM and bias for each z
+        dn_dlnm = self.halo_mass_function(m=m, z=z, params=params)  # (Nm, Nz)
+        b1 = self.halo_bias(m=m, z=z, order=1, params=params)      # (Nm, Nz)
+        b2 = self.halo_bias(m=m, z=z, order=2, params=params)      # (Nm, Nz)
+    
+        # Integrate over mass (axis=0) for each z
+        n_min = jnp.trapezoid(dn_dlnm, x=logm, axis=0)      # (Nz,)
+        b1_min = jnp.trapezoid(b1 * dn_dlnm, x=logm, axis=0)
+        b2_min = jnp.trapezoid(b2 * dn_dlnm, x=logm, axis=0)
+    
+        return n_min, b1_min, b2_min
 
 
     def _compute_hmf_grid(self, params=None):

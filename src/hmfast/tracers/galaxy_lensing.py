@@ -1,5 +1,4 @@
 import os
-import numpy as np # it may be a good idea to eventually remove numpy dependence altogether, but now we need it for np.loadtxt
 import jax
 import jax.numpy as jnp
 import jax.scipy as jscipy
@@ -38,22 +37,34 @@ class GalaxyLensingTracer(BaseTracer):
         self.halo_model.emulator._load_emulator("HZ")
 
         if dndz_source is None:
+            # Call _load_dndz_data from BaseTracer
             dndz_source_path = os.path.join(get_default_data_path(), "auxiliary_files", "nz_source_normalized_bin4.txt")
-            self.dndz_source = self.load_file_data(dndz_source_path)
+            self.dndz_source = self._load_dndz_data(dndz_source_path)
         else:
             self.dndz_source = dndz_source
 
         if dndz_lens is None:
+            # Call _load_dndz_data from BaseTracer
             dndz_lens_path = os.path.join(get_default_data_path(), "auxiliary_files", "nz_lens_bin1.txt")
-            self.dndz_lens = self.load_file_data(dndz_lens_path)
+            self.dndz_lens = self._load_dndz_data(dndz_lens_path)
         else: 
             self.dndz_lens = dndz_lens
-    
-    def load_file_data(self, path):
-        data = np.loadtxt(path)
-        x = data[:, 0]
-        y = data[:, 1]
-        return (jnp.array(x), jnp.array(y))
+
+    @property
+    def dndz_source(self):
+        return self._dndz_source_data
+
+    @dndz_source.setter
+    def dndz_source(self, value):
+        self._dndz_source_data = self._normalize_dndz(value)
+
+    @property
+    def dndz_lens(self):
+        return self._dndz_lens_data
+
+    @dndz_lens.setter
+    def dndz_lens(self, value):
+        self._dndz_lens_data = self._normalize_dndz(value)
 
     
     def get_I_g(self, z, params=None):

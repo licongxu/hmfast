@@ -1,5 +1,4 @@
 import os
-import numpy as np # it may be a good idea to eventually remove numpy dependence altogether, but now we need it for np.loadtxt
 import jax
 import jax.numpy as jnp
 import jax.scipy as jscipy
@@ -37,32 +36,19 @@ class GalaxyHODTracer(BaseTracer):
         self.halo_model.emulator._load_emulator("HZ")
 
         if dndz is None:
+            # Call _load_dndz_data from BaseTracer
             dndz_path = os.path.join(get_default_data_path(), "auxiliary_files", "normalised_dndz_cosmos_0.txt")
-            dndz = self.load_file_data(dndz_path)
+            dndz = self._load_dndz_data(dndz_path)  
 
         self.dndz = dndz
 
     @property
     def dndz(self):
-        """Access the normalized dndz: tracer.dndz"""
         return self._dndz_data
 
     @dndz.setter
     def dndz(self, value):
-        """
-        Intercepts any attempt to set dndz (initially or later) and forces it to be a normalized JAX array tuple.
-        """
-        z_raw = jnp.atleast_1d(jnp.array(value[0]))
-        phi_raw = jnp.atleast_1d(jnp.array(value[1]))
-        norm = jnp.trapezoid(phi_raw, x=z_raw)
-        self._dndz_data = (z_raw, phi_raw / norm)
-            
-
-    def load_file_data(self, dndz_path):
-        data = np.loadtxt(dndz_path)
-        x = data[:, 0]
-        y = data[:, 1]
-        return (jnp.array(x), jnp.array(y))
+        self._dndz_data = self._normalize_dndz(value)
         
         
     def n_cen(self, m, params = None):
