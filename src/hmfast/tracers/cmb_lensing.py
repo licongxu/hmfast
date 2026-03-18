@@ -34,7 +34,7 @@ class CMBLensingTracer(BaseTracer):
         self.halo_model.emulator._load_emulator("DAZ")
         self.halo_model.emulator._load_emulator("HZ")
         self.halo_model.emulator._load_emulator("DER")
-        
+
 
     def kernel(self, z, params=None):
         """
@@ -43,7 +43,7 @@ class CMBLensingTracer(BaseTracer):
         # Merge default parameters with input
         params = merge_with_defaults(params)
         cparams = self.halo_model.emulator.get_all_cosmo_params(params=params)
-        zq = jnp.atleast_1d(jnp.array(z, dtype=jnp.float64))  # Ensure z is an array
+        z = jnp.atleast_1d(z)  # Ensure z is an array
         
         # Cosmological constants
         H0 = params["H0"]  # Hubble constant in km/s/Mpc
@@ -52,8 +52,8 @@ class CMBLensingTracer(BaseTracer):
         h = H0 / 100
         
         # Compute comoving distance and Hubble parameter
-        chi_z = self.halo_model.emulator.angular_diameter_distance(zq, params=params) * (1 + zq) * h # Comoving distance in Mpc/h
-        H_z = self.halo_model.emulator.hubble_parameter(zq, params=params)   # Hubble parameter in km/s/Mpc
+        chi_z = self.halo_model.emulator.angular_diameter_distance(z, params=params) * (1 + z) * h # Comoving distance in Mpc/h
+        H_z = self.halo_model.emulator.hubble_parameter(z, params=params)   # Hubble parameter in km/s/Mpc
         
         # Comoving distance to the last scattering surface (z ~ 1090) in Mpc/h
         chi_z_cmb = self.halo_model.emulator.derived_parameters(params=params)["chi_star"] * h  

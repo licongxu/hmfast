@@ -29,6 +29,7 @@ class kSZTracer(BaseTracer):
 
          # Compute Pk once instantiate grids and thus avoid tracer errors
         _, _ = self.halo_model.emulator.pk_matter(1., params=None, linear=True) 
+        
 
     @property
     def x(self):

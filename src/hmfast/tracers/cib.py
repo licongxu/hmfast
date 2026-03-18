@@ -47,6 +47,11 @@ class CIBTracer(BaseTracer):
         else:
             self.s_nu = s_nu
 
+
+    @property
+    def has_central_contribution(self):
+        return True
+
     @property
     def cib_model(self):
         return self._cib_model
@@ -301,5 +306,32 @@ class CIBTracer(BaseTracer):
         u_k = jax.lax.switch(moment - 1, moment_funcs, None)
     
         return k, u_k
+
+
+    def sat_and_cen_contribution(self, k, m, z, params=None):
+
+
+        params = merge_with_defaults(params)
+        cparams = self.halo_model.emulator.get_all_cosmo_params(params)
+        
+        h = params["H0"]/100
+       
+        nu = self.nu 
+        h_factor = h**2 if self.cib_model=='shang' else 1
+
+        # Compute the physical mass for Ls and Lc
+        m_physical = m/h
+        Ls = self.l_sat(m_physical, z, nu, params=params)
+        Lc = self.l_cen(m_physical, z, nu, params=params)
+
+        # Compute u_m_ell from BaseTracer
+        _, u_m = self.u_k_matter(k, m, z, params=params)
+
+
+        sat_term = h_factor**1    / (4*jnp.pi)        * (Ls[None, :, :] * u_m ) 
+        cen_term = h_factor**1    / (4*jnp.pi)        * (Lc[None, :, :])       
+
+    
+        return sat_term, cen_term
 
     

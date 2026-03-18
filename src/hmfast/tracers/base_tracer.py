@@ -41,6 +41,18 @@ class BaseTracer(ABC):
         Initialize the radial grid and Hankel transform.
         """
 
+    @property
+    def has_central_contribution(self):
+        """ 
+        Indicates whether the tracer has a contribution from central terms, such as:
+        
+            - HOD, which has profile = N_sat * u_k + N_sat 
+            - CIB, which has profile = L_sat * u_k + L_sat * L_cen
+
+        For most tracers, profile = prefactor * u_k, meaning that this will be set to False.
+        """
+        return False
+
 
     def _load_dndz_data(self, path):
         """

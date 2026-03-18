@@ -406,12 +406,21 @@ class HaloModel:
         damping = jnp.where(mask, d_vals, 1.0)[:, None, None]
 
         # Handle both auto-correlations vs cross-correlations
-        is_auto = (tracer2 is None) or (tracer1 == tracer2)
+        is_same_tracer = (tracer2 is None) or (tracer1 == tracer2)
         tracer2 = tracer1 if tracer2 is None else tracer2
 
-        if is_auto:
+        if is_same_tracer:
             _, u_k_sq = tracer1.u_k(k/h, m, z, moment=2, params=params)
 
+        elif tracer1.has_central_contribution and tracer2.has_central_contribution:
+            sat_term1, cen_term1 = tracer1.sat_and_cen_contribution(k/h, m, z, params=params)
+            sat_term2, cen_term2 = tracer2.sat_and_cen_contribution(k/h, m, z, params=params)
+
+            u_k_sq =  sat_term1 * sat_term2   +  \
+                      sat_term1 * cen_term2   +  \
+                      sat_term2 * cen_term1
+
+        
         else:
             _, u_k1 = tracer1.u_k(k/h, m, z, moment=1, params=params)
             _, u_k2 = tracer2.u_k(k/h, m, z, moment=1, params=params)

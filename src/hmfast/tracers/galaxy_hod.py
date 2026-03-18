@@ -43,6 +43,10 @@ class GalaxyHODTracer(BaseTracer):
         self.dndz = dndz
 
     @property
+    def has_central_contribution(self):
+        return True
+
+    @property
     def dndz(self):
         return self._dndz_data
 
@@ -148,5 +152,28 @@ class GalaxyHODTracer(BaseTracer):
         u_k = jax.lax.switch(moment - 1, moment_funcs, None)
     
         return k, u_k
+
+
+
+    def sat_and_cen_contribution(self, k, m, z, params=None):
+        """ 
+        Compute either the first or second moment of the galaxy HOD tracer u_ell.
+        For galaxy HOD:, 
+            First moment:     W_g / ng_bar * [Nc + Ns * u_ell_m]
+            Second moment:    W_g^2 / ng_bar^2 * [Ns^2 * u_ell_m^2 + 2 * Ns * u_ell_m]
+        You cannot simply take u_ell_g**2.
+        """
+
+        params = merge_with_defaults(params)
+        Ns = self.n_sat(m, params=params)
+        Nc = self.n_cen(m, params=params)
+        ng = self.ng_bar(m, z, params=params) * (params["H0"]/100)**3
+
+        _, u_m = self.u_k_matter(k, m, z, params=params)  
+
+        sat_term = (1/ng) * (Ns[None, :, None] * u_m)
+        cen_term = (1/ng) * (Nc[None, :, None]**0)
+    
+        return sat_term, cen_term
   
         

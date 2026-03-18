@@ -48,37 +48,27 @@ class tSZTracer(BaseTracer):
             z.shape = (Nz,)
         Output shape: (Nx, Nm, Nz)
         """
+       
+    
+        # Retrieve all required parameters and ensure all inputs are 1D  
         params = merge_with_defaults(params)
-    
-        # 1. Ensure all inputs are 1D
-        x = jnp.atleast_1d(x)  # (Nx,)
-        m = jnp.atleast_1d(m)  # (Nm,)
-        z = jnp.atleast_1d(z)  # (Nz,)
-    
-        # 2. Reshape for broadcasting: (Nx,1,1), (1,Nm,1), (1,1,Nz)
-        x_b = x[:, None, None]        # (Nx, 1, 1)
-        m_b = m[None, :, None]        # (1, Nm, 1)
-        z_b = z[None, None, :]        # (1, 1, Nz)
-    
-        # 3. Pull needed parameters
         H0, P0, alpha, beta, gamma, B = (params[k] for k in ("H0", "P0GNFW", "alphaGNFW", "betaGNFW", "gammaGNFW", "B"))
-    
-        # 4. Halo concentration (Nm, Nz) → expand to (1, Nm, Nz) to match x_b
-        c_delta = self.halo_model.c_delta(m, z, params=params)  # (Nm, Nz)
-        c_delta = c_delta[None, :, :]                            # (1, Nm, Nz)
-    
-        # 5. Helper variables for normalization
+        x, m, z = jnp.atleast_1d(x), jnp.atleast_1d(m), jnp.atleast_1d(z) 
+       
+        # Helper variables for normalization
         h = H0 / 100.0
         c_km_s = Const._c_ / 1e3
         H = self.halo_model.emulator.hubble_parameter(z, params=params) * c_km_s  # (Nz,)
         H = jnp.atleast_1d(H)[None, None, :]  # (1, 1, Nz)
-    
+
+        # Corrected mass given the hydrostatic mass bias
         m_delta_tilde = (m / B)[None, :, None]  # (1, Nm, 1)
     
         C = (1.65 * (h / 0.7) ** 2 * (H / H0) ** (8 / 3) * (m_delta_tilde / (0.7 * 3e14)) ** (2 / 3 + 0.12) * (0.7 / h) ** 1.5)  # (1, Nm, Nz)
     
-        # 6. Scaled radius and GNFW formula
-        scaled_x = c_delta * x_b  # (Nx, Nm, Nz)
+        # Scaled radius and GNFW formula
+        c_delta = self.halo_model.c_delta(m, z, params=params)  # (Nm, Nz)
+        scaled_x = c_delta[None, :, :] * x[:, None, None]   # (Nx, Nm, Nz)
         Pe = C * P0 * scaled_x ** (-gamma) * (1 + scaled_x ** alpha) ** ((gamma - beta) / alpha)
     
         return Pe  # shape: (Nx, Nm, Nz)

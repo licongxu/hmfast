@@ -75,7 +75,7 @@ class GalaxyLensingTracer(BaseTracer):
         """
         
         params = merge_with_defaults(params)
-        zq = jnp.atleast_1d(jnp.array(z, dtype=jnp.float64))
+        z = jnp.atleast_1d(z)
         h = params["H0"] / 100
         
         # Load source distribution and lens redshift distribution
@@ -86,8 +86,8 @@ class GalaxyLensingTracer(BaseTracer):
         phi_prime_at_z_s = jnp.interp(z_s_data, z_data, phi_prime_data, left=0.0, right=0.0)
     
         # Angular distances
-        chi_z_s = self.halo_model.emulator.angular_diameter_distance(z_s_data) * (1 + z_s_data) * h
-        chi_z = self.halo_model.emulator.angular_diameter_distance(zq) * (1 + zq) * h
+        chi_z_s = self.halo_model.emulator.angular_diameter_distance(z_s_data, params=params) * (1 + z_s_data) * h
+        chi_z = self.halo_model.emulator.angular_diameter_distance(z, params=params) * (1 + z) * h
     
         # Reshape for broadcasting
         chi_z_s = chi_z_s[:, None]  # (N_s, 1)
@@ -97,7 +97,7 @@ class GalaxyLensingTracer(BaseTracer):
         chi_diff = (chi_z_s - chi_z) / chi_z_s
     
         # Mask: only include sources behind the lens
-        mask = (z_s_data[:, None] > zq[None, :])  # (N_s, N_z)
+        mask = (z_s_data[:, None] > z[None, :])  # (N_s, N_z)
         chi_diff_masked = chi_diff * mask
     
         # Integrate over z_s using trapezoid
@@ -114,9 +114,9 @@ class GalaxyLensingTracer(BaseTracer):
         # Merge default parameters with input
         params = merge_with_defaults(params)
         cparams = self.halo_model.emulator.get_all_cosmo_params(params=params)
-        zq = jnp.atleast_1d(jnp.array(z, dtype=jnp.float64))  # Ensure z is an array
+        z = jnp.atleast_1d(z) # Ensure z is an array
 
-        c_km_s = Const._c_ / 1e3  #299792.458  # Speed of light in km/s
+        c_km_s = Const._c_ / 1e3  # Speed of light in km/s
        
         # Cosmological constants
         H0 = params["H0"]  # Hubble constant in km/s/Mpc
@@ -124,10 +124,10 @@ class GalaxyLensingTracer(BaseTracer):
         Omega_m = cparams["Omega0_m"]  # Matter density parameter
 
         # Compute comoving distance and Hubble parameter
-        chi_z = self.halo_model.emulator.angular_diameter_distance(zq, params=params) * (1 + zq) * h # Comoving distance in Mpc/h
-        H_z = self.halo_model.emulator.hubble_parameter(zq, params=params)   # Hubble parameter in km/s/Mpc
+        chi_z = self.halo_model.emulator.angular_diameter_distance(z, params=params) * (1 + z) * h # Comoving distance in Mpc/h
+        H_z = self.halo_model.emulator.hubble_parameter(z, params=params)   # Hubble parameter in km/s/Mpc
     
-        I_g = self.get_I_g(zq, params=params) 
+        I_g = self.get_I_g(z, params=params) 
     
         # Compute the CMB lensing kernel
         W_kappa_g =  (
@@ -143,7 +143,6 @@ class GalaxyLensingTracer(BaseTracer):
     def u_k(self, k, m, z, moment=1, params=None):
         params = merge_with_defaults(params)
         cparams = self.halo_model.emulator.get_all_cosmo_params(params)
-
         k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
 
         k, u_m = self.u_k_matter(k, m, z, params=params)
