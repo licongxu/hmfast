@@ -36,11 +36,11 @@ class D08Concentration:
         z = jnp.atleast_1d(z)[None, :]  # shape (1, Nz)
         
         # Probably a prettier way of doing this
-        if halo_model.delta == 200 and halo_model.delta_ref == "critical":
+        if halo_model.mass_definition.delta == 200 and halo_model.mass_definition.reference == "critical":
             A, B, C, M_pivot = 5.71, -0.084, -0.47, 2e12
-        elif halo_model.delta == 200 and halo_model.delta_ref == "mean":
+        elif halo_model.mass_definition.delta == 200 and halo_model.mass_definition.reference == "mean":
             A, B, C, M_pivot = 10.14, -0.081, -1.01, 2e12
-        elif halo_model.delta == "vir":
+        elif halo_model.mass_definition.delta == "vir":
             A, B, C, M_pivot = 7.85, -0.081, -0.71, 2e12
         else:
             raise ValueError("The c-M relation c_D08 is incompatible with the chosen definiton of delta. You must select from the following: '200c', '200m', 'vir'.")
@@ -70,11 +70,11 @@ class B13Concentration:
         D = halo_model.emulator.growth_factor(z, params=params)
     
         # Probably a prettier way of doing this
-        if halo_model.delta == 200 and halo_model.delta_ref == "critical":
+        if halo_model.mass_definition.delta == 200 and halo_model.mass_definition.reference == "critical":
             A, B, C = 5.9, 0.54, -0.35
-        elif halo_model.delta == 200 and halo_model.delta_ref == "mean":
+        elif halo_model.mass_definition.delta == 200 and halo_model.mass_definition.reference == "mean":
             A, B, C = 9.0, 1.15, -0.29
-        elif halo_model.delta == "vir":
+        elif halo_model.mass_definition.delta == "vir":
             A, B, C = 7.7, 0.9, -0.29
         else:
             raise ValueError("The c-M relation c_B13 is incompatible with the chosen definiton of delta. You must select from the following: '200c', 200m', 'vir'.")
@@ -101,7 +101,7 @@ class SC14Concentration:
         z = jnp.atleast_1d(z)[None, :]  # shape (1, Nz)
         
         # Coefficients from Eq. 1
-        if halo_model.delta == 200 and halo_model.delta_ref == "critical":
+        if halo_model.mass_definition.delta == 200 and halo_model.mass_definition.reference == "critical":
             c_array = jnp.array([37.5153, -1.5093, 1.636e-2, 3.66e-4, -2.89237e-5, 5.32e-7])
             logM = jnp.log10(m)
             powers = jnp.stack([logM**i for i in range(6)], axis=0)  # (6, Nm, 1)

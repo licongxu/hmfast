@@ -52,7 +52,7 @@ class kSZTracer(BaseTracer):
         f_b = cparams["Omega_b"] / cparams["Omega0_m"]
         
         # Get scale radius r_s
-        r_delta = self.halo_model.r_delta(m, z, self.halo_model.delta, params=params)
+        r_delta = self.halo_model.r_delta(m, z, params=params)
         c_delta = self.halo_model.c_delta(m, z, params=params)
         r_s = r_delta / c_delta # (Nm, Nz)
         
@@ -160,8 +160,8 @@ class kSZTracer(BaseTracer):
         k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
     
         # Compute r_delta and ell_delta
-        delta = self.halo_model.delta
-        r_delta = self.halo_model.r_delta(m, z, delta, params=params)
+        delta = self.halo_model.mass_definition.delta
+        r_delta = self.halo_model.r_delta(m, z, params=params)
         d_A_z = jnp.atleast_1d(self.halo_model.emulator.angular_diameter_distance(z, params=params)) * h
         ell_delta = d_A_z[None, :] / r_delta
         

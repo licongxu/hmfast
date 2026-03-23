@@ -90,10 +90,10 @@ class tSZTracer(BaseTracer):
         
         params = merge_with_defaults(params)
         h, B = params['H0']/100, params['B']
-        delta = self.halo_model.delta
+        delta = self.halo_model.mass_definition.delta
         k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
         
-        r_delta = self.halo_model.r_delta(m, z, delta, params=params) / B**(1/3) # (Nm, Nz)
+        r_delta = self.halo_model.r_delta(m, z, params=params) / B**(1/3) # (Nm, Nz)
         d_A = jnp.atleast_1d(self.halo_model.emulator.angular_diameter_distance(z, params=params)) * h
         ell_delta = d_A[None, :] / r_delta  # (Nm, Nz)
         

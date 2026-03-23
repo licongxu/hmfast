@@ -129,9 +129,9 @@ class BaseTracer(ABC):
         k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
         
         # Get c_delta and r_delta
-        delta = self.halo_model.delta
+        delta = self.halo_model.mass_definition.delta
         c_delta = self.halo_model.c_delta(m, z, params=params)
-        r_delta = self.halo_model.r_delta(m, z, delta, params=params)
+        r_delta = self.halo_model.r_delta(m, z, params=params)
         lambda_val = 1.0 
         
         # Compute analytical profile q terms with shape: (N_k, N_m, N_z)
