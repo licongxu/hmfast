@@ -14,8 +14,8 @@ from hmfast.halo_model.bias import T10HaloBias
 from hmfast.halo_model.concentration import D08Concentration, B13Concentration
 from hmfast.emulator import Emulator
 from hmfast.defaults import merge_with_defaults
-from hmfast.utils import newton_root
 from hmfast.halo_model.mass_definition import MassDefinition
+from hmfast.utils import newton_root
 
 jax.config.update("jax_enable_x64", True)
 
@@ -74,9 +74,153 @@ class HaloModel:
         return self.concentration_relation.c_delta(self, m, z, params=params)
 
 
-    def r_delta(self, m, z, params=None):
+    @partial(jax.jit, static_argnums=0)
+    def delta_vir_to_crit(self, z, params=None):
+        """
+        Bryan & Norman (1998) virial overdensity for a flat universe.
+        Returns Δ_vir relative to the critical density.
+    
+        Returns
+        -------
+        float or array
+            Δ_vir(z) relative to rho_crit
+        """
+        omega_m = self.emulator.omega_m(z, params=params)
+        x = omega_m - 1.0
+    
+        return 18.0 * jnp.pi**2 + 82.0 * x - 39.0 * x**2
+
+    @partial(jax.jit, static_argnums=0)
+    def _delta_numeric(self, z, params=None):
+        """ 
+        Always return numeric delta at redshift z
+        in the native reference (self.reference).
+        """
+        if self.mass_definition.delta == "vir":
+            if self.mass_definition.reference != "critical":
+                raise ValueError("virial overdensity only defined w.r.t. critical density")
+            return self.delta_vir_to_crit(z, params=params)
+    
+        return self.mass_definition.delta
+
+
+     #@partial(jax.jit, static_argnums=(0,1))
+    def convert_reference(self, z, delta, from_ref='critical', to_ref='mean', params=None):
+        """
+        Convert overdensity between 'critical' and 'mean' definitions.
+        
+        Parameters
+        ----------
+        delta : float or array
+        z : float or array
+        from_ref, to_ref : {'critical', 'mean'}
+        """
+        if from_ref == to_ref:
+            return jnp.full_like(z, delta)
+            
+        omega_m = self.emulator.omega_m(z, params=params)
+        if from_ref == 'critical' and to_ref == 'mean':
+            return delta / omega_m
+        elif from_ref == 'mean' and to_ref == 'critical':
+            return delta * omega_m
+        else:
+            raise ValueError("from_ref and to_ref must be 'critical' or 'mean'")
+
+    #@partial(jax.jit, static_argnums=(0,1))
+    def delta_conversion_function(self, z, m_new, m_old, mass_definition_new, params=None):
+        """
+        Vectorized version: works for scalar or array inputs for z and m_new/m_old.
+        Returns F(m_new) = m_new / m_old - f_NFW(c_old) / f_NFW(c_old * r_new / r_old)
+        """
         params = merge_with_defaults(params)
-        return self.mass_definition.r_delta(self, m, z, params=params)
+
+        delta_old, ref_old = self.mass_definition.delta, self.mass_definition.reference
+        delta_new, ref_new = mass_definition_new.delta, mass_definition_new.reference
+       
+        
+        c_old = jnp.squeeze(self.c_delta(m_old, z, params=params))
+        r_old = jnp.squeeze(self.r_delta(m_old, z, mass_definition=self.mass_definition, params=params))
+        r_new = jnp.squeeze(self.r_delta(m_new, z, mass_definition=mass_definition_new, params=params))
+       
+        #print(m_old.shape, m_new.shape, c_old.shape)
+        def f_nfw(x):
+            return jnp.log1p(x) - x / (1.0 + x)
+        
+        return m_old / m_new - f_nfw(c_old) / f_nfw(c_old * r_new / r_old)
+
+
+
+    @partial(jax.jit, static_argnums=(0, 3, 5)) 
+    def convert_m_delta(self, m, z, mass_definition_new, x0=None, max_iter=20, params=None):
+        params = merge_with_defaults(params)
+        
+        # Standardize inputs to 1D and create a 2D meshgrid of (Nm, Nz)
+        m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
+        mm, zz = jnp.meshgrid(m, z, indexing='ij') 
+        
+        if x0 is None:
+            x0 = mm
+        else:
+            # Ensure x0 matches the meshgrid shape
+            _, _, x0 = jnp.broadcast_arrays(m, z, x0) 
+
+        # Flatten for the solver (vmap works best on flat arrays)
+        m_flat, z_flat, x0_flat = mm.flatten(), zz.flatten(), x0.flatten()
+
+        def solve_single(z_i, m_i, x0_i):
+            F = lambda m_new: self.delta_conversion_function(
+                z_i, m_new, m_i, mass_definition_new, params=params
+            )
+            return newton_root(F, x0=x0_i, max_iter=max_iter)
+
+        # Solve and Reshape back to (Nm, Nz)
+        results_flat = jax.vmap(solve_single)(z_flat, m_flat, x0_flat)
+        return results_flat.reshape(mm.shape)
+        
+
+    def r_delta(self, m, z, mass_definition=None, params=None):
+        """
+        Compute the halo radius corresponding to a given mass and overdensity at redshift z.
+    
+        Parameters
+        ----------
+        z : float
+            Redshift at which to compute the radius.
+        m : float
+            Halo mass enclosed within the overdensity radius, in the same units as used for rho_crit.
+        delta : float
+            Overdensity parameter relative to the critical density (e.g., 200 for M_200).
+        
+        params : dict, optional
+            Dictionary of cosmological parameters to use when computing the critical density.
+    
+        Returns
+        -------
+        float
+            Radius r_delta (e.g., R_200) within which the average density equals delta * rho_crit(z).
+        """
+        params = merge_with_defaults(params)
+        mass_definition = self.mass_definition if mass_definition is None else mass_definition
+
+        delta, reference = mass_definition.delta, mass_definition.reference
+       
+        m = jnp.atleast_1d(m)[:, None]  # (Nm, 1)
+        z = jnp.atleast_1d(z)[None, :]  # (1, Nz)
+
+        # Define your reference density. Default is rho_crit
+        rho_ref = self.emulator.critical_density(z, params=params)
+
+        # If the user selects vir or rho_mean, correct for this
+        if delta == "vir":
+            delta = self.delta_vir_to_crit(z, params=params)
+        
+        if reference == "mean":
+            rho_ref *= self.emulator.omega_m(z, params=params)
+            
+        return (3.0 * m / (4.0 * jnp.pi * delta * rho_ref))**(1./3.)
+
+
+
 
     
     @partial(jax.jit, static_argnums=0)
@@ -157,8 +301,8 @@ class HaloModel:
         M_grid = 4.0 * jnp.pi / 3.0 * Omega0_cb * rho_crit_0 * (R_grid ** 3) * h ** 3
     
         # Overdensity threshold
-        delta_numeric = self.mass_definition._delta_numeric(self, z_grid, params=params)
-        delta_mean = self.mass_definition.convert_reference(self, z_grid, delta_numeric, from_ref=self.mass_definition.reference, to_ref='mean', params=params) 
+        delta_numeric = self._delta_numeric(z_grid, params=params)
+        delta_mean = self.convert_reference(z_grid, delta_numeric, from_ref=self.mass_definition.reference, to_ref='mean', params=params) 
     
         # Halo mass function grid, shape: (n_z, n_R)
         hmf_grid = self.mass_model.f_sigma(sigma_grid, z_grid, delta_mean)
@@ -206,8 +350,8 @@ class HaloModel:
         sigma_M = jnp.exp(_sigma_interp(pts))
 
         # Handle delta values
-        delta_numeric = self.mass_definition._delta_numeric(self, z, params=params)
-        delta_mean = self.mass_definition.convert_reference(self, z, delta_numeric, from_ref=self.mass_definition.reference, to_ref='mean', params=params)
+        delta_numeric = self._delta_numeric(z, params=params)
+        delta_mean = self.convert_reference(z, delta_numeric, from_ref=self.mass_definition.reference, to_ref='mean', params=params)
         
         # Ensure delta_mean is 1D before indexing
         delta_mean = jnp.atleast_1d(delta_mean)
@@ -399,4 +543,8 @@ class HaloModel:
         integrand = P_2h_grid * (comov_vol[:, None] * kernel1[:, None] * kernel2[:, None])
         
         return jnp.trapezoid(integrand, x=z, axis=0)
+
+
     
+    
+

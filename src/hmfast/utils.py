@@ -33,7 +33,7 @@ class Const:
 
 
 # Newton's method root finder
-def newton_solver(f, x0, tol=1e-8, max_iter=50):
+def newton_solver(f, x0, tol=1e-8, max_iter=25):
     df = jax.grad(f)
     def cond_fn(state):
         x, i = state
@@ -47,7 +47,7 @@ def newton_solver(f, x0, tol=1e-8, max_iter=50):
     x_final, _ = lax.while_loop(cond_fn, body_fn, (x0, 0))
     return x_final
 
-def newton_root(f, x0, tol=1e-8, max_iter=50):
+def newton_root(f, x0, tol=1e-8, max_iter=25):
     def solve(f, x0):
         return newton_solver(f, x0, tol=tol, max_iter=max_iter)
     # For scalar roots, use the recommended tangent_solve

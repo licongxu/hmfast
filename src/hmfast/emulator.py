@@ -266,7 +266,7 @@ class Emulator:
         return rho_crit_factor * (H_z/h)**2 
         
 
-    def omega_m_z(self, z, params=None):
+    def omega_m(self, z, params=None):
         """
         Compute Ω_m(z) = rho_m(z) / rho_crit(z) without neutrinos.
     
