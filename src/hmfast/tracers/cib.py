@@ -7,7 +7,7 @@ import numpy as np
 from hmfast.emulator import Emulator
 from hmfast.halo_model import HaloModel
 from hmfast.tracers.base_tracer import BaseTracer
-from hmfast.halo_model.profiles import NFWMatterProfile
+from hmfast.halo_model.profiles import MatterProfile, NFWMatterProfile
 from hmfast.utils import lambertw, Const
 from hmfast.download import get_default_data_path
 from hmfast.defaults import merge_with_defaults
@@ -28,10 +28,10 @@ class CIBTracer(BaseTracer):
         The x array used to define the radial profile over which the tracer will be evaluated
     """
 
-    def __init__(self, halo_model, profile=NFWMatterProfile(), nu=100, cib_model="shang", s_nu=None):        
+    def __init__(self, halo_model, profile=None, nu=100, cib_model="shang", s_nu=None):        
 
         self.nu = nu
-        self.profile = profile
+        self.profile = NFWMatterProfile() if profile is None else profile
         self.cib_model = cib_model
         
         # Load halo model with instantiated emulator and make sure the required files are loaded outside of jitted functions
@@ -253,75 +253,7 @@ class CIBTracer(BaseTracer):
         L_cen = N_cen[:, None] * L_gal
         return L_cen
 
-        
-
-    def kernel(self, z, params=None):
-        params = merge_with_defaults(params)
-        h = params["H0"]/100
-        chi = self.halo_model.emulator.angular_diameter_distance(z, params=params) * (1 + z) * h
-        s_nu_factor = 1/((1+z)*chi**2) if self.cib_model=='shang' else jnp.ones_like(z)# ones for maniyar
-        
-        return s_nu_factor
-
-        
-
-    def u_k(self, k, m, z, moment=1, params=None):
-        """ 
-        Compute either the first or second moment of the CIB tracer u_ell.
-        For CIB:, 
-            First moment:     W_I_nu / jnu_bar * Lc + Ls * u_ell_m
-            Second moment:     W_I_nu^2 / jnu_nu^2 * [Ls^2 * u_ell_m^2 + 2 * Ls * Lc * u_ell_m]
-        You cannot simply take u_ell_g**2.
-
-        Note that  W_I_nu = a(z) * jnu_bar, so  W_I_nu / jnu_bar = a(z)
-        """
-       
-        params = merge_with_defaults(params)
-        cparams = self.halo_model.emulator.get_all_cosmo_params(params)
-        h = params["H0"]/100
-        h_factor = h**2 if self.cib_model=='shang' else 1
-        
-
-        # Compute the physical mass for Ls and Lc and then u_k_matter from BaseTracer
-        m_physical = m/h
-        Ls = self.l_sat(m_physical, z, self.nu , params=params)
-        Lc = self.l_cen(m_physical, z, self.nu , params=params)
-        # _, u_m = self.u_k_matter(k, m, z, params=params)    # Old way
-        _, u_m = self.profile.u_k_matter(self.halo_model, k, m, z, params=params)
-
-        moment_funcs = [
-            lambda _: h_factor**1       / (4*jnp.pi)          * (Lc[None, :, :] + Ls[None, :, :] * u_m )                                           ,
-            lambda _: h_factor**2       / (4*jnp.pi)**2       * (Ls[None, :, :]**2 * u_m**2 + 2 * Ls[None, :, :] * Lc[None, :, :] * u_m )          ,
-        ]
-
-        u_k = jax.lax.switch(moment - 1, moment_funcs, None)
     
-        return k, u_k
-
-
-    def sat_and_cen_contribution(self, k, m, z, params=None):
-
-        params = merge_with_defaults(params)
-        cparams = self.halo_model.emulator.get_all_cosmo_params(params)
-        
-        h = params["H0"]/100
-       
-        nu = self.nu 
-        h_factor = h**2 if self.cib_model=='shang' else 1
-
-        # Compute the physical mass for Ls and Lc and then u_k_matter from BaseTracer
-        m_physical = m/h
-        Ls = self.l_sat(m_physical, z, self.nu, params=params)
-        Lc = self.l_cen(m_physical, z, self.nu , params=params)
-        _, u_m = self.u_k_matter(k, m, z, params=params)
-
-        # Compute central and satellite terms
-        sat_term = h_factor**1    / (4*jnp.pi)        * (Ls[None, :, :] * u_m ) 
-        cen_term = h_factor**1    / (4*jnp.pi)        * (Lc[None, :, :])       
-
-        return sat_term, cen_term
-
-
     def j_bar_nu(self, m, z, nu, params=None):
         """
         Compute the mean comoving emissivity j_bar_nu(z) in [Lsun / Mpc^3].
@@ -365,4 +297,74 @@ class CIBTracer(BaseTracer):
         intensity = jnp.trapezoid(integrand, x=z) 
         
         return intensity
+
+        
+
+    def kernel(self, z, params=None):
+        params = merge_with_defaults(params)
+        h = params["H0"]/100
+        chi = self.halo_model.emulator.angular_diameter_distance(z, params=params) * (1 + z) * h
+        s_nu_factor = 1/((1+z)*chi**2) if self.cib_model=='shang' else jnp.ones_like(z)# ones for maniyar
+        
+        return s_nu_factor
+
+        
+
+    def u_k(self, k, m, z, moment=1, params=None):
+        """ 
+        Compute either the first or second moment of the CIB tracer u_ell.
+        For CIB:, 
+            First moment:     W_I_nu / jnu_bar * Lc + Ls * u_ell_m
+            Second moment:     W_I_nu^2 / jnu_nu^2 * [Ls^2 * u_ell_m^2 + 2 * Ls * Lc * u_ell_m]
+        You cannot simply take u_ell_g**2.
+
+        Note that  W_I_nu = a(z) * jnu_bar, so  W_I_nu / jnu_bar = a(z)
+        """
+       
+        params = merge_with_defaults(params)
+        cparams = self.halo_model.emulator.get_all_cosmo_params(params)
+        h = params["H0"]/100
+        h_factor = h**2 if self.cib_model=='shang' else 1
+        
+
+        # Compute the physical mass for Ls and Lc and then u_k_matter from BaseTracer
+        m_physical = m/h
+        Ls = self.l_sat(m_physical, z, self.nu , params=params)
+        Lc = self.l_cen(m_physical, z, self.nu , params=params)
+        
+        _, u_m = self.profile.u_k_matter(self.halo_model, k, m, z, params=params)
+
+        moment_funcs = [
+            lambda _: h_factor**1       / (4*jnp.pi)          * (Lc[None, :, :] + Ls[None, :, :] * u_m )                                           ,
+            lambda _: h_factor**2       / (4*jnp.pi)**2       * (Ls[None, :, :]**2 * u_m**2 + 2 * Ls[None, :, :] * Lc[None, :, :] * u_m )          ,
+        ]
+
+        u_k = jax.lax.switch(moment - 1, moment_funcs, None)
+    
+        return k, u_k
+
+
+    def sat_and_cen_contribution(self, k, m, z, params=None):
+
+        params = merge_with_defaults(params)
+        cparams = self.halo_model.emulator.get_all_cosmo_params(params)
+        
+        h = params["H0"]/100
+       
+        nu = self.nu 
+        h_factor = h**2 if self.cib_model=='shang' else 1
+
+        # Compute the physical mass for Ls and Lc and then u_k_matter from BaseTracer
+        m_physical = m/h
+        Ls = self.l_sat(m_physical, z, self.nu, params=params)
+        Lc = self.l_cen(m_physical, z, self.nu , params=params)
+        _, u_m = self.profile.u_k_matter(k, m, z, params=params)
+
+        # Compute central and satellite terms
+        sat_term = h_factor**1    / (4*jnp.pi)        * (Ls[None, :, :] * u_m ) 
+        cen_term = h_factor**1    / (4*jnp.pi)        * (Lc[None, :, :])       
+
+        return sat_term, cen_term
+
+
     

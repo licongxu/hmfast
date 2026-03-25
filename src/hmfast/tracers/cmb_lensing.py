@@ -10,7 +10,7 @@ from hmfast.tracers.base_tracer import BaseTracer
 from hmfast.defaults import merge_with_defaults
 from hmfast.download import get_default_data_path
 from hmfast.utils import Const
-from hmfast.halo_model.profiles import NFWMatterProfile
+from hmfast.halo_model.profiles import MatterProfile, NFWMatterProfile
 jax.config.update("jax_enable_x64", True)
 
 
@@ -28,14 +28,17 @@ class CMBLensingTracer(BaseTracer):
         The x array used to define the radial profile over which the tracer will be evaluated
     """
 
-    def __init__(self, halo_model, profile=NFWMatterProfile()):        
+    _required_profile_type = MatterProfile
+
+    def __init__(self, halo_model, profile=None):        
         
         # Load halo model with instantiated emulator and make sure the required files are loaded outside of jitted functions
         self.halo_model = halo_model
-        self.profile = profile
         self.halo_model.emulator._load_emulator("DAZ")
         self.halo_model.emulator._load_emulator("HZ")
         self.halo_model.emulator._load_emulator("DER")
+
+        super().__init__(profile=profile or NFWMatterProfile())
 
 
     def kernel(self, z, params=None):
@@ -85,12 +88,9 @@ class CMBLensingTracer(BaseTracer):
         cparams = self.halo_model.emulator.get_all_cosmo_params(params)
 
         k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
-        
-        W = self.kernel(z, params=params) 
-
-        # Compute u_m_ell from BaseTracer
-        #k, u_m = self.u_k_matter(k, m, z, params=params) # Old way
-        k, u_m = self.profile.u_k_matter(self.halo_model, k, m, z, params=params) # New way
+    
+        # Compute u_m_k from BaseTracer
+        k, u_m = self.profile.u_k_matter(self.halo_model, k, m, z, params=params) 
         
         rho_mean_0 = cparams["Rho_crit_0"] * cparams["Omega0_m"]
         m_over_rho_mean = (m / rho_mean_0)[:, None]  # shape (N_m, 1)

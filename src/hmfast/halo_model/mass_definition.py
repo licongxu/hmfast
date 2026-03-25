@@ -2,12 +2,13 @@ import jax
 import jax.numpy as jnp
 import jax.scipy as jscipy
 from functools import partial
-from jax.tree_util import register_pytree_node
+from jax.tree_util import register_pytree_node_class
 
 from hmfast.defaults import merge_with_defaults
 from hmfast.emulator import Emulator
 from hmfast.utils import newton_root
 
+@register_pytree_node_class
 class MassDefinition:
 
     def __init__(self, delta=200, reference="critical"):
@@ -70,7 +71,7 @@ class MassDefinition:
         return cls(*aux_data)
 
 
-register_pytree_node(MassDefinition, MassDefinition.tree_flatten, MassDefinition.tree_unflatten)
+#register_pytree_node(MassDefinition, MassDefinition.tree_flatten, MassDefinition.tree_unflatten)
 
     # @partial(jax.jit, static_argnums=(0,1))
     # def delta_vir_to_crit(self, halo_model, z, params=None):

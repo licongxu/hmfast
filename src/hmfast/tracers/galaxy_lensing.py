@@ -7,7 +7,7 @@ from jax.scipy.special import sici
 from hmfast.emulator import Emulator
 from hmfast.halo_model import HaloModel
 from hmfast.tracers.base_tracer import BaseTracer
-from hmfast.halo_model.profiles import NFWMatterProfile
+from hmfast.halo_model.profiles import MatterProfile, NFWMatterProfile
 from hmfast.utils import Const
 from hmfast.defaults import merge_with_defaults
 from hmfast.download import get_default_data_path
@@ -31,14 +31,17 @@ class GalaxyLensingTracer(BaseTracer):
      
     """
 
+    _required_profile_type = MatterProfile
+
     
-    def __init__(self, halo_model, profile=NFWMatterProfile(), dndz=None):        
+    def __init__(self, halo_model, profile=None, dndz=None):        
 
         # Load halo model with instantiated emulator and make sure the required files are loaded outside of jitted functions
         self.halo_model = halo_model
-        self.profile = profile
         self.halo_model.emulator._load_emulator("DAZ")
         self.halo_model.emulator._load_emulator("HZ")
+
+        super().__init__(profile=profile or NFWMatterProfile())
 
         if dndz is None:
             # Call _load_dndz_data from BaseTracer

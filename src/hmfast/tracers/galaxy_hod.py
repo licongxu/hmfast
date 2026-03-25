@@ -29,11 +29,11 @@ class GalaxyHODTracer(BaseTracer):
         The redshift distribution of the galaxy population. This distribution will be normalized if it is not already done.
     """
 
-    def __init__(self, halo_model, profile=NFWMatterProfile(), dndz=None):        
+    def __init__(self, halo_model, profile=None, dndz=None):        
         
         # Load halo model with instantiated emulator and make sure the required files are loaded outside of jitted functions
         self.halo_model = halo_model
-        self.profile = profile
+        self.profile = NFWMatterProfile() if profile is None else profile
         self.halo_model.emulator._load_emulator("DAZ")
         self.halo_model.emulator._load_emulator("HZ")
 
@@ -180,7 +180,6 @@ class GalaxyHODTracer(BaseTracer):
         Nc = self.n_cen(m, params=params)
         ng = self.ng_bar(m, z, params=params) * (params["H0"]/100)**3
 
-        #_, u_m = self.u_k_matter(k, m, z, params=params)  # Old way
         _, u_m = self.profile.u_k_matter(self.halo_model, k, m, z, params=params)   # New way
     
         moment_funcs = [
@@ -208,7 +207,7 @@ class GalaxyHODTracer(BaseTracer):
         Nc = self.n_cen(m, params=params)
         ng = self.ng_bar(m, z, params=params) * (params["H0"]/100)**3
 
-        _, u_m = self.u_k_matter(k, m, z, params=params)  
+        _, u_m = self.profile.u_k_matter(k, m, z, params=params)  
 
         sat_term = (1/ng) * (Ns[None, :, None] * u_m)
         cen_term = (1/ng) * (Nc[None, :, None]**0)

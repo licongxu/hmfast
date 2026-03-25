@@ -7,23 +7,26 @@ from hmfast.halo_model import HaloModel
 from hmfast.tracers.base_tracer import BaseTracer#, HankelTransform
 from hmfast.defaults import merge_with_defaults
 from hmfast.utils import Const
-from hmfast.halo_model.profiles import GNFWPressureProfile
+from hmfast.halo_model.profiles import PressureProfile, GNFWPressureProfile
 
 jax.config.update("jax_enable_x64", True)
+
 
 class tSZTracer(BaseTracer):
     """
     tSZ tracer using GNFW profile.
     """
-    def __init__(self, halo_model, profile=GNFWPressureProfile()):
 
-        # Set tracer parameters
-        self.profile = profile #self.gnfw_pressure_profile
+    _required_profile_type = PressureProfile
+    
+    def __init__(self, halo_model, profile=None):
         
         # Load halo model with instantiated emulator and make sure the required files are loaded outside of jitted functions
         self.halo_model = halo_model
         self.halo_model.emulator._load_emulator("DAZ")
         self.halo_model.emulator._load_emulator("HZ")
+
+        super().__init__(profile=profile or GNFWPressureProfile())
         
 
     def kernel(self, z, params=None):

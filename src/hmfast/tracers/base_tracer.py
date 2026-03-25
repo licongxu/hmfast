@@ -1,14 +1,10 @@
 import jax
 import jax.numpy as jnp
-import jax.scipy as jscipy
-from jax.scipy.special import sici
-import functools
-import mcfit
 from abc import ABC, abstractmethod
 import numpy as np
 
-
 from hmfast.defaults import merge_with_defaults
+from hmfast.halo_model.profiles import HaloProfile
 
 
  
@@ -18,10 +14,34 @@ class BaseTracer(ABC):
     All tracers to inherit from this class, which forces them to have certain callable functions (e.g. get_u_ell() )
     """
     
-    def __init__(self, params):
+    _required_profile_type = HaloProfile 
+
+    def __init__(self, profile=None):
         """
-        Initialize the radial grid and Hankel transform.
+        Initialize the tracer with a validated profile.
         """
+        #self._profile = None
+        if profile is not None:
+            self.profile = profile
+
+    @property
+    def profile(self):
+        return self._profile
+
+    @profile.setter
+    def profile(self, value):
+        """
+        Enforces type safety: prevents assigning a PressureProfile to a 
+        LensingTracer, etc.
+        """
+        if not isinstance(value, self._required_profile_type):
+            raise TypeError(
+                f"{self.__class__.__name__} strictly requires a "
+                f"{self._required_profile_type.__name__}. "
+                f"Received: {type(value).__name__}"
+            )
+        self._profile = value
+        
 
     @property
     def has_central_contribution(self):

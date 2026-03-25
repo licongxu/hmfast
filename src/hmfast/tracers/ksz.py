@@ -7,7 +7,7 @@ from hmfast.halo_model import HaloModel
 from hmfast.tracers.base_tracer import BaseTracer#, HankelTransform
 from hmfast.defaults import merge_with_defaults
 from hmfast.utils import Const
-from hmfast.halo_model.profiles import NFWDensityProfile, B16DensityProfile
+from hmfast.halo_model.profiles import DensityProfile, NFWDensityProfile, B16DensityProfile
 
 jax.config.update("jax_enable_x64", True)
 
@@ -15,18 +15,19 @@ class kSZTracer(BaseTracer):
     """
     tSZ tracer using GNFW profile.
     """
-    def __init__(self, halo_model, profile=B16DensityProfile()):
+    _required_profile_type = DensityProfile
+    
+    def __init__(self, halo_model, profile=None):
 
-
-        # Set tracer parameters
-        self.profile = profile   # New way 
-       
-
+    
         # Load halo model with instantiated emulator and make sure the required files are loaded outside of jitted functions
         self.halo_model = halo_model
         self.halo_model.emulator._load_emulator("DAZ")
         self.halo_model.emulator._load_emulator("HZ")
         self.halo_model.emulator._load_emulator("PKL")
+
+        # Set profile, ensuring that the correct profile type is selected
+        super().__init__(profile=profile or B16DensityProfile())
 
          # Compute Pk once instantiate grids and thus avoid tracer errors
         _, _ = self.halo_model.emulator.pk_matter(1., params=None, linear=True) 

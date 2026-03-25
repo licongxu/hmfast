@@ -3,9 +3,11 @@ import jax.numpy as jnp
 import mcfit
 import functools
 from jax.scipy.special import sici
+from jax.tree_util import register_pytree_node_class
 
 from hmfast.defaults import merge_with_defaults
 from hmfast.utils import Const
+from hmfast.halo_model.mass_definition import MassDefinition
 
 
 class HankelTransform:
@@ -32,6 +34,8 @@ class HaloProfile:
     
         Parameters
         ----------
+        x : arrat like
+            Radius r scaled by the scale radius x = r / r_s
         z : float or array_like
             Redshift(s).
         m : float or array_like
@@ -77,10 +81,13 @@ class PressureProfile(HaloProfile):
     pass
 
 
+
 class B16DensityProfile(DensityProfile):
-    def __init__(self, x=None):
-        self.x = x if x is not None else jnp.logspace(jnp.log10(1e-4), jnp.log10(1.0), 256)
-    
+    def __init__(self, x=None, model="agn"):
+        # Grid initialization (triggers the x.setter)
+        self.x = x if x is not None else jnp.logspace(-4, 2, 256)
+        # Model initialization (triggers the model.setter)
+        self.model = model
 
     @property
     def x(self):
@@ -88,11 +95,44 @@ class B16DensityProfile(DensityProfile):
 
     @x.setter
     def x(self, value):
-        """
-        Whenever x is modified, immediately rebuild the hankel transform object
-        """
         self._x = value
         self._hankel = HankelTransform(self._x, nu=0.5)
+
+    @property
+    def model(self):
+        return self._model
+
+    @model.setter
+    def model(self, value):
+        """
+        Updates physics attributes by switching between 'agn' and 'shock'.
+        Strictly case-insensitive and validates input.
+        """
+        val_lower = value.lower()
+        if val_lower not in ["agn", "shock"]:
+            raise ValueError(f"Invalid model '{value}'. Must be 'agn' or 'shock'.")
+            
+        self._model = val_lower
+        b16_configs = self._get_model_configs(self._model)
+        
+        # Physics parameters reset in throuples
+        self.A_rho0, self.A_alpha, self.A_beta = b16_configs['A_rho0'], b16_configs['A_alpha'], b16_configs['A_beta']
+        self.alpha_m_rho0, self.alpha_m_alpha, self.alpha_m_beta = b16_configs['alpha_m_rho0'], b16_configs['alpha_m_alpha'], b16_configs['alpha_m_beta']
+        self.alpha_z_rho0, self.alpha_z_alpha, self.alpha_z_beta = b16_configs['alpha_z_rho0'], b16_configs['alpha_z_alpha'], b16_configs['alpha_z_beta']
+
+    def _get_model_configs(self, model_key):
+        """Internal lookup for Battaglia 2016 Table 2 parameters."""
+        AGN = {
+            'A_rho0': 4000.0, 'A_alpha': 0.88, 'A_beta': 3.83,
+            'alpha_m_rho0': 0.29, 'alpha_m_alpha': -0.03, 'alpha_m_beta': 0.04,
+            'alpha_z_rho0': -0.66, 'alpha_z_alpha': 0.19, 'alpha_z_beta': -0.025
+        }
+        SHOCK = {
+            'A_rho0': 1.9e4, 'A_alpha': 0.70, 'A_beta': 4.43,
+            'alpha_m_rho0': 0.09, 'alpha_m_alpha': -0.017, 'alpha_m_beta': 0.005,
+            'alpha_z_rho0': -0.95, 'alpha_z_alpha': 0.27, 'alpha_z_beta': 0.037
+        }
+        return SHOCK if model_key == "shock" else AGN
 
 
     def profile(self, halo_model, x, m, z, params=None):
@@ -105,62 +145,30 @@ class B16DensityProfile(DensityProfile):
         Output shape: (Nx, Nm, Nz)
         """
         params = merge_with_defaults(params)
-        
-        # Ensure 1D and setup broadcasting shapes
-        x = jnp.atleast_1d(x)  # (Nx,)
-        m = jnp.atleast_1d(m)  # (Nm,)
-        z = jnp.atleast_1d(z)  # (Nz,)
-        
-        x_b = x[:, None, None]      # (Nx, 1, 1)
-        m_b = m[None, :, None]      # (1, Nm, 1)
-        z_b = z[None, None, :]      # (1, 1, Nz)
-        
-        h = params["H0"] / 100.0
         cparams = halo_model.emulator.get_all_cosmo_params(params)
         f_b = cparams["Omega_b"] / cparams["Omega0_m"]
-        
-        # Critical density and Concentration
-        rho_crit_z = jnp.atleast_1d(halo_model.emulator.critical_density(z, params=params))
-        rho_crit_z = rho_crit_z[None, None, :]  # (1, 1, Nz)
-        
-        c_delta = halo_model.c_delta(m, z, params=params) # (Nm, Nz)
-        c_delta = c_delta[None, :, :]  # (1, Nm, Nz)
-        
-        # Battaglia+16 parameters (Table 2: AGN feedback model)
-        # Scaling parameters for rho0, alpha, beta
-        A_rho0, A_alpha, A_beta = 4000.0, 0.88, 3.83
-        
-        # Mass scaling for M > 1e14
-        alpha_m_rho0, alpha_m_alpha, alpha_m_beta = 0.29, -0.03, 0.04
-        # Redshift scaling
-        alpha_z_rho0, alpha_z_alpha, alpha_z_beta = -0.66, 0.19, -0.025
-        # Concentration scaling (usually 0 in B16, but kept for completeness)
-        alpha_c_rho0, alpha_c_alpha, alpha_c_beta = 0.0, 0.0, 0.0
-        
-        # Low-mass scaling (M < 1e14)
-        alphap_m_rho0, alphap_m_alpha, alphap_m_beta = 0.29, -0.03, 0.04
-        
-        # Mass scaling logic
-        mcut = 1e14  # M_sun
-        m_200c_msun = m_b / h
-        mass_ratio = m_200c_msun / mcut
-        
-        # Use jnp.where to choose the mass scaling exponent
-        am_rho0 = jnp.where(m_200c_msun > mcut, alpha_m_rho0, alphap_m_rho0)
-        am_alpha = jnp.where(m_200c_msun > mcut, alpha_m_alpha, alphap_m_alpha)
-        am_beta = jnp.where(m_200c_msun > mcut, alpha_m_beta, alphap_m_beta)
-        
-        # Compute Shape Parameters (Equations A1, A2 from B16)
-        # These result in shape (1, Nm, Nz)
-        rho0 = A_rho0 * mass_ratio**am_rho0 * (1 + z_b)**alpha_z_rho0 * (1 + c_delta)**alpha_c_rho0
-        alpha = A_alpha * mass_ratio**am_alpha * (1 + z_b)**alpha_z_alpha * (1 + c_delta)**alpha_c_alpha
-        beta = A_beta * mass_ratio**am_beta * (1 + z_b)**alpha_z_beta * (1 + c_delta)**alpha_c_beta
-        
+        h = cparams["h"]
+
         gamma = -0.2
         xc = 0.5
         
+        # Ensure 1D and setup broadcasting shapes
+        x, m, z = jnp.atleast_1d(x), jnp.atleast_1d(m),  jnp.atleast_1d(z)  # (Nx,)
+        x_b, m_b, z_b = x[:, None, None], m[None, :, None], z[None, None, :]      # (Nx, 1, 1), (1, Nm, 1), (1, 1, Nz)
+        
+        # Critical density broadcast to (1, 1, Nz)
+        rho_crit_z = jnp.atleast_1d(halo_model.emulator.critical_density(z, params=params))[None, None, :]
+        
+        # Mass scaling logic
+        m_200c_msun = m_b / h
+        mass_ratio = m_200c_msun / 1e14 
+       
+        # Compute Shape Parameters (Equations A1, A2 from B16)
+        rho0 = self.A_rho0 * mass_ratio**self.alpha_m_rho0 * (1 + z_b)**self.alpha_z_rho0 
+        alpha = self.A_alpha * mass_ratio**self.alpha_m_alpha * (1 + z_b)**self.alpha_z_alpha 
+        beta = self.A_beta * mass_ratio**self.alpha_m_beta * (1 + z_b)**self.alpha_z_beta 
+        
         # Profile Shape Function (Nx, Nm, Nz)
-        # x_b: (Nx,1,1) / rho0: (1,Nm,Nz) -> auto-broadcasts
         p_x = (x_b / xc)**gamma * (1 + (x_b / xc)**alpha)**(-(beta + gamma) / alpha)
         
         # Final result: M_sun h^2 / Mpc^3 
@@ -168,7 +176,7 @@ class B16DensityProfile(DensityProfile):
         
         return rho_gas
 
-
+        
 
 class NFWDensityProfile(DensityProfile):
     def __init__(self, x=None):
