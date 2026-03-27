@@ -358,7 +358,7 @@ class CIBTracer(BaseTracer):
         m_physical = m/h
         Ls = self.l_sat(m_physical, z, self.nu, params=params)
         Lc = self.l_cen(m_physical, z, self.nu , params=params)
-        _, u_m = self.profile.u_k_matter(k, m, z, params=params)
+        _, u_m = self.profile.u_k_matter(self.halo_model, k, m, z, params=params)
 
         # Compute central and satellite terms
         sat_term = h_factor**1    / (4*jnp.pi)        * (Ls[None, :, :] * u_m ) 

@@ -34,8 +34,9 @@ class HaloModel:
                  mass_model = T08HaloMass(), 
                  bias_model = T10HaloBias(), 
                  subhalo_mass_model = TW10SubHaloMass(),
-                 concentration_relation=D08Concentration(), 
-                 hm_consistency=True):
+                 concentration=D08Concentration(), 
+                 hm_consistency=True, 
+                 convert_masses=False):
         """
         Initialize the halo model.
         
@@ -49,7 +50,7 @@ class HaloModel:
             Mass function to use.
         bias_model : function, default hbf_T10 (i.e. the halo bias function model from Tinker et al 2010)
             Bias function to use.
-        concentration_relation : function, default c_D08 (i.e. the concentration-mass relation from Duffy et al 2008)
+        concentration : function, default c_D08 (i.e. the concentration-mass relation from Duffy et al 2008)
             The concentration-mass relation
         """
         
@@ -62,10 +63,11 @@ class HaloModel:
         self.mass_model = mass_model
         self.bias_model = bias_model
         self.subhalo_mass_model = subhalo_mass_model
-        self.concentration_relation = concentration_relation
+        self.concentration = concentration
 
         self.mass_definition = mass_definition
         self.hm_consistency = hm_consistency
+        self.convert_masses = convert_masses
 
 
         # Create TophatVar instance once to instantiate it
@@ -76,7 +78,7 @@ class HaloModel:
     @partial(jax.jit, static_argnums=0)
     def c_delta(self, m, z, params=None):
         params = merge_with_defaults(params)
-        return self.concentration_relation.c_delta(self, m, z, params=params)
+        return self.concentration.c_delta(self, m, z, params=params)
 
 
     @partial(jax.jit, static_argnums=0)
@@ -131,58 +133,52 @@ class HaloModel:
         else:
             raise ValueError("from_ref and to_ref must be 'critical' or 'mean'")
 
-    #@partial(jax.jit, static_argnums=(0,1))
-    def delta_conversion_function(self, z, m_new, m_old, mass_definition_new, params=None):
-        """
-        Vectorized version: works for scalar or array inputs for z and m_new/m_old.
-        Returns F(m_new) = m_new / m_old - f_NFW(c_old) / f_NFW(c_old * r_new / r_old)
-        """
+
+
+    @partial(jax.jit, static_argnums=(0, 6)) 
+    def convert_m_delta(self, m, z, mass_def_old, mass_def_new, c_old=None, max_iter=20, params=None):
         params = merge_with_defaults(params)
-
-        delta_old, ref_old = self.mass_definition.delta, self.mass_definition.reference
-        delta_new, ref_new = mass_definition_new.delta, mass_definition_new.reference
-       
-        
-        c_old = jnp.squeeze(self.c_delta(m_old, z, params=params))
-        r_old = jnp.squeeze(self.r_delta(m_old, z, mass_definition=self.mass_definition, params=params))
-        r_new = jnp.squeeze(self.r_delta(m_new, z, mass_definition=mass_definition_new, params=params))
-       
-        #print(m_old.shape, m_new.shape, c_old.shape)
-        def f_nfw(x):
-            return jnp.log1p(x) - x / (1.0 + x)
-        
-        return m_old / m_new - f_nfw(c_old) / f_nfw(c_old * r_new / r_old)
-
-
-
-    @partial(jax.jit, static_argnums=(0, 3, 5)) 
-    def convert_m_delta(self, m, z, mass_definition_new, x0=None, max_iter=20, params=None):
-        params = merge_with_defaults(params)
-        
-        # Standardize inputs to 1D and create a 2D meshgrid of (Nm, Nz)
         m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
-        mm, zz = jnp.meshgrid(m, z, indexing='ij') 
+        Nm, Nz = len(m), len(z)
+
+        # Vectorized Delta calculation
+        def get_delta_crit(mdef, z_val):
+            d = jnp.where(mdef.delta == "vir", self.delta_vir_to_crit(z_val, params), mdef.delta)
+            return jnp.where(mdef.reference == "mean", d * self.emulator.omega_m(z_val, params), d)
+
+        d_old_z, d_new_z = get_delta_crit(mass_def_old, z), get_delta_crit(mass_def_new, z)
+        is_same_z = jnp.isclose(d_old_z, d_new_z) & (mass_def_old.reference == mass_def_new.reference)
+
+        # Explicitly handle the grid shapes
+        mm, zz = jnp.meshgrid(m, z, indexing='ij')
         
-        if x0 is None:
-            x0 = mm
-        else:
-            # Ensure x0 matches the meshgrid shape
-            _, _, x0 = jnp.broadcast_arrays(m, z, x0) 
+        if c_old is None:
+            c_old = self.c_delta(m, z, params=params)
+        c_old = c_old[:Nm, :Nz].reshape(mm.shape)
 
-        # Flatten for the solver (vmap works best on flat arrays)
-        m_flat, z_flat, x0_flat = mm.flatten(), zz.flatten(), x0.flatten()
+        # First guess for the root finder is based on a power law approximation m * (Delta1 / Delta2)^0.2
+        x0 = m[:, None] * (d_old_z / d_new_z)[None, :]**0.2   
 
-        def solve_single(z_i, m_i, x0_i):
-            F = lambda m_new: self.delta_conversion_function(
-                z_i, m_new, m_i, mass_definition_new, params=params
-            )
-            return newton_root(F, x0=x0_i, max_iter=max_iter)
+        # Solver Logic
+        def solve_single(m_i, c_i, x0_i, d_o, d_n, same_flag):
+            f_nfw = lambda x: jnp.log1p(x) - x / (1.0 + x)
+            obj = lambda m_new: m_i / m_new - f_nfw(c_i) / f_nfw(c_i * (m_new/m_i * d_o/d_n)**(1/3))
+            
+            return jax.lax.cond(same_flag, lambda _: m_i, 
+                                lambda _: newton_root(obj, x0=x0_i, max_iter=max_iter), None)
 
-        # Solve and Reshape back to (Nm, Nz)
-        results_flat = jax.vmap(solve_single)(z_flat, m_flat, x0_flat)
-        return results_flat.reshape(mm.shape)
+    
+        # Broadcast 1D redshift-dependent arrays to match the (Nm, Nz) mesh
+        d_o_flat = jnp.broadcast_to(d_old_z[None, :], mm.shape).flatten()
+        d_n_flat = jnp.broadcast_to(d_new_z[None, :], mm.shape).flatten()
+        same_flat = jnp.broadcast_to(is_same_z[None, :], mm.shape).flatten()
+
+        results = jax.vmap(solve_single)(mm.flatten(), c_old.flatten(), x0.flatten(), d_o_flat, d_n_flat, same_flat)
         
+        return results.reshape(mm.shape)
 
+
+   
     def r_delta(self, m, z, mass_definition=None, params=None):
         """
         Compute the halo radius corresponding to a given mass and overdensity at redshift z.
@@ -223,8 +219,6 @@ class HaloModel:
             rho_ref *= self.emulator.omega_m(z, params=params)
             
         return (3.0 * m / (4.0 * jnp.pi * delta * rho_ref))**(1./3.)
-
-
 
 
     

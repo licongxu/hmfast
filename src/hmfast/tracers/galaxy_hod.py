@@ -2,7 +2,8 @@ import os
 import jax
 import jax.numpy as jnp
 import jax.scipy as jscipy
-from jax.scipy.special import sici, erf 
+from jax.scipy.special import erf 
+from jax.tree_util import register_pytree_node_class
 
 from hmfast.tracers.base_tracer import BaseTracer
 from hmfast.emulator import Emulator
@@ -207,7 +208,7 @@ class GalaxyHODTracer(BaseTracer):
         Nc = self.n_cen(m, params=params)
         ng = self.ng_bar(m, z, params=params) * (params["H0"]/100)**3
 
-        _, u_m = self.profile.u_k_matter(k, m, z, params=params)  
+        _, u_m = self.profile.u_k_matter(self.halo_model, k, m, z, params=params)  
 
         sat_term = (1/ng) * (Ns[None, :, None] * u_m)
         cen_term = (1/ng) * (Nc[None, :, None]**0)

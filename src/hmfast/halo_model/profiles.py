@@ -262,12 +262,12 @@ class GNFWPressureProfile(PressureProfile):
         # Corrected mass given the hydrostatic mass bias
         m_delta_tilde = (m / B)[None, :, None]  # (1, Nm, 1)
     
-        C = (1.65 * (h / 0.7) ** 2 * (H / H0) ** (8 / 3) * (m_delta_tilde / (0.7 * 3e14)) ** (2 / 3 + 0.12) * (0.7 / h) ** 1.5)  # (1, Nm, Nz)
+        P_500c = (1.65 * (h / 0.7) ** 2 * (H / H0) ** (8 / 3) * (m_delta_tilde / (0.7 * 3e14)) ** (2 / 3 + 0.12) * (0.7 / h) ** 1.5)  # (1, Nm, Nz)
     
         # Scaled radius and GNFW formula
         c_delta = halo_model.c_delta(m, z, params=params)  # (Nm, Nz)
         scaled_x = c_delta[None, :, :] * x[:, None, None]   # (Nx, Nm, Nz)
-        Pe = C * P0 * scaled_x ** (-gamma) * (1 + scaled_x ** alpha) ** ((gamma - beta) / alpha)
+        Pe = P_500c * P0 * scaled_x ** (-gamma) * (1 + scaled_x ** alpha) ** ((gamma - beta) / alpha)
     
         return Pe  # shape: (Nx, Nm, Nz)
 
@@ -289,7 +289,6 @@ class NFWMatterProfile(MatterProfile):
         k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
         
         # Get c_delta and r_delta
-        delta = halo_model.mass_definition.delta
         c_delta = halo_model.c_delta(m, z, params=params)
         r_delta = halo_model.r_delta(m, z, params=params)
         lambda_val = 1.0 
