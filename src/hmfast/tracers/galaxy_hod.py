@@ -21,7 +21,7 @@ class GalaxyHODTracer(BaseTracer):
 
     def __init__(self, halo_model, profile=None, dndz=None, 
                        sigma_log10M_HOD=0.68, alpha_s_HOD=1.30, M1_prime_HOD=10**12.7, M_min_HOD=10**11.8, M0_HOD=0.0
-    ):        
+                ):        
         # Static setup (Only runs on fresh instantiation)
         self.halo_model = halo_model
         self.profile = NFWMatterProfile() if profile is None else profile

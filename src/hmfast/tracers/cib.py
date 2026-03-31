@@ -1,44 +1,39 @@
+import os
+import numpy as np
 import jax
 import jax.numpy as jnp
 import jax.scipy as jscipy
-import os
-import numpy as np
+from jax.tree_util import register_pytree_node_class
 
-from hmfast.emulator import Emulator
-from hmfast.halo_model import HaloModel
 from hmfast.tracers.base_tracer import BaseTracer
-from hmfast.halo_model.profiles import MatterProfile, NFWMatterProfile
+from hmfast.halo_model.profiles import NFWMatterProfile
 from hmfast.utils import lambertw, Const
 from hmfast.download import get_default_data_path
 from hmfast.defaults import merge_with_defaults
 
-
-jax.config.update("jax_enable_x64", True)
-
-
+@register_pytree_node_class
 class CIBTracer(BaseTracer):
     """
-    CIB lensing tracer. 
-
-    Parameters
-    ----------
-    emulator : 
-        Cosmological emulator used to compute cosmological quantities
-     x : array
-        The x array used to define the radial profile over which the tracer will be evaluated
+    CIB lensing tracer.
+    Refactored to support Shang and Maniyar models with JAX-traceable parameters.
     """
 
-    def __init__(self, halo_model, profile=None, nu=100, cib_model="shang", s_nu=None):        
-
-        self.nu = nu
-        self.profile = NFWMatterProfile() if profile is None else profile
-        self.cib_model = cib_model
-        
-        # Load halo model with instantiated emulator and make sure the required files are loaded outside of jitted functions
+    def __init__(self, halo_model, profile=None, nu=100, cib_model="shang", s_nu=None,
+                 # Default Shang/Maniyar parameters (Dynamic Leaves)
+                 L0_cib=6.4e-8, alpha_cib=0.36, beta_cib=1.75, gamma_cib=1.7,
+                 T0_cib=24.4, m_eff_cib=10**12.6, sigma2_LM_cib=0.5, 
+                 delta_cib=3.6, z_plateau_cib=1e100, M_min_cib=10**11.5,
+                 eta_max_cib=0.4028, zc_cib=1.5, tau_cib=1.204, fsub_cib=0.134):
+ 
+        # --- Static Setup (Triggers Recompile if changed) ---
         self.halo_model = halo_model
+        self.profile = NFWMatterProfile() if profile is None else profile
+        self.nu = nu
+        self.cib_model = cib_model # Setter handles normalization
+        
+        # Ensure emulators are pre-loaded
         self.halo_model.emulator._load_emulator("DAZ")
         self.halo_model.emulator._load_emulator("HZ")
-        
 
         if s_nu is None:
             s_nu_z_path = os.path.join(get_default_data_path(), "auxiliary_files", "filtered_snu_planck_z_fine.txt")
@@ -48,10 +43,21 @@ class CIBTracer(BaseTracer):
         else:
             self.s_nu = s_nu
 
-
-    @property
-    def has_central_contribution(self):
-        return True
+        # --- Dynamic Leaves (Tracked for Gradients) ---
+        self.L0_cib = L0_cib
+        self.alpha_cib = alpha_cib
+        self.beta_cib = beta_cib
+        self.gamma_cib = gamma_cib
+        self.T0_cib = T0_cib
+        self.m_eff_cib = m_eff_cib
+        self.sigma2_LM_cib = sigma2_LM_cib
+        self.delta_cib = delta_cib
+        self.z_plateau_cib = z_plateau_cib
+        self.M_min_cib = M_min_cib
+        self.eta_max_cib = eta_max_cib
+        self.zc_cib = zc_cib
+        self.tau_cib = tau_cib
+        self.fsub_cib = fsub_cib
 
     @property
     def cib_model(self):
@@ -59,17 +65,54 @@ class CIBTracer(BaseTracer):
 
     @cib_model.setter
     def cib_model(self, value):
-        value = str(value).lower()
-        if value not in ("shang", "maniyar"):
-            raise ValueError("cib_model must be either 'shang' or 'maniyar'")
-        self._cib_model = value
+        val = str(value).lower()
+        if val not in ("shang", "maniyar"):
+            raise ValueError("cib_model must be 'shang' or 'maniyar'")
+        self._cib_model = val
 
-    
+    # --- JAX PyTree Registration ---
+
+    def tree_flatten(self):
+        # All physical parameters are leaves
+        leaves = (
+            self.L0_cib, self.alpha_cib, self.beta_cib, self.gamma_cib,
+            self.T0_cib, self.m_eff_cib, self.sigma2_LM_cib, self.delta_cib,
+            self.z_plateau_cib, self.M_min_cib, self.eta_max_cib, self.zc_cib,
+            self.tau_cib, self.fsub_cib
+        )
+        # Structural metadata
+        aux_data = (self.halo_model, self.profile, self.nu, self._cib_model, self.s_nu)
+        return (leaves, aux_data)
+
+    @classmethod
+    def tree_unflatten(cls, aux_data, leaves):
+        obj = cls.__new__(cls)
+        # Unpack aux
+        obj.halo_model, obj.profile, obj.nu, obj._cib_model, obj.s_nu = aux_data
+        # Unpack leaves
+        (obj.L0_cib, obj.alpha_cib, obj.beta_cib, obj.gamma_cib,
+         obj.T0_cib, obj.m_eff_cib, obj.sigma2_LM_cib, obj.delta_cib,
+         obj.z_plateau_cib, obj.M_min_cib, obj.eta_max_cib, obj.zc_cib,
+         obj.tau_cib, obj.fsub_cib) = leaves
+        return obj
+
+    def update_params(self, **kwargs):
+        names = [
+            'L0_cib', 'alpha_cib', 'beta_cib', 'gamma_cib', 'T0_cib', 'm_eff_cib',
+            'sigma2_LM_cib', 'delta_cib', 'z_plateau_cib', 'M_min_cib', 
+            'eta_max_cib', 'zc_cib', 'tau_cib', 'fsub_cib'
+        ]
+        leaves, treedef = jax.tree_util.tree_flatten(self)
+        new_leaves = [kwargs.get(name, val) for name, val in zip(names, leaves)]
+        return jax.tree_util.tree_unflatten(treedef, new_leaves)
+
+    # --- Physics: Methods now use self attributes directly (No Dict Lookup) ---
+
     def sigma(self, m, params=None):
         params = merge_with_defaults(params)
 
-        M_eff_cib = params['m_eff_cib']
-        sigma2_LM_cib = params['sigma2_LM_cib'] 
+        M_eff_cib = self.m_eff_cib
+        sigma2_LM_cib = self.sigma2_LM_cib
 
         # Log-normal in mass
         log10_m = jnp.log10(m)
@@ -82,8 +125,8 @@ class CIBTracer(BaseTracer):
         ''' 
         Implementation of Φ(z) = (1 + z)^(δ_CIB) for z < z_plateau, 1 for z >= z_plateau from the Shang model'''
         params = merge_with_defaults(params)
-        delta_cib = params["delta_cib"]
-        z_p = params["z_plateau_cib"]
+        delta_cib = self.delta_cib
+        z_p = self.z_plateau_cib
 
         Phi_z = jnp.where(z < z_p, (1 + z) ** delta_cib, 1.0)
 
@@ -93,10 +136,10 @@ class CIBTracer(BaseTracer):
     def theta(self, z, nu, params=None):
         """Spectral energy distribution function Theta(nu,z) for CIB, analogous to class_sz."""
         params = merge_with_defaults(params)
-        T0 = params["T0_cib"]
-        alpha_cib = params["alpha_cib"]
-        beta_cib = params["beta_cib"]
-        gamma_cib = params["gamma_cib"]
+        T0 = self.T0_cib
+        alpha_cib = self.alpha_cib
+        beta_cib = self.beta_cib
+        gamma_cib = self.gamma_cib
     
         h = Const._h_P_  # Planck [J s]
         k_B = Const._k_B_ #1.380649e-23  # Boltzmann [J/K]
@@ -148,7 +191,7 @@ class CIBTracer(BaseTracer):
         # Gather all relevant parameters 
         params = merge_with_defaults(params)
         cparams = self.halo_model.emulator.get_all_cosmo_params(params)
-        M_eff, sigma2_LM, eta_max, tau, z_c, f_sub = (params[k] for k in ["m_eff_cib", "sigma2_LM_cib", "eta_max_cib", "tau_cib", "zc_cib", "fsub_cib"])
+        M_eff, sigma2_LM, eta_max, tau, z_c, f_sub = self.m_eff_cib, self.sigma2_LM_cib, self.eta_max_cib, self.tau_cib, self.zc_cib, self.fsub_cib 
         m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
     
         # sigma^2 depends on whether M < M_eff or > M_eff
@@ -185,7 +228,7 @@ class CIBTracer(BaseTracer):
         L_gal = jax.lax.switch(
             model_idx,
             [
-                lambda: params["L0_cib"] *  jnp.atleast_1d(self.phi(z, params=params))[None, :] * 
+                lambda: self.L0_cib *  jnp.atleast_1d(self.phi(z, params=params))[None, :] * 
                                             jnp.atleast_1d(self.sigma(m, params=params))[:, None] * 
                                             jnp.atleast_1d(self.theta(z, nu * (1 + z), params=params))[None, :],
                 
@@ -202,11 +245,11 @@ class CIBTracer(BaseTracer):
     
         def integrate_single_halo(m_single):
             """Perform the subhalo integration for a single host halo mass."""
-            Ms_min = params["M_min_cib"]
+            Ms_min = self.M_min_cib
             ngrid = 200 # 100,000 is likely overkill and will slow down JIT significantly
             
             # Determine upper bound based on model
-            Ms_max = jax.lax.cond(self.cib_model == "maniyar", lambda x: x * (1 - params["fsub_cib"]), lambda x: x, m_single)
+            Ms_max = jax.lax.cond(self.cib_model == "maniyar", lambda x: x * (1 - self.fsub_cib), lambda x: x, m_single)
     
             # Create integration grid for this specific host mass
             Ms_grid = jnp.logspace(jnp.log10(Ms_min), jnp.log10(Ms_max), ngrid)
@@ -240,7 +283,7 @@ class CIBTracer(BaseTracer):
 
         # Get required parameters
         params = merge_with_defaults(params)
-        M_min, f_sub = params["M_min_cib"], params["fsub_cib"]
+        M_min, f_sub = self.M_min_cib, self.fsub_cib
         m = jnp.atleast_1d(m)
 
         # For the Maniyar model, mass becomes m * (1 - f_sub); for Shang model it is unchanged
