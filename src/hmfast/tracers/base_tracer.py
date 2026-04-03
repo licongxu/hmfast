@@ -20,7 +20,6 @@ class BaseTracer(ABC):
         """
         Initialize the tracer with a validated profile.
         """
-        #self._profile = None
         if profile is not None:
             self.profile = profile
 
@@ -42,18 +41,6 @@ class BaseTracer(ABC):
             )
         self._profile = value
         
-
-    @property
-    def has_central_contribution(self):
-        """ 
-        Indicates whether the tracer has a contribution from central terms, such as:
-        
-            - HOD, which has profile = N_sat * u_k + N_sat 
-            - CIB, which has profile = L_sat * u_k + L_sat * L_cen
-
-        For most tracers, profile = prefactor * u_k, meaning that this will be set to False.
-        """
-        return False
 
 
     def _load_dndz_data(self, path):
@@ -77,20 +64,10 @@ class BaseTracer(ABC):
 
 
     @abstractmethod
-    def kernel(self, z, params=None):
+    def kernel(self, emulator, z, params=None):
         """
         Compute the tracer's radial kernel W(z). All child classes must have a version of this function implemented.
         """
         pass 
-   
-    @abstractmethod
-    def u_k(self, k, m, z, moment=1, params=None):
-        """
-        Compute the tracer's profile u_k(k, m, z). All child classes must have a version of this function implemented.
-        """
-        pass 
-
-    
-
    
   

@@ -24,11 +24,11 @@ DEFAULT_PARAMS = {
 
     
     # tSZ tracer-specific parameters
-    'B': 1.4,            # Hydrostatic bias factor
-    'P0_GNFW': 8.130,
-    'alpha_GNFW': 1.0620,
-    'beta_GNFW': 5.4807,
-    'gamma_GNFW': 0.3292,
+    # 'B': 1.4,            # Hydrostatic bias factor
+    # 'P0_GNFW': 8.130,
+    # 'alpha_GNFW': 1.0620,
+    # 'beta_GNFW': 5.4807,
+    # 'gamma_GNFW': 0.3292,
 
     
     # HOD tracer-specific parameters

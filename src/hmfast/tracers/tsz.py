@@ -1,10 +1,11 @@
 import jax
 import jax.numpy as jnp
 import jax.scipy as jscipy
+from jax.tree_util import register_pytree_node_class
 
 from hmfast.emulator import Emulator
 from hmfast.halo_model import HaloModel
-from hmfast.tracers.base_tracer import BaseTracer#, HankelTransform
+from hmfast.tracers.base_tracer import BaseTracer
 from hmfast.defaults import merge_with_defaults
 from hmfast.utils import Const
 from hmfast.halo_model.profiles import PressureProfile, GNFWPressureProfile
@@ -12,6 +13,7 @@ from hmfast.halo_model.profiles import PressureProfile, GNFWPressureProfile
 jax.config.update("jax_enable_x64", True)
 
 
+@register_pytree_node_class
 class tSZTracer(BaseTracer):
     """
     tSZ tracer using GNFW profile.
@@ -19,17 +21,35 @@ class tSZTracer(BaseTracer):
 
     _required_profile_type = PressureProfile
     
-    def __init__(self, halo_model, profile=None):
-        
-        # Load halo model with instantiated emulator and make sure the required files are loaded outside of jitted functions
-        self.halo_model = halo_model
-        self.halo_model.emulator._load_emulator("DAZ")
-        self.halo_model.emulator._load_emulator("HZ")
-
+    def __init__(self, profile=None):
         super().__init__(profile=profile or GNFWPressureProfile())
-        
 
-    def kernel(self, z, params=None):
+
+    # --- Begin JAX PyTree Registration ---
+
+    def tree_flatten(self):
+        # The profile is the dynamic leaf
+        leaves = (self.profile,)
+        aux_data = None 
+        return (leaves, aux_data)
+
+    @classmethod
+    def tree_unflatten(cls, aux_data, leaves):
+        profile, = leaves
+        obj = cls.__new__(cls)
+        obj.profile = profile
+        return obj
+
+    def update_params(self, **kwargs):
+        """
+        Updates pressure profile parameters (e.g., P0, alpha, beta).
+        """
+        new_profile = self.profile.update_params(**kwargs)
+        return tSZTracer(profile=new_profile)
+
+    # --- End JAX PyTree Registration ---
+        
+    def kernel(self,emulator, z, params=None):
         params = merge_with_defaults(params)
         h = params['H0']/100
         
@@ -39,47 +59,3 @@ class tSZTracer(BaseTracer):
         mpc_per_h_to_cm =  Const._Mpc_over_m_ / h
         return (sigma_T / m_e) / (1+z) # Check this
 
-
-    def u_k(self, k, m, z, moment=1, params=None):
-        
-        params = merge_with_defaults(params)
-        h, B = params['H0']/100, params['B']
-        delta = self.halo_model.mass_definition.delta
-        k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
-        
-        r_delta = self.halo_model.r_delta(m, z, params=params) / B**(1/3) # (Nm, Nz)
-        d_A = jnp.atleast_1d(self.halo_model.emulator.angular_diameter_distance(z, params=params)) * h
-        ell_delta = d_A[None, :] / r_delta  # (Nm, Nz)
-        
-        Mpc_per_h_to_cm = Const._Mpc_over_m_ / h # This is actually Mpc_per_h_to_m, but the math is currently working
-        prefactor = (1 + z)[None, :] * 4 * jnp.pi * r_delta * Mpc_per_h_to_cm / (ell_delta**2)  # (Nm, Nz)
-        
-        # Target ell grid for interpolation: (Nk, Nz)
-        chi = d_A * (1 + z)
-        ell_target = k[:, None] * chi[None, :] - 0.5 
-        
-        # Get native Hankel transform outputs, which may not align with the k from this function's input
-        k_native, u_k_native = self.profile.u_k_hankel(self.halo_model, self.profile.x, m, z, params=params)  
-        
-        # Calculate native u_ell and the native ell grid
-        u_ell_native = u_k_native * jnp.sqrt(jnp.pi / (2 * k_native[:, None, None])) 
-        ell_native = k_native[:, None, None] * ell_delta[None, :, :] # (Nk_native, Nm, Nz)
-        
-        # Apply prefactor and moment
-        u_ell_base = prefactor[None, :, :] * u_ell_native # (Nk_native, Nm, Nz)
-        u_ell_val = jax.lax.select(moment == 1, u_ell_base, u_ell_base**2)
-    
-        # Interpolate over the native k-axis (axis 0) for every combination of m and z    
-        def interp_at_z(ell_t, ell_n, u_n):
-            return jnp.interp(ell_t, ell_n, u_n)
-       
-        vmap_interp = jax.vmap(
-            jax.vmap(interp_at_z, in_axes=(None, 1, 1), out_axes=1), 
-            in_axes=(1, 2, 2), out_axes=2
-        )
-        
-        # Resulting shape: (Nk, Nm, Nz)
-        u_ell_interp = vmap_interp(ell_target, ell_native, u_ell_val)
-        
-        return ell_target, u_ell_interp
-        

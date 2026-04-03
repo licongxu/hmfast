@@ -54,11 +54,12 @@ class HaloModel:
             The concentration-mass relation
         """
         
-        # Load emulator and make sure the required files are loaded outside of jitted functions
+        # Load emulator and make sure the required files are loaded outside of jitted functions (note that DER is needed for CMB lensing tracers)
         self.emulator = emulator 
         self.emulator._load_emulator("DAZ")
         self.emulator._load_emulator("HZ")
         self.emulator._load_emulator("PKL")
+        self.emulator._load_emulator("DER")
         
         self.mass_model = mass_model
         self.bias_model = bias_model
@@ -388,21 +389,22 @@ class HaloModel:
     
         is_same_tracer = (tracer2 is None) or (tracer1 == tracer2)
         tracer2 = tracer1 if tracer2 is None else tracer2
+
     
         # Process a single mass bin at a time and extract the uk^2 at the lowest mass for the halo model consistency term
         def process_bin(i):
             # We need the profiles for index 'i' while squaring uk if the user is doing an autocorrelation
             if is_same_tracer:
-                _, uk_sq_full = tracer1.u_k(k/h, m, z, moment=2, params=params)
+                _, uk_sq_full = tracer1.profile.u_k(self, k/h, m, z, moment=2, params=params)
                 uk_sq_row = uk_sq_full[:, i, :]
-            elif tracer1.has_central_contribution and tracer2.has_central_contribution:
-                s1, c1 = tracer1.sat_and_cen_contribution(k/h, m, z, params=params)
-                s2, c2 = tracer2.sat_and_cen_contribution(k/h, m, z, params=params)
+            elif tracer1.profile.has_central_contribution and tracer2.profile.has_central_contribution:
+                s1, c1 = tracer1.profile.sat_and_cen_contribution(self, k/h, m, z, params=params)
+                s2, c2 = tracer2.profile.sat_and_cen_contribution(self, k/h, m, z, params=params)
                 # Pull only row i
                 uk_sq_row = s1[:, i, :] * s2[:, i, :] + s1[:, i, :] * c2[:, i, :] + s2[:, i, :] * c1[:, i, :]
             else:
-                _, u1 = tracer1.u_k(k/h, m, z, moment=1, params=params)
-                _, u2 = tracer2.u_k(k/h, m, z, moment=1, params=params)
+                _, u1 = tracer1.profile.u_k(self, k/h, m, z, moment=1, params=params)
+                _, u2 = tracer2.profile.u_k(self, k/h, m, z, moment=1, params=params)
                 uk_sq_row = u1[:, i, :] * u2[:, i, :]
     
             return uk_sq_row * total_weights[i], uk_sq_row
@@ -449,8 +451,8 @@ class HaloModel:
 
         # Get the halo model pk_1h, the kernel, and the comoving volume
         P_1h_grid = jax.vmap(get_pk_slice)(z)
-        kernel1 = tracer1.kernel(z, params=params)  
-        kernel2 = tracer2.kernel(z, params=params)  
+        kernel1 = tracer1.kernel(self.emulator, z, params=params)  
+        kernel2 = tracer2.kernel(self.emulator, z, params=params)  
         comov_vol = self.emulator.comoving_volume_element(z, params=params) 
 
         # Integrate over redshift
@@ -485,7 +487,7 @@ class HaloModel:
         def get_I(tracer):
             # This function processes a single index 'i' of the mass axis
             def process_bin(i):
-                _, uk_full = tracer.u_k(k/h, m, z, moment=1, params=params)
+                _, uk_full = tracer.profile.u_k(self, k/h, m, z, moment=1, params=params)
                 uk_slice = uk_full[:, i, :] 
                 return uk_slice * total_weights[i], uk_slice
     
@@ -532,8 +534,8 @@ class HaloModel:
         P_2h_grid = jax.vmap(get_pk_slice)(z) 
         
         # Get individual kernels
-        kernel1 = tracer1.kernel(z, params=params)
-        kernel2 = tracer2.kernel(z, params=params)
+        kernel1 = tracer1.kernel(self.emulator, z, params=params)
+        kernel2 = tracer2.kernel(self.emulator, z, params=params)
         
         comov_vol = self.emulator.comoving_volume_element(z, params=params)
     

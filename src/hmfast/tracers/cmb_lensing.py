@@ -3,6 +3,7 @@ import jax
 import jax.numpy as jnp
 import jax.scipy as jscipy
 from jax.scipy.special import sici, erf 
+from jax.tree_util import register_pytree_node_class
 
 from hmfast.emulator import Emulator
 from hmfast.halo_model import HaloModel
@@ -14,7 +15,7 @@ from hmfast.halo_model.profiles import MatterProfile, NFWMatterProfile
 jax.config.update("jax_enable_x64", True)
 
 
-
+@register_pytree_node_class
 class CMBLensingTracer(BaseTracer):
     """
     CMB lensing tracer. Implements the formalism described in Kusiak et al (2023)
@@ -30,24 +31,38 @@ class CMBLensingTracer(BaseTracer):
 
     _required_profile_type = MatterProfile
 
-    def __init__(self, halo_model, profile=None):        
-        
-        # Load halo model with instantiated emulator and make sure the required files are loaded outside of jitted functions
-        self.halo_model = halo_model
-        self.halo_model.emulator._load_emulator("DAZ")
-        self.halo_model.emulator._load_emulator("HZ")
-        self.halo_model.emulator._load_emulator("DER")
-
+    def __init__(self, profile=None):        
         super().__init__(profile=profile or NFWMatterProfile())
 
+    def tree_flatten(self):
+        # We treat the profile as the only leaf. 
+        leaves = (self.profile,)
+        aux_data = None 
+        return (leaves, aux_data)
 
-    def kernel(self, z, params=None):
+    @classmethod
+    def tree_unflatten(cls, aux_data, leaves):
+        profile, = leaves
+        obj = cls.__new__(cls)
+        obj.profile = profile
+        return obj
+
+    def update_params(self, **kwargs):
+        """
+        Since this tracer has no params of its own, it just 
+        passes the request to the profile.
+        """
+        new_profile = self.profile.update_params(**kwargs)
+        return CMBLensingTracer(profile=new_profile)
+
+
+    def kernel(self, emulator, z, params=None):
         """
         Compute the CMB lensing kernel W_kappa_cmb at redshift z.
         """
         # Merge default parameters with input
         params = merge_with_defaults(params)
-        cparams = self.halo_model.emulator.get_all_cosmo_params(params=params)
+        cparams = emulator.get_all_cosmo_params(params=params)
         z = jnp.atleast_1d(z)  # Ensure z is an array
         
         # Cosmological constants
@@ -57,11 +72,11 @@ class CMBLensingTracer(BaseTracer):
         h = H0 / 100
         
         # Compute comoving distance and Hubble parameter
-        chi_z = self.halo_model.emulator.angular_diameter_distance(z, params=params) * (1 + z) * h # Comoving distance in Mpc/h
-        H_z = self.halo_model.emulator.hubble_parameter(z, params=params)   # Hubble parameter in km/s/Mpc
+        chi_z = emulator.angular_diameter_distance(z, params=params) * (1 + z) * h # Comoving distance in Mpc/h
+        H_z = emulator.hubble_parameter(z, params=params)   # Hubble parameter in km/s/Mpc
         
         # Comoving distance to the last scattering surface (z ~ 1090) in Mpc/h
-        chi_z_cmb = self.halo_model.emulator.derived_parameters(params=params)["chi_star"] * h  
+        chi_z_cmb = emulator.derived_parameters(params=params)["chi_star"] * h  
         
         # Compute the CMB lensing kernel
         W_kappa_cmb =  (
@@ -74,37 +89,3 @@ class CMBLensingTracer(BaseTracer):
        
         return W_kappa_cmb 
 
-
-        
-    def u_k(self, k, m, z, moment=1, params=None):
-        """ 
-        Compute either the first or second moment of the CMB lensing tracer u_ell.
-        For CMB lensing:, 
-            First moment:     W_k_cmb * u_ell_m
-            Second moment:    W_k_cmb^2 * u_ell_m^2 
-        """
-
-        params = merge_with_defaults(params)
-        cparams = self.halo_model.emulator.get_all_cosmo_params(params)
-
-        k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
-    
-        # Compute u_m_k from BaseTracer
-        k, u_m = self.profile.u_k_matter(self.halo_model, k, m, z, params=params) 
-        
-        rho_mean_0 = cparams["Rho_crit_0"] * cparams["Omega0_m"]
-        m_over_rho_mean = (m / rho_mean_0)[:, None]  # shape (N_m, 1)
-        m_over_rho_mean = jnp.broadcast_to(m_over_rho_mean, u_m.shape)
-
-        u_m *= m_over_rho_mean
-    
-        moment_funcs = [
-            lambda _:   u_m ,
-            lambda _:   u_m**2,
-        ]
-    
-        u_k = jax.lax.switch(moment - 1, moment_funcs, None)
-    
-        return k, u_k
-  
-  

@@ -1,8 +1,7 @@
 import os
 import jax
 import jax.numpy as jnp
-import jax.scipy as jscipy
-from jax.scipy.special import sici
+from jax.tree_util import register_pytree_node_class
 
 from hmfast.emulator import Emulator
 from hmfast.halo_model import HaloModel
@@ -15,8 +14,7 @@ from hmfast.download import get_default_data_path
 
 jax.config.update("jax_enable_x64", True)
 
-
-
+@register_pytree_node_class
 class GalaxyLensingTracer(BaseTracer):
     """
     Galaxy lensing tracer. Implements the formalism described in Kusiak et al (2023)
@@ -34,12 +32,7 @@ class GalaxyLensingTracer(BaseTracer):
     _required_profile_type = MatterProfile
 
     
-    def __init__(self, halo_model, profile=None, dndz=None):        
-
-        # Load halo model with instantiated emulator and make sure the required files are loaded outside of jitted functions
-        self.halo_model = halo_model
-        self.halo_model.emulator._load_emulator("DAZ")
-        self.halo_model.emulator._load_emulator("HZ")
+    def __init__(self, profile=None, dndz=None):        
 
         super().__init__(profile=profile or NFWMatterProfile())
 
@@ -60,8 +53,35 @@ class GalaxyLensingTracer(BaseTracer):
         self._dndz_data = self._normalize_dndz(value)
 
 
+    # --- Begin JAX PyTree Registration ---
+
+    def tree_flatten(self):
+        # Exactly like HOD: Profile is leaf 1, dndz array/tuple is leaf 2
+        leaves = (self.profile, self._dndz_data)
+        aux_data = None 
+        return (leaves, aux_data)
+
+    @classmethod
+    def tree_unflatten(cls, aux_data, leaves):
+        profile, dndz_data = leaves
+        obj = cls.__new__(cls)
+        obj.profile = profile
+        obj._dndz_data = dndz_data
+        return obj
+
+    def update_params(self, **kwargs):
+        """
+        Updates profile parameters. 
+        Passes the current dndz blob to the new instance.
+        """
+        new_profile = self.profile.update_params(**kwargs)
+        return GalaxyLensingTracer(profile=new_profile, dndz=self._dndz_data)
+
+
+    # --- End JAX PyTree Registration ---
+
     
-    def I_s(self, z, params=None):
+    def I_s(self, emulator, z, params=None):
         """
         Return I_s at requested z.
         Uses pre-loaded dndz_data = [z, phi_prime].
@@ -76,8 +96,8 @@ class GalaxyLensingTracer(BaseTracer):
         z_s, phi_prime_s = self.dndz
         
         # Angular distances
-        chi_z_s = self.halo_model.emulator.angular_diameter_distance(z_s, params=params) * (1 + z_s) 
-        chi_z = self.halo_model.emulator.angular_diameter_distance(z, params=params) * (1 + z) 
+        chi_z_s = emulator.angular_diameter_distance(z_s, params=params) * (1 + z_s) 
+        chi_z = emulator.angular_diameter_distance(z, params=params) * (1 + z) 
     
         # Reshape for broadcasting
         chi_z_s = chi_z_s[:, None]  # (N_s, 1)
@@ -96,14 +116,13 @@ class GalaxyLensingTracer(BaseTracer):
         return I_s
 
 
-
-    def kernel(self, z, params=None):
+    def kernel(self, emulator, z, params=None):
         """
         Compute the galaxy lensing kernel W_kappa_g at redshift z.
         """
         # Merge default parameters with input
         params = merge_with_defaults(params)
-        cparams = self.halo_model.emulator.get_all_cosmo_params(params=params)
+        cparams = emulator.get_all_cosmo_params(params=params)
         z = jnp.atleast_1d(z) # Ensure z is an array
 
         c_km_s = Const._c_ / 1e3  # Speed of light in km/s
@@ -114,10 +133,10 @@ class GalaxyLensingTracer(BaseTracer):
         Omega_m = cparams["Omega0_m"]  # Matter density parameter
 
         # Compute comoving distance and Hubble parameter
-        chi_z = self.halo_model.emulator.angular_diameter_distance(z, params=params) * (1 + z) * h # Comoving distance in Mpc/h
-        H_z = self.halo_model.emulator.hubble_parameter(z, params=params)   # Hubble parameter in km/s/Mpc
+        chi_z = emulator.angular_diameter_distance(z, params=params) * (1 + z) * h # Comoving distance in Mpc/h
+        H_z = emulator.hubble_parameter(z, params=params)   # Hubble parameter in km/s/Mpc
     
-        I_s = self.I_s(z, params=params) 
+        I_s = self.I_s(emulator, z, params=params) 
     
         # Compute the CMB lensing kernel
         W_kappa_g =  (
@@ -128,29 +147,6 @@ class GalaxyLensingTracer(BaseTracer):
         ) 
     
         return W_kappa_g 
-
-
-    def u_k(self, k, m, z, moment=1, params=None):
-        params = merge_with_defaults(params)
-        cparams = self.halo_model.emulator.get_all_cosmo_params(params)
-        k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
-
-        # k, u_m = self.u_k_matter(k, m, z, params=params)    # Old way 
-        k, u_m = self.profile.u_k_matter(self.halo_model, k, m, z, params=params)      # New way
-        
-        rho_mean_0 = cparams["Rho_crit_0"] * cparams["Omega0_m"]
-        m_over_rho_mean = (m / rho_mean_0)[:, None]  # shape (N_m, 1)
-        m_over_rho_mean = jnp.broadcast_to(m_over_rho_mean, u_m.shape)
-        u_m *= m_over_rho_mean
-    
-        moment_funcs = [
-            lambda _: u_m,
-            lambda _: u_m**2,
-        ]
-        u_k = jax.lax.switch(moment - 1, moment_funcs, None)
-        return k, u_k
-      
-  
 
 
        
