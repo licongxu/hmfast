@@ -276,7 +276,7 @@ class HaloModel:
             sigma_grid : array_like, σ(R, z) values
         """
         params = merge_with_defaults(params)
-        z_grid = self.emulator._z_grid_pk
+        z_grid = self.emulator._z_grid_pk()
         cparams = self.emulator.get_all_cosmo_params(params)
         h = cparams["h"]
     

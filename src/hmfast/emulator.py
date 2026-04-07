@@ -21,6 +21,31 @@ _COSMO_MODELS = {
 }
 
 
+_PARAMETER_BOUNDS = {
+            # --- Core LCDM Parameters ---
+            'ln10^{10}A_s': [2.5, 3.5],
+            'omega_cdm':    [0.08, 0.20],
+            'omega_b':      [0.01933, 0.02533],
+            'H0':           [39.99, 100.01],
+            #'n_s':          [0.8812, 1.0492],   # Range for LCDM model
+            #'n_s':          [0.8, 1.2],         # Range for non LCDM models
+        
+            # --- Extensions (MNU, Neff, wCDM) ---
+            'm_ncdm':       [0.0, 2.0],        # Total neutrino mass in eV
+            'N_ur':         [0.49, 4.49],      # N_ur. This range corresponds to Neff (effective # of neutrinos) from [1.5, 5.5] 
+            'w0_fld':       [-2.0, -0.33],     # Dark energy equation of state
+        
+            # --- EDE specific ---
+            # Commented out: ranges vary strictly by emulator version (v1 vs v2)
+            # 'fEDE':       [0.001, 0.3],    
+            # 'log10z_c':   [3.0, 4.5],      
+            # 'thetai_scf': [2.0, 3.14],     
+            # 'r':          [0.0, 0.5],     
+
+            # --- Not used in PP, DA, H, S8, PKL, PKNL ---
+            #'tau_reio':     [0.02, 0.12]
+}
+
 class Emulator:
     """
     Unified, JAX-native, lazily-loaded emulator interface.
@@ -32,21 +57,14 @@ class Emulator:
 
     def __init__(self, cosmo_model: int = 0):
         self.cosmo_model = cosmo_model
-        self._model_info = _COSMO_MODELS[cosmo_model]
-
-        self._base_path = os.path.join(
-            get_default_data_path(),
-            self._model_info["subdir"],
-        )
-
+       
         # atomic emulator cache
         self._emu = {}
-        # cached grids / derived constants
-        self._z_grid_bg = jnp.linspace(0.0, 20.0, 5000, dtype=jnp.float64)    # z grid for background quantities such as H(z), d_A(z), sigma8(z)
-        self._z_grid_pk = None     # z grid for Pk(z)
-        self._k_grid = None
-        self._pk_power_fac = None
-        self._setup_pk_grid()                  
+
+
+    def _base_path(self):
+        return os.path.join(get_default_data_path(),_COSMO_MODELS[self.cosmo_model]["subdir"])
+                         
 
     # ------------------------------------------------------------------
     # atomic lazy loader (Python-side only)
@@ -74,39 +92,50 @@ class Emulator:
         except KeyError:
             raise KeyError(f"Unknown emulator key: {key}")
     
-        self._emu[key] = loader_cls(os.path.join(self._base_path, subdir, f"{key}_{self._model_info['suffix']}"))
+        self._emu[key] = loader_cls(os.path.join(self._base_path(), subdir, f"{key}_{_COSMO_MODELS[self.cosmo_model]['suffix']}"))
         return self._emu[key]
 
-    # ------------------------------------------------------------------
-    # shared grids (lazy, cached)
-    # ------------------------------------------------------------------
 
-    def _setup_pk_grid(self):
-        if self._k_grid is not None:
-            return
-
-        is_ede_v2 = (self.cosmo_model == 6)
-
-        n_downsample_k = 1 if is_ede_v2 else 10
-        n_k            = 1000 if is_ede_v2 else 5000
-
-        emu = self._load_emulator("PKL")
+    def _validate_params(self, params):
+        """ 
+        Convert predictions outside of the parameter's training range into nans.
+        This is generally more JAX-friendly than throwing an error.
+        """
         
+        for key, (p_min, p_max) in self.PARAMETER_BOUNDS.items():
+            p = params[key]
+            params[key] = jnp.where((p >= p_min) & (p <= p_max), p, jnp.nan)
+        return params
+                       
 
+    # ------------------------------------------------------------------
+    # shared grids 
+    # ------------------------------------------------------------------
+
+    def _z_grid_bg(self):
+        return jnp.linspace(0.0, 20.0, 5000, dtype=jnp.float64) 
+
+    def _z_grid_pk(self):
+        z_max = jnp.where(self.cosmo_model == 6, 20.0, 5.0)
+        return jnp.linspace(0.0, z_max, 100, dtype=jnp.float64)     # z grid for Pk(z)
+
+    def _pk_grid(self):
+        is_ede_v2 = (self.cosmo_model == 6)
         k_min = 5e-4 if is_ede_v2 else 1e-4
         k_max = 10.0 if is_ede_v2 else 50.0
 
-        z_max = 20.0 if is_ede_v2 else 5.0
+        n_downsample_k = 1 if is_ede_v2 else 10
+        n_k            = 1000 if is_ede_v2 else 5000
+        _k_grid = jnp.geomspace(k_min, k_max, n_k, dtype=jnp.float64)[::n_downsample_k]
 
-        self._k_grid = jnp.geomspace(k_min, k_max, n_k, dtype=jnp.float64)[::n_downsample_k]
-        self._z_grid_pk = jnp.linspace(0.0, z_max, 100, dtype=jnp.float64)     # z grid for Pk(z)
-
-        
         if is_ede_v2:
-            self._pk_power_fac = self._k_grid ** (-3)
+            _pk_power_fac = _k_grid ** (-3)
         else:
             ls = jnp.arange(2,n_k+2)[::n_downsample_k] 
-            self._pk_power_fac= (ls*(ls+1.)/2./jnp.pi)**-1
+            _pk_power_fac = (ls*(ls+1.)/2./jnp.pi)**-1
+
+        return _k_grid, _pk_power_fac
+
 
     # ------------------------------------------------------------------
     # JAX-safe helpers
@@ -122,7 +151,7 @@ class Emulator:
     # ------------------------------------------------------------------
     # Cosmology
     # ------------------------------------------------------------------
-
+    
     def hubble_parameter(self, z, params=None):
         """
         Get Hubble parameter at redshift z.
@@ -143,7 +172,7 @@ class Emulator:
         params = merge_with_defaults(params)
         emu = self._load_emulator("HZ")
         preds = 10.0 ** emu.predictions(params)
-        return self._interp_z(z, self._z_grid_bg, preds)
+        return self._interp_z(z, self._z_grid_bg(), preds)
 
     def angular_diameter_distance(self, z, params=None):
         """
@@ -170,7 +199,7 @@ class Emulator:
             preds = 10.0 ** preds
             preds = jnp.insert(preds, 0, 0.0)
 
-        return self._interp_z(z, self._z_grid_bg, preds)
+        return self._interp_z(z, self._z_grid_bg(), preds)
 
     def sigma8(self, z, params=None):
         """
@@ -191,7 +220,7 @@ class Emulator:
         params = merge_with_defaults(params)
         emu = self._load_emulator("S8Z")
         preds = emu.predictions(params)
-        return self._interp_z(z, self._z_grid_bg, preds)
+        return self._interp_z(z, self._z_grid_bg(), preds)
 
 
     def get_all_cosmo_params(self, params = None):
@@ -292,10 +321,11 @@ class Emulator:
         z = jnp.atleast_1d(z)
     
         k0 = 1e-2  # reference wavenumber
-        pk0_grid = jax.vmap(lambda zp: jnp.interp(k0, *self.pk_matter(zp, params=params, linear=True)))(self._z_grid_pk)
+        z_grid_pk = self._z_grid_pk()
+        pk0_grid = jax.vmap(lambda zp: jnp.interp(k0, *self.pk_matter(zp, params=params, linear=True)))(z_grid_pk)
         D_grid = jnp.sqrt(pk0_grid / jnp.interp(k0, *self.pk_matter(0.0, params=params, linear=True)))
     
-        return jnp.interp(z, self._z_grid_pk, D_grid)
+        return jnp.interp(z, z_grid_pk, D_grid)
 
 
     def growth_rate(self, z, params=None):
@@ -305,12 +335,13 @@ class Emulator:
         
         params = merge_with_defaults(params)
         z = jnp.atleast_1d(z)
-        
-        D_grid = self.growth_factor(self._z_grid_pk, params=params)
-        a_grid = 1.0 / (1.0 + self._z_grid_pk)
+
+        z_grid_pk = self._z_grid_pk()
+        D_grid = self.growth_factor(z_grid_pk, params=params)
+        a_grid = 1.0 / (1.0 + z_grid_pk)
         f_grid = jnp.gradient(jnp.log(D_grid), jnp.log(a_grid))
         
-        return jnp.interp(z, self._z_grid_pk, f_grid)
+        return jnp.interp(z, z_grid_pk, f_grid)
 
 
 
@@ -322,19 +353,20 @@ class Emulator:
         
         z = jnp.atleast_1d(z)
         k_grid = jnp.geomspace(1e-5, 1e1, 1000)
+        z_grid_pk = self._z_grid_pk()
     
         # P(k, z) on the pk grid
-        P_grid = jax.vmap(lambda zp: jnp.interp(k_grid, *self.pk_matter(zp, params=params, linear=True)))(self._z_grid_pk)
+        P_grid = jax.vmap(lambda zp: jnp.interp(k_grid, *self.pk_matter(zp, params=params, linear=True)))(z_grid_pk)
     
-        a_grid = 1.0 / (1.0 + self._z_grid_pk)
-        H_grid = self.hubble_parameter(self._z_grid_pk, params=params)
-        f_grid = self.growth_rate(self._z_grid_pk, params=params)
+        a_grid = 1.0 / (1.0 + z_grid_pk)
+        H_grid = self.hubble_parameter(z_grid_pk, params=params)
+        f_grid = self.growth_rate(z_grid_pk, params=params)
     
         W_grid = f_grid * a_grid * H_grid
         integrand = (W_grid[:, None]**2 / 3) * P_grid * k_grid / (2 * jnp.pi**2)
         vrms2_grid = jax.scipy.integrate.trapezoid(integrand, x=jnp.log(k_grid), axis=1)
     
-        return jnp.interp(z, self._z_grid_pk, vrms2_grid)
+        return jnp.interp(z, z_grid_pk, vrms2_grid)
 
 
 
@@ -391,11 +423,11 @@ class Emulator:
 
         key = "PKL" if linear else "PKNL"
         emu = self._load_emulator(key)
-
+        k_grid, pk_power_fac = self._pk_grid()
         pk_log = emu.predictions(params)
-        pk = 10.0 ** pk_log * self._pk_power_fac
+        pk = 10.0 ** pk_log * pk_power_fac
 
-        return self._k_grid, pk
+        return k_grid, pk
 
     # ------------------------------------------------------------------
     # CMB
