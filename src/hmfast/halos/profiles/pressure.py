@@ -10,8 +10,8 @@ from jax.tree_util import register_pytree_node_class
 
 from hmfast.download import get_default_data_path
 from hmfast.utils import lambertw, Const
-from hmfast.halo_model.mass_definition import MassDefinition
-from hmfast.halo_model.profiles import HaloProfile, HankelTransform
+from hmfast.halos.mass_definition import MassDefinition
+from hmfast.halos.profiles import HaloProfile, HankelTransform
 
 
 
@@ -19,13 +19,13 @@ class PressureProfile(HaloProfile):
      def u_k(self, halo_model, k, m, z, moment=1):
         
         
-        h = halo_model.emulator.H0 / 100 
+        h = halo_model.cosmology.H0 / 100 
         B = self.B
         delta = halo_model.mass_definition.delta
         k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
         
         r_delta = halo_model.r_delta(m, z) / B**(1/3) # (Nm, Nz)
-        d_A = jnp.atleast_1d(halo_model.emulator.angular_diameter_distance(z)) * h
+        d_A = jnp.atleast_1d(halo_model.cosmology.angular_diameter_distance(z)) * h
         ell_delta = d_A[None, :] / r_delta  # (Nm, Nz)
         
         Mpc_per_h_to_cm = Const._Mpc_over_m_ / h # This is actually Mpc_per_h_to_m, but the math is currently working
@@ -136,7 +136,7 @@ class GNFWPressureProfile(PressureProfile):
     
         # Retrieve all required parameters and ensure all inputs are 1D  
         
-        H0 = halo_model.emulator.H0
+        H0 = halo_model.cosmology.H0
         
         P0, alpha, beta, gamma, B = self.P0, self.alpha, self.beta, self.gamma, self.B 
         x, m, z = jnp.atleast_1d(x), jnp.atleast_1d(m), jnp.atleast_1d(z) 
@@ -144,7 +144,7 @@ class GNFWPressureProfile(PressureProfile):
         # Helper variables for normalization
         h = H0 / 100.0
         c_km_s = Const._c_ / 1e3
-        H = halo_model.emulator.hubble_parameter(z) * c_km_s  # (Nz,)
+        H = halo_model.cosmology.hubble_parameter(z) * c_km_s  # (Nz,)
         H = jnp.atleast_1d(H)[None, None, :]  # (1, 1, Nz)
 
         # Corrected mass given the hydrostatic mass bias
@@ -227,7 +227,7 @@ class B12PressureProfile(PressureProfile):
 
     def profile(self, halo_model, x, m, z):
        
-        cparams = halo_model.emulator.get_all_cosmo_params()
+        cparams = halo_model.cosmology.get_all_cosmo_params()
         h = cparams["h"]   
         
         # B12 fixed slopes
@@ -251,8 +251,8 @@ class B12PressureProfile(PressureProfile):
         
         # Thermal Pressure Normalization (P200c)
         # Usually follows P200c = 200 * G * M200c * rho_crit * f_b / (2 * R200c)
-        rho_crit = jnp.atleast_1d(halo_model.emulator.critical_density(z))
-        H = jnp.atleast_1d(halo_model.emulator.hubble_parameter(z)) * (Const._c_ / 1e3)
+        rho_crit = jnp.atleast_1d(halo_model.cosmology.critical_density(z))
+        H = jnp.atleast_1d(halo_model.cosmology.hubble_parameter(z)) * (Const._c_ / 1e3)
         r_delta = halo_model.r_delta(m, z)
 
 

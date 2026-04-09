@@ -6,7 +6,7 @@ import jax.scipy as jscipy
 from jax.tree_util import register_pytree_node_class
 
 from hmfast.tracers.base_tracer import BaseTracer
-from hmfast.halo_model.profiles import CIBProfile, S12CIBProfile
+from hmfast.halos.profiles import CIBProfile, S12CIBProfile
 from hmfast.utils import lambertw, Const
 from hmfast.download import get_default_data_path
 
@@ -43,10 +43,10 @@ class CIBTracer(BaseTracer):
         new_profile = self.profile.update(**kwargs)
         return CIBTracer(profile=new_profile)
     
-    def kernel(self, emulator, z):
+    def kernel(self, cosmology, z):
         
-        h = emulator.H0 
-        chi = emulator.angular_diameter_distance(z) * (1 + z)
+        h = cosmology.H0 
+        chi = cosmology.angular_diameter_distance(z) * (1 + z)
 
         # If Shang, apply the 1/(a * chi^2) factor. If Maniyar, return 1.0.
         is_shang = isinstance(self.profile, S12CIBProfile)

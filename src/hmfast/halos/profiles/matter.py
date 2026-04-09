@@ -10,8 +10,8 @@ from jax.tree_util import register_pytree_node_class
 
 from hmfast.download import get_default_data_path
 from hmfast.utils import lambertw, Const
-from hmfast.halo_model.mass_definition import MassDefinition
-from hmfast.halo_model.profiles import HaloProfile
+from hmfast.halos.mass_definition import MassDefinition
+from hmfast.halos.profiles import HaloProfile
 
 
 class MatterProfile(HaloProfile):
@@ -33,7 +33,7 @@ class NFWMatterProfile(MatterProfile):
         """
 
         
-        cparams = halo_model.emulator.get_all_cosmo_params()
+        cparams = halo_model.cosmology.get_all_cosmo_params()
 
         k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
     

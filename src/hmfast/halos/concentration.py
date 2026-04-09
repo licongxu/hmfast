@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 from functools import partial
 
-from hmfast.halo_model.mass_definition import MassDefinition
+from hmfast.halos.mass_definition import MassDefinition
 
 
 
@@ -88,7 +88,7 @@ class B13Concentration:
         }
 
         key = (mdef.delta, mdef.reference)
-        D = halo_model.emulator.growth_factor(z) # Shape (Nz,)
+        D = halo_model.cosmology.growth_factor(z) # Shape (Nz,)
 
         # Get concentration for a given mass-redshift pair and a set of parameters
         def compute_c(m_val, z_val, D_val, A, B, C):

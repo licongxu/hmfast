@@ -3,10 +3,10 @@ import jax
 import jax.numpy as jnp
 from jax.tree_util import register_pytree_node_class
 
-from hmfast.emulator import Emulator
-from hmfast.halo_model import HaloModel
+from hmfast.cosmology import Cosmology
+from hmfast.halos import HaloModel
 from hmfast.tracers.base_tracer import BaseTracer
-from hmfast.halo_model.profiles import MatterProfile, NFWMatterProfile
+from hmfast.halos.profiles import MatterProfile, NFWMatterProfile
 from hmfast.utils import Const
 from hmfast.download import get_default_data_path
 
@@ -80,7 +80,7 @@ class GalaxyLensingTracer(BaseTracer):
     # --- End JAX PyTree Registration ---
 
     
-    def I_s(self, emulator, z):
+    def I_s(self, cosmology, z):
         """
         Return I_s at requested z.
         Uses pre-loaded dndz_data = [z, phi_prime].
@@ -89,14 +89,14 @@ class GalaxyLensingTracer(BaseTracer):
         
         
         z = jnp.atleast_1d(z)
-        h = emulator.H0 / 100
+        h = cosmology.H0 / 100
         
         # Load source distribution       
         z_s, phi_prime_s = self.dndz
         
         # Angular distances
-        chi_z_s = emulator.angular_diameter_distance(z_s) * (1 + z_s) 
-        chi_z = emulator.angular_diameter_distance(z) * (1 + z) 
+        chi_z_s = cosmology.angular_diameter_distance(z_s) * (1 + z_s) 
+        chi_z = cosmology.angular_diameter_distance(z) * (1 + z) 
     
         # Reshape for broadcasting
         chi_z_s = chi_z_s[:, None]  # (N_s, 1)
@@ -115,27 +115,27 @@ class GalaxyLensingTracer(BaseTracer):
         return I_s
 
 
-    def kernel(self, emulator, z):
+    def kernel(self, cosmology, z):
         """
         Compute the galaxy lensing kernel W_kappa_g at redshift z.
         """
         # Merge default parameters with input
        
-        cparams = emulator.get_all_cosmo_params()
+        cparams = cosmology.get_all_cosmo_params()
         z = jnp.atleast_1d(z) # Ensure z is an array
 
         c_km_s = Const._c_ / 1e3  # Speed of light in km/s
        
         # Cosmological constants
-        H0 = emulator.H0  # Hubble constant in km/s/Mpc
+        H0 = cosmology.H0  # Hubble constant in km/s/Mpc
         h = H0 / 100
         Omega_m = cparams["Omega0_m"]  # Matter density parameter
 
         # Compute comoving distance and Hubble parameter
-        chi_z = emulator.angular_diameter_distance(z) * (1 + z) * h # Comoving distance in Mpc/h
-        H_z = emulator.hubble_parameter(z)   # Hubble parameter in km/s/Mpc
+        chi_z = cosmology.angular_diameter_distance(z) * (1 + z) * h # Comoving distance in Mpc/h
+        H_z = cosmology.hubble_parameter(z)   # Hubble parameter in km/s/Mpc
     
-        I_s = self.I_s(emulator, z) 
+        I_s = self.I_s(cosmology, z) 
     
         # Compute the CMB lensing kernel
         W_kappa_g =  (

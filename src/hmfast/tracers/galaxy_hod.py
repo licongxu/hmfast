@@ -4,7 +4,7 @@ import jax.numpy as jnp
 from jax.tree_util import register_pytree_node_class
 
 from hmfast.tracers.base_tracer import BaseTracer
-from hmfast.halo_model.profiles import GalaxyHODProfile, StandardGalaxyHODProfile
+from hmfast.halos.profiles import GalaxyHODProfile, StandardGalaxyHODProfile
 from hmfast.download import get_default_data_path
 
 # Ensure high precision for cosmological integrations
@@ -62,14 +62,14 @@ class GalaxyHODTracer(BaseTracer):
         return GalaxyHODTracer(profile=new_profile, dndz=self._dndz_data)
 
 
-    def kernel(self, emulator, z):
+    def kernel(self, cosmology, z):
         """Return Wg_grid at requested z."""
         
         z = jnp.atleast_1d(z)
         z_g, phi_prime_g = self.dndz
     
         phi_prime_g_at_z = jnp.interp(z, z_g, phi_prime_g, left=0.0, right=0.0)
-        H_grid = emulator.hubble_parameter(z)
-        chi_grid = emulator.angular_diameter_distance(z) * (1.0 + z)
+        H_grid = cosmology.hubble_parameter(z)
+        chi_grid = cosmology.angular_diameter_distance(z) * (1.0 + z)
 
         return H_grid * (phi_prime_g_at_z / chi_grid**2)

@@ -3,7 +3,7 @@ import jax.numpy as jnp
 from abc import ABC, abstractmethod
 import numpy as np
 
-from hmfast.halo_model.profiles import HaloProfile
+from hmfast.halos.profiles import HaloProfile
 
 
  
@@ -63,7 +63,7 @@ class BaseTracer(ABC):
 
 
     @abstractmethod
-    def kernel(self, emulator, z):
+    def kernel(self, cosmology, z):
         """
         Compute the tracer's radial kernel W(z). All child classes must have a version of this function implemented.
         """

@@ -24,7 +24,7 @@ _COSMO_MODELS = {
 
 
 @register_pytree_node_class
-class Emulator:
+class Cosmology:
     def __init__(self, cosmo_model=0, 
                  H0=68.0, omega_cdm=0.12, omega_b=0.02246576, ln1e10A_s=3.035173309489548, n_s=0.965, tau_reio=0.0544,      # LCDM
                  m_ncdm=0.06, N_ur=3.046, w0_fld=-0.95,                                                                     # wCDM, Neff, MNU

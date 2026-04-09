@@ -10,12 +10,12 @@ from functools import partial
 from mcfit import TophatVar
 from jax.tree_util import register_pytree_node_class
 
-from hmfast.halo_model.mass_function import T08HaloMass
-from hmfast.halo_model.bias import T10HaloBias
-from hmfast.halo_model.mass_function import TW10SubHaloMass
-from hmfast.halo_model.concentration import D08Concentration, B13Concentration
-from hmfast.emulator import Emulator
-from hmfast.halo_model.mass_definition import MassDefinition
+from hmfast.halos.mass_function import T08HaloMass
+from hmfast.halos.bias import T10HaloBias
+from hmfast.halos.mass_function import TW10SubHaloMass
+from hmfast.halos.concentration import D08Concentration, B13Concentration
+from hmfast.cosmology import Cosmology
+from hmfast.halos.mass_definition import MassDefinition
 from hmfast.utils import newton_root
 
 jax.config.update("jax_enable_x64", True)
@@ -30,7 +30,7 @@ class HaloModel:
     with automatic differentiation capabilities.
     """
     
-    def __init__(self, emulator=Emulator(cosmo_model=0), 
+    def __init__(self, cosmology=Cosmology(cosmo_model=0), 
                  mass_definition=MassDefinition(delta=200, reference="critical"), 
                  mass_model = T08HaloMass(), 
                  bias_model = T10HaloBias(), 
@@ -51,12 +51,12 @@ class HaloModel:
             The concentration-mass relation
         """
         
-        # Load emulator and make sure the required files are loaded outside of jitted functions (note that DER is needed for CMB lensing tracers)
-        self.emulator = emulator 
-        self.emulator._load_emulator("DAZ")
-        self.emulator._load_emulator("HZ")
-        self.emulator._load_emulator("PKL")
-        self.emulator._load_emulator("DER")
+        # Load cosmology and make sure the required files are loaded outside of jitted functions (note that DER is needed for CMB lensing tracers)
+        self.cosmology = cosmology 
+        self.cosmology._load_emulator("DAZ")
+        self.cosmology._load_emulator("HZ")
+        self.cosmology._load_emulator("PKL")
+        self.cosmology._load_emulator("DER")
         
         self.mass_model = mass_model
         self.bias_model = bias_model
@@ -69,14 +69,14 @@ class HaloModel:
 
 
         # Create TophatVar instance once to instantiate it
-        dummy_k, _ = self.emulator.pk(1., linear=True)
+        dummy_k, _ = self.cosmology.pk(1., linear=True)
         self._tophat_instance = partial(TophatVar(dummy_k, lowring=True, backend='jax'), extrap=True)
 
 
     def tree_flatten(self):
-        # The emulator is a Pytree, so it is a child.
+        # The cosmology is a Pytree, so it is a child.
         # Everything else is configuration/metadata.
-        children = (self.emulator,)
+        children = (self.cosmology,)
         aux_data = (self.mass_model, self.bias_model, self.subhalo_mass_model, self.concentration,
             self.mass_definition, self.hm_consistency, self.convert_masses, self._tophat_instance
         )
@@ -84,9 +84,9 @@ class HaloModel:
 
     @classmethod
     def tree_unflatten(cls, aux_data, children):
-        emulator, = children
+        cosmology, = children
         obj = cls.__new__(cls)
-        obj.emulator = emulator
+        obj.cosmology = cosmology
         (obj.mass_model, obj.bias_model, obj.subhalo_mass_model, 
          obj.concentration, obj.mass_definition, obj.hm_consistency, 
          obj.convert_masses, obj._tophat_instance) = aux_data
@@ -95,10 +95,10 @@ class HaloModel:
     
     def update(self, **kwargs):
         """
-        Updates the underlying emulator parameters without re-initializing the whole class.
+        Updates the underlying cosmology parameters without re-initializing the whole class.
         """
         
-        new_emulator = self.emulator.update(**kwargs)
+        new_emulator = self.cosmology.update(**kwargs)
         children, aux_data = self.tree_flatten()
         new_instance = self.tree_unflatten(aux_data, (new_emulator,))
         
@@ -122,7 +122,7 @@ class HaloModel:
         float or array
             Δ_vir(z) relative to rho_crit
         """
-        omega_m = self.emulator.omega_m(z)
+        omega_m = self.cosmology.omega_m(z)
         x = omega_m - 1.0
     
         return 18.0 * jnp.pi**2 + 82.0 * x - 39.0 * x**2
@@ -155,7 +155,7 @@ class HaloModel:
         if from_ref == to_ref:
             return jnp.full_like(z, delta)
             
-        omega_m = self.emulator.omega_m(z)
+        omega_m = self.cosmology.omega_m(z)
         if from_ref == 'critical' and to_ref == 'mean':
             return delta / omega_m
         elif from_ref == 'mean' and to_ref == 'critical':
@@ -174,7 +174,7 @@ class HaloModel:
         # Vectorized Delta calculation
         def get_delta_crit(mdef, z_val):
             d = jnp.where(mdef.delta == "vir", self.delta_vir_to_crit(z_val), mdef.delta)
-            return jnp.where(mdef.reference == "mean", d * self.emulator.omega_m(z_val), d)
+            return jnp.where(mdef.reference == "mean", d * self.cosmology.omega_m(z_val), d)
 
         d_old_z, d_new_z = get_delta_crit(mass_def_old, z), get_delta_crit(mass_def_new, z)
         is_same_z = jnp.isclose(d_old_z, d_new_z) & (mass_def_old.reference == mass_def_new.reference)
@@ -238,14 +238,14 @@ class HaloModel:
         z = jnp.atleast_1d(z)[None, :]  # (1, Nz)
 
         # Define your reference density. Default is rho_crit
-        rho_ref = self.emulator.critical_density(z)
+        rho_ref = self.cosmology.critical_density(z)
 
         # If the user selects vir or rho_mean, correct for this
         if delta == "vir":
             delta = self.delta_vir_to_crit(z)
         
         if reference == "mean":
-            rho_ref *= self.emulator.omega_m(z)
+            rho_ref *= self.cosmology.omega_m(z)
             
         return (3.0 * m / (4.0 * jnp.pi * delta * rho_ref))**(1./3.)
 
@@ -268,7 +268,7 @@ class HaloModel:
        
         m = jnp.atleast_1d(m)
         logm = jnp.log(m)
-        cparams = self.emulator.get_all_cosmo_params()
+        cparams = self.cosmology.get_all_cosmo_params()
         rho_mean_0 = cparams["Rho_crit_0"] * cparams["Omega0_cb"]   # Omega0_m without neutrinos
         m_over_rho_mean = (m / rho_mean_0)[:, None]  # (Nm, 1)
     
@@ -303,12 +303,12 @@ class HaloModel:
             sigma_grid : array_like, σ(R, z) values
         """
         
-        z_grid = self.emulator._z_grid_pk()
-        cparams = self.emulator.get_all_cosmo_params()
+        z_grid = self.cosmology._z_grid_pk()
+        cparams = self.cosmology.get_all_cosmo_params()
         h = cparams["h"]
     
         # Power spectra for all redshifts, shape: (n_k, n_z)
-        pk_grid = jax.vmap(lambda zp: self.emulator.pk(zp, linear=True)[1].flatten())(z_grid).T
+        pk_grid = jax.vmap(lambda zp: self.cosmology.pk(zp, linear=True)[1].flatten())(z_grid).T
     
         # Compute σ²(R, z) and dσ²/dR using TophatVar
         R_grid, var = jax.vmap(self._tophat_instance, in_axes=1, out_axes=(0, 0))(pk_grid)
@@ -401,7 +401,7 @@ class HaloModel:
               z=jnp.geomspace(0.005, 3.0, 100),  
               kstar_damping=0.01):
     
-        h = self.emulator.H0 / 100
+        h = self.cosmology.H0 / 100
         k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
         
         # Weights and Setup
@@ -462,22 +462,22 @@ class HaloModel:
         Compute the 1-halo term for angular Cl.
         """
         
-        h = self.emulator.H0 / 100
+        h = self.cosmology.H0 / 100
 
         tracer2 = tracer1 if tracer2 is None else tracer2
 
         # Define the slice function to map l -> k for a specific z
         def get_pk_slice(zi):
-            chi_i = self.emulator.angular_diameter_distance(zi) * (1 + zi) 
+            chi_i = self.cosmology.angular_diameter_distance(zi) * (1 + zi) 
             ki = (l + 0.5) / chi_i
             pk = self.pk_1h(tracer1, tracer2, k=ki, m=m, z=jnp.atleast_1d(zi), kstar_damping=kstar_damping)
             return pk.flatten()
 
         # Get the halo model pk_1h, the kernel, and the comoving volume
         P_1h_grid = jax.vmap(get_pk_slice)(z)
-        kernel1 = tracer1.kernel(self.emulator, z)  
-        kernel2 = tracer2.kernel(self.emulator, z)  
-        comov_vol = self.emulator.comoving_volume_element(z) 
+        kernel1 = tracer1.kernel(self.cosmology, z)  
+        kernel2 = tracer2.kernel(self.cosmology, z)  
+        comov_vol = self.cosmology.comoving_volume_element(z) 
 
         # Integrate over redshift
         integrand = P_1h_grid * (comov_vol[:, None] * kernel1[:, None] * kernel2[:, None])
@@ -493,7 +493,7 @@ class HaloModel:
                 z=jnp.geomspace(0.005, 3.0, 100), 
                 ):
         
-        cparams = self.emulator.get_all_cosmo_params()
+        cparams = self.cosmology.get_all_cosmo_params()
         h, k, m, z = cparams["h"], jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
         tracer2 = tracer1 if tracer2 is None else tracer2
     
@@ -528,7 +528,7 @@ class HaloModel:
         I1 = get_I(tracer1)
         I2 = I1 if tracer1 == tracer2 else get_I(tracer2)
         
-        P_lin = jax.vmap(lambda zi: jnp.interp(k, *self.emulator.pk(zi, linear=True)))(z).T * h**3
+        P_lin = jax.vmap(lambda zi: jnp.interp(k, *self.cosmology.pk(zi, linear=True)))(z).T * h**3
         
         return P_lin * I1 * I2
 
@@ -548,7 +548,7 @@ class HaloModel:
         # Define the slice function for Limber integration
         def get_pk_slice(zi):
             # Map l to k using the Limber approximation and then get the pk_2h  
-            chi_i = self.emulator.angular_diameter_distance(zi) * (1 + zi) 
+            chi_i = self.cosmology.angular_diameter_distance(zi) * (1 + zi) 
             ki = (l + 0.5) / chi_i
             return self.pk_2h(tracer1, tracer2, k=ki, m=m, z=jnp.atleast_1d(zi)).flatten()
     
@@ -556,10 +556,10 @@ class HaloModel:
         P_2h_grid = jax.vmap(get_pk_slice)(z) 
         
         # Get individual kernels
-        kernel1 = tracer1.kernel(self.emulator, z)
-        kernel2 = tracer2.kernel(self.emulator, z)
+        kernel1 = tracer1.kernel(self.cosmology, z)
+        kernel2 = tracer2.kernel(self.cosmology, z)
         
-        comov_vol = self.emulator.comoving_volume_element(z)
+        comov_vol = self.cosmology.comoving_volume_element(z)
     
         # Limber Integral: C_l = int dz P(k,z) * [W1 * W2 * dV/dz]
         integrand = P_2h_grid * (comov_vol[:, None] * kernel1[:, None] * kernel2[:, None])

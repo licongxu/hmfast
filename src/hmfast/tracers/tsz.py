@@ -3,11 +3,11 @@ import jax.numpy as jnp
 import jax.scipy as jscipy
 from jax.tree_util import register_pytree_node_class
 
-from hmfast.emulator import Emulator
-from hmfast.halo_model import HaloModel
+from hmfast.cosmology import Cosmology
+from hmfast.halos import HaloModel
 from hmfast.tracers.base_tracer import BaseTracer
 from hmfast.utils import Const
-from hmfast.halo_model.profiles import PressureProfile, GNFWPressureProfile
+from hmfast.halos.profiles import PressureProfile, GNFWPressureProfile
 
 jax.config.update("jax_enable_x64", True)
 
@@ -48,9 +48,9 @@ class tSZTracer(BaseTracer):
 
     # --- End JAX PyTree Registration ---
         
-    def kernel(self, emulator, z):
+    def kernel(self, cosmology, z):
         
-        h = emulator.H0/100 
+        h = cosmology.H0/100 
         
         # Get electon mass in eV, Thomson cross section in cm^2, and Mpc/h in cm
         m_e = Const._m_e_ * Const._c_**2 / Const._eV_

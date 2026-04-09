@@ -10,8 +10,8 @@ from jax.tree_util import register_pytree_node_class
 
 from hmfast.download import get_default_data_path
 from hmfast.utils import lambertw, Const
-from hmfast.halo_model.mass_definition import MassDefinition
-from hmfast.halo_model.profiles import HaloProfile
+from hmfast.halos.mass_definition import MassDefinition
+from hmfast.halos.profiles import HaloProfile
 
 
 class GalaxyHODProfile(HaloProfile):
@@ -113,7 +113,7 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
        
         Ns = self.n_sat(m)
         Nc = self.n_cen(m)
-        ng = self.ng_bar(halo_model, m, z) * (halo_model.emulator.H0 / 100)**3
+        ng = self.ng_bar(halo_model, m, z) * (halo_model.cosmology.H0 / 100)**3
 
         _, u_m = self.u_k_matter(halo_model, k, m, z)  
 
@@ -128,7 +128,7 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
        
         Ns = self.n_sat(m)
         Nc = self.n_cen(m)
-        ng = self.ng_bar(halo_model, m, z) * (halo_model.emulator.H0 / 100)**3
+        ng = self.ng_bar(halo_model, m, z) * (halo_model.cosmology.H0 / 100)**3
 
         _, u_m = self.u_k_matter(halo_model, k, m, z)
     

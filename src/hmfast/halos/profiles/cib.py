@@ -10,8 +10,8 @@ from jax.tree_util import register_pytree_node_class
 
 from hmfast.download import get_default_data_path
 from hmfast.utils import lambertw, Const
-from hmfast.halo_model.mass_definition import MassDefinition
-from hmfast.halo_model.profiles import HaloProfile
+from hmfast.halos.mass_definition import MassDefinition
+from hmfast.halos.profiles import HaloProfile
 
 
 class CIBProfile(HaloProfile):
@@ -154,7 +154,7 @@ class S12CIBProfile(CIBProfile):
         Integral of (L_cen + L_sat) over the halo mass function.
         """
         
-        h = halo_model.emulator.H0 / 100
+        h = halo_model.cosmology.H0 / 100
 
         # Get the luminosities (ensure physical mass if needed)
         m_phys = m / h
@@ -165,7 +165,7 @@ class S12CIBProfile(CIBProfile):
         dndlnm = halo_model.halo_mass_function(m, z) # Shape: (Nm, Nz)
 
         # Correct for Maniyar if needed
-        chi = halo_model.emulator.angular_diameter_distance(z) * (1 + z) 
+        chi = halo_model.cosmology.angular_diameter_distance(z) * (1 + z) 
         
         # Integrate: j_bar = integral [dn/dlnm * (L_c + L_s)] dlnm
         integrand = dndlnm * (lc + ls)
@@ -188,7 +188,7 @@ class S12CIBProfile(CIBProfile):
         j_bar = self.j_bar_nu(halo_model, m, z, nu)
         
         # dchi/dz = c / H(z), a(z) = 1/(1+z)
-        dchi_dz = 1.0 / halo_model.emulator.hubble_parameter(z)
+        dchi_dz = 1.0 / halo_model.cosmology.hubble_parameter(z)
         a = 1.0 / (1.0 + z)
         
         # Final Integral over redshift
@@ -201,12 +201,12 @@ class S12CIBProfile(CIBProfile):
     def sat_and_cen_contribution(self, halo_model, k, m, z):
 
         
-        cparams = halo_model.emulator.get_all_cosmo_params()
+        cparams = halo_model.cosmology.get_all_cosmo_params()
         nu = self.nu
         h = cparams["h"]
        
         #nu = self.nu 
-        chi = halo_model.emulator.angular_diameter_distance(z) * (1 + z) 
+        chi = halo_model.cosmology.angular_diameter_distance(z) * (1 + z) 
 
         # Compute the physical mass for ls and lc and then u_k_matter from BaseTracer
         m_physical = m/h
@@ -299,7 +299,7 @@ class M21CIBProfile(CIBProfile):
         m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
         c_km_s = Const._c_ / 1e3
         
-        E_z = jnp.atleast_1d(halo_model.emulator.hubble_parameter(z)) * c_km_s / halo_model.emulator.H0
+        E_z = jnp.atleast_1d(halo_model.cosmology.hubble_parameter(z)) * c_km_s / halo_model.cosmology.H0
         
         return 46.1 * (1.0 + 1.11 * z[None, :]) * E_z[None, :] * (m[:, None] / 1e12) ** 1.1
 
@@ -316,7 +316,7 @@ class M21CIBProfile(CIBProfile):
 
         # Gather all relevant parameters 
         
-        cparams = halo_model.emulator.get_all_cosmo_params()
+        cparams = halo_model.cosmology.get_all_cosmo_params()
         M_eff, sigma2_LM, eta_max, tau, z_c, f_sub = self.m_eff_cib, self.sigma2_LM_cib, self.eta_max_cib, self.tau_cib, self.zc_cib, self.fsub_cib 
         m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
     
@@ -388,7 +388,7 @@ class M21CIBProfile(CIBProfile):
         Integral of (L_cen + L_sat) over the halo mass function.
         """
        
-        h = halo_model.emulator.H0 / 100
+        h = halo_model.cosmology.H0 / 100
 
         # Get the luminosities (ensure physical mass if needed)
         m_phys = m / h
@@ -399,7 +399,7 @@ class M21CIBProfile(CIBProfile):
         dndlnm = halo_model.halo_mass_function(m, z) # Shape: (Nm, Nz)
 
         # Correct for Maniyar if needed
-        chi = halo_model.emulator.angular_diameter_distance(z) * (1 + z) 
+        chi = halo_model.cosmology.angular_diameter_distance(z) * (1 + z) 
         maniyar_factor = (1+z) * chi**2 #if self.cib_model == 'maniyar' else 1
         
         # Integrate: j_bar = integral [dn/dlnm * (L_c + L_s)] dlnm
@@ -422,7 +422,7 @@ class M21CIBProfile(CIBProfile):
         j_bar = self.j_bar_nu(halo_model, m, z, nu)
         
         # dchi/dz = c / H(z), a(z) = 1/(1+z)
-        dchi_dz = 1.0 / halo_model.emulator.hubble_parameter(z)
+        dchi_dz = 1.0 / halo_model.cosmology.hubble_parameter(z)
         a = 1.0 / (1.0 + z)
         
         # Final Integral over redshift
@@ -434,12 +434,12 @@ class M21CIBProfile(CIBProfile):
     
     def sat_and_cen_contribution(self, halo_model, k, m, z):
 
-        cparams = halo_model.emulator.get_all_cosmo_params()
+        cparams = halo_model.cosmology.get_all_cosmo_params()
         nu = self.nu
-        h = halo_model.emulator.H0 / 100
+        h = halo_model.cosmology.H0 / 100
        
         #nu = self.nu 
-        chi = halo_model.emulator.angular_diameter_distance(z) * (1 + z) 
+        chi = halo_model.cosmology.angular_diameter_distance(z) * (1 + z) 
 
         # Compute the physical mass for ls and lc and then u_k_matter from BaseTracer
         m_physical = m/h

@@ -10,8 +10,8 @@ from jax.tree_util import register_pytree_node_class
 
 from hmfast.download import get_default_data_path
 from hmfast.utils import lambertw, Const
-from hmfast.halo_model.mass_definition import MassDefinition
-from hmfast.halo_model.profiles import HaloProfile, HankelTransform
+from hmfast.halos.mass_definition import MassDefinition
+from hmfast.halos.profiles import HaloProfile, HankelTransform
 
 
 class DensityProfile(HaloProfile):
@@ -22,13 +22,13 @@ class DensityProfile(HaloProfile):
         Supports arbitrary input shapes for k, m, and z.
         """
         
-        h = halo_model.emulator.H0 / 100
+        h = halo_model.cosmology.H0 / 100
         k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
     
         # Compute r_delta and ell_delta
         delta = halo_model.mass_definition.delta
         r_delta = halo_model.r_delta(m, z)
-        d_A_z = jnp.atleast_1d(halo_model.emulator.angular_diameter_distance(z)) * h
+        d_A_z = jnp.atleast_1d(halo_model.cosmology.angular_diameter_distance(z)) * h
         ell_delta = d_A_z[None, :] / r_delta
         
         # chi: (Nz,) -> Target ell grid: (Nk, Nz)
@@ -36,7 +36,7 @@ class DensityProfile(HaloProfile):
         ell_target = k[:, None] * chi[None, :] - 0.5 
     
         # Calculate kSZ Prefactor as (Nm, Nz)
-        vrms = jnp.sqrt(halo_model.emulator.v_rms_squared(z))
+        vrms = jnp.sqrt(halo_model.cosmology.v_rms_squared(z))
         mu_e = 1.14
         f_free = 1.0
         prefactor = (4 * jnp.pi * r_delta**3 * f_free / mu_e * (1 + z)[None, :]**3 / chi[None, :]**2 * vrms[None, :])
@@ -166,7 +166,7 @@ class B16DensityProfile(DensityProfile):
             z.shape = (Nz,)
         Output shape: (Nx, Nm, Nz)
         """
-        cparams = halo_model.emulator.get_all_cosmo_params()
+        cparams = halo_model.cosmology.get_all_cosmo_params()
         f_b = cparams["Omega_b"] / cparams["Omega0_m"]
         h = cparams["h"]
 
@@ -178,7 +178,7 @@ class B16DensityProfile(DensityProfile):
         x_b, m_b, z_b = x[:, None, None], m[None, :, None], z[None, None, :]      # (Nx, 1, 1), (1, Nm, 1), (1, 1, Nz)
         
         # Critical density broadcast to (1, 1, Nz)
-        rho_crit_z = jnp.atleast_1d(halo_model.emulator.critical_density(z))[None, None, :]
+        rho_crit_z = jnp.atleast_1d(halo_model.cosmology.critical_density(z))[None, None, :]
         
         # Mass scaling logic
         m_200c_msun = m_b / h
@@ -218,7 +218,7 @@ class NFWDensityProfile(DensityProfile):
         
 
     def profile(self, halo_model, x, m, z):
-        cparams = halo_model.emulator.get_all_cosmo_params()
+        cparams = halo_model.cosmology.get_all_cosmo_params()
         x, m, z = jnp.atleast_1d(x), jnp.atleast_1d(m), jnp.atleast_1d(z)
        
         f_b = cparams["Omega_b"] / cparams["Omega0_m"]
@@ -320,7 +320,7 @@ class BCMDensityProfile(DensityProfile):
             rho_gas: Gas density in [M_sun h^2 / Mpc^3] (Nx, Nm, Nz)
         """
        
-        cparams = halo_model.emulator.get_all_cosmo_params()
+        cparams = halo_model.cosmology.get_all_cosmo_params()
         f_b = cparams["Omega_b"] / cparams["Omega0_m"]
         
         # Broadcasting shapes: (Nx, 1, 1), (1, Nm, 1), (1, 1, Nz)

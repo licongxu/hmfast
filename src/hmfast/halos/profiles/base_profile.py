@@ -10,7 +10,7 @@ from jax.tree_util import register_pytree_node_class
 
 from hmfast.download import get_default_data_path
 from hmfast.utils import lambertw, Const
-from hmfast.halo_model.mass_definition import MassDefinition
+from hmfast.halos.mass_definition import MassDefinition
 
 
 class HankelTransform:
@@ -68,7 +68,7 @@ class HaloProfile:
         """
 
        
-        cparams = halo_model.emulator.get_all_cosmo_params()
+        cparams = halo_model.cosmology.get_all_cosmo_params()
         h = cparams['h']
        
         W_x = jnp.where((x >= x[0]) & (x <= x[-1]), 1.0, 0.0)
