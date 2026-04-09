@@ -2,15 +2,11 @@ import os
 import numpy as np
 import jax
 import jax.numpy as jnp
-import jax.scipy as jscipy
 import mcfit
 import functools
-from jax.scipy.special import sici, erf
+from jax.scipy.special import sici
 from jax.tree_util import register_pytree_node_class
 
-from hmfast.download import get_default_data_path
-from hmfast.utils import lambertw, Const
-from hmfast.halos.mass_definition import MassDefinition
 
 
 class HankelTransform:

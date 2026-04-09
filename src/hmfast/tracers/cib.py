@@ -2,7 +2,6 @@ import os
 import numpy as np
 import jax
 import jax.numpy as jnp
-import jax.scipy as jscipy
 from jax.tree_util import register_pytree_node_class
 
 from hmfast.tracers.base_tracer import BaseTracer
@@ -20,7 +19,7 @@ class CIBTracer(BaseTracer):
     _required_profile_type = CIBProfile
     
     def __init__(self, profile=None):
-        super().__init__(profile=profile or S12CIBProfile())
+        super().__init__(profile=profile or S12CIBProfile(nu=100))
         
     # --- JAX PyTree Registration ---
     def tree_flatten(self):

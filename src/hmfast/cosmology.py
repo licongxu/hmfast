@@ -469,27 +469,6 @@ class Cosmology:
     # CMB
     # ------------------------------------------------------------------
 
-    # def cmb_dls(self, lmax=10000):
-        
-    #     params = self._to_dict()
-
-    #     tt = self._load_emulator("TT").ten_to_predictions(params)
-    #     ee = self._load_emulator("EE").ten_to_predictions(params)
-    #     te = self._load_emulator("TE").predictions(params)
-    #     pp = self._load_emulator("PP").ten_to_predictions(params)
-
-    #     n = min(len(tt), len(ee), len(te), len(pp), lmax - 1)
-    #     ell = jnp.arange(2, n + 2)
-
-    #     return {
-    #         "ell": ell,
-    #         "tt": tt[:n],
-    #         "ee": ee[:n],
-    #         "te": te[:n],
-    #         "pp": pp[:n] / (2 * jnp.pi),
-    #     }
-
-
     def _get_ell_and_n(self, emu_preds, lmax):
         """Helper to determine the multipole range."""
         n = min(len(emu_preds), lmax - 1)
@@ -525,13 +504,13 @@ class Cosmology:
         # Apply the 1/(2pi) normalization used in your original code
         return ell, preds[:n] / (2 * jnp.pi)
 
-    def cl_bb(self, lmax=10000):
-        if self.cosmo_model != 6: 
-            raise ValueError("This function is only implemented for EDE-v2 emulators.")
-        params = self._to_dict()
-        preds = self._load_emulator("BB").ten_to_predictions(params)
-        ell, n = self._get_ell_and_n(preds, lmax)
-        return ell, preds[:n]
+    # def cl_bb(self, lmax=10000):
+    #     if self.cosmo_model != 6: 
+    #         raise ValueError("This function is only implemented for EDE-v2 emulators.")
+    #     params = self._to_dict()
+    #     preds = self._load_emulator("BB").ten_to_predictions(params)
+    #     ell, n = self._get_ell_and_n(preds, lmax)
+    #     return ell, preds[:n]
         
     # ------------------------------------------------------------------
     # Derived parameters

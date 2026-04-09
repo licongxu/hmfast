@@ -5,12 +5,10 @@ import jax.numpy as jnp
 import jax.scipy as jscipy
 import mcfit
 import functools
-from jax.scipy.special import sici, erf
 from jax.tree_util import register_pytree_node_class
 
 from hmfast.download import get_default_data_path
 from hmfast.utils import lambertw, Const
-from hmfast.halos.mass_definition import MassDefinition
 from hmfast.halos.profiles import HaloProfile
 
 
@@ -21,22 +19,22 @@ class CIBProfile(HaloProfile):
 
 @register_pytree_node_class
 class S12CIBProfile(CIBProfile):
-    def __init__(self, nu, L0_cib=6.4e-8, alpha_cib=0.36, beta_cib=1.75, gamma_cib=1.7,
-                 T0_cib=24.4, m_eff_cib=10**12.6, sigma2_LM_cib=0.5, 
-                 delta_cib=3.6, z_plateau_cib=1e100, M_min_cib=10**11.5):
+    def __init__(self, nu, L0=6.4e-8, alpha=0.36, beta=1.75, gamma=1.7,
+                 T0=24.4, M_eff=10**12.6, sigma2_LM=0.5, 
+                 delta=3.6, z_p=1e100, M_min=10**11.5):
 
         self.nu = nu
-        self.L0_cib, self.alpha_cib, self.beta_cib, self.gamma_cib = L0_cib, alpha_cib, beta_cib, gamma_cib
-        self.T0_cib, self.m_eff_cib, self.sigma2_LM_cib = T0_cib, m_eff_cib, sigma2_LM_cib
-        self.delta_cib, self.z_plateau_cib, self.M_min_cib = delta_cib, z_plateau_cib, M_min_cib
+        self.L0, self.alpha, self.beta, self.gamma = L0, alpha, beta, gamma
+        self.T0, self.M_eff, self.sigma2_LM = T0, M_eff, sigma2_LM
+        self.delta, self.z_p, self.M_min = delta, z_p, M_min
 
     @property
     def has_central_contribution(self):
         return True
 
     def tree_flatten(self):
-        leaves = (self.nu, self.L0_cib, self.alpha_cib, self.beta_cib, self.gamma_cib, self.T0_cib, 
-                  self.m_eff_cib, self.sigma2_LM_cib, self.delta_cib, self.z_plateau_cib, self.M_min_cib)
+        leaves = (self.nu, self.L0, self.alpha, self.beta, self.gamma, self.T0, 
+                  self.M_eff, self.sigma2_LM, self.delta, self.z_p, self.M_min)
         return (leaves, None)
         
 
@@ -46,8 +44,8 @@ class S12CIBProfile(CIBProfile):
 
     def update(self, **kwargs):
         names = [
-            'nu', 'L0_cib', 'alpha_cib', 'beta_cib', 'gamma_cib', 'T0_cib', 'm_eff_cib',
-            'sigma2_LM_cib', 'delta_cib', 'z_plateau_cib', 'M_min_cib'
+            'nu', 'L0', 'alpha', 'beta', 'gamma', 'T0', 'M_eff',
+            'sigma2_LM', 'delta', 'z_p', 'M_min'
         ]
         # Check for typos/invalid names
         if not set(kwargs).issubset(names):
@@ -59,12 +57,12 @@ class S12CIBProfile(CIBProfile):
 
 
     def sigma(self, m):
-        M_eff_cib, sigma2_LM_cib = self.m_eff_cib, self.sigma2_LM_cib
+        M_eff_cib, sigma2_LM = self.M_eff, self.sigma2_LM
        
         # Log-normal in mass
         log10_m = jnp.log10(m)
         log10_M_eff = jnp.log10(M_eff_cib)
-        Sigma_M = m / jnp.sqrt(2 * jnp.pi * sigma2_LM_cib)  *  jnp.exp( -(log10_m - log10_M_eff)**2 / (2 * sigma2_LM_cib) )
+        Sigma_M = m / jnp.sqrt(2 * jnp.pi * sigma2_LM)  *  jnp.exp( -(log10_m - log10_M_eff)**2 / (2 * sigma2_LM) )
         return Sigma_M
 
 
@@ -72,10 +70,10 @@ class S12CIBProfile(CIBProfile):
         ''' 
         Implementation of Φ(z) = (1 + z)^(δ_CIB) for z < z_plateau, 1 for z >= z_plateau from the Shang model'''
         
-        delta_cib = self.delta_cib
-        z_p = self.z_plateau_cib
+        delta = self.delta
+        z_p = self.z_p
 
-        Phi_z = jnp.where(z < z_p, (1 + z) ** delta_cib, 1.0)
+        Phi_z = jnp.where(z < z_p, (1 + z) ** delta, 1.0)
 
         return Phi_z
 
@@ -83,17 +81,17 @@ class S12CIBProfile(CIBProfile):
     def theta(self,  z, nu):
         """Spectral energy distribution function Theta(nu,z) for CIB, analogous to class_sz."""
         
-        T0, alpha_cib, beta_cib, gamma_cib = self.T0_cib, self.alpha_cib, self.beta_cib, self.gamma_cib
+        T0, alpha, beta, gamma = self.T0, self.alpha, self.beta, self.gamma
     
         h = Const._h_P_  # Planck [J s]
         k_B = Const._k_B_ #1.380649e-23  # Boltzmann [J/K]
         c = Const._c_  #2.99792458e8    # speed of light [m/s]
     
-        T_d_z = T0 * (1 + z) ** alpha_cib
+        T_d_z = T0 * (1 + z) ** alpha
     
-        x = -(3. + beta_cib + gamma_cib) * jnp.exp(-(3. + beta_cib + gamma_cib))
+        x = -(3. + beta + gamma) * jnp.exp(-(3. + beta + gamma))
         # nu0 in GHz
-        nu0_GHz = 1e-9 * k_B * T_d_z / h * (3. + beta_cib + gamma_cib + lambertw(x))
+        nu0_GHz = 1e-9 * k_B * T_d_z / h * (3. + beta + gamma + lambertw(x))
         # convert all nu, nu0 to Hz for Planck
         nu_Hz   = nu * 1e9      # If input is GHz!
         nu0_Hz  = nu0_GHz * 1e9
@@ -104,8 +102,8 @@ class S12CIBProfile(CIBProfile):
         
         Theta = jnp.where(
             nu_Hz >= nu0_Hz,
-            (nu_Hz / nu0_Hz) ** (-gamma_cib),
-            (nu_Hz / nu0_Hz) ** beta_cib * (B_nu(nu_Hz, T_d_z) / B_nu(nu0_Hz, T_d_z))
+            (nu_Hz / nu0_Hz) ** (-gamma),
+            (nu_Hz / nu0_Hz) ** beta * (B_nu(nu_Hz, T_d_z) / B_nu(nu0_Hz, T_d_z))
         )
         
         return Theta
@@ -116,13 +114,13 @@ class S12CIBProfile(CIBProfile):
         phi_z = jnp.atleast_1d(self.phi(z))[None, :]
         sigma_m = jnp.atleast_1d(self.sigma(m))[:, None]
         theta_val = jnp.atleast_1d(self.theta(z, nu * (1 + z)))[None, :]
-        return self.L0_cib * phi_z * sigma_m * theta_val
+        return self.L0 * phi_z * sigma_m * theta_val
 
 
 
     def l_sat(self, halo_model, m, z, nu):
         def integrate_single_halo(m_single):
-            ms_min = self.M_min_cib
+            ms_min = self.M_min
             ms_max = m_single
             ngrid = 200
             
@@ -142,7 +140,7 @@ class S12CIBProfile(CIBProfile):
      
     def l_cen(self, halo_model, m, z, nu):
         # Shang: Central mass is the full halo mass
-        n_cen = jnp.where(m > self.M_min_cib, 1.0, 0.0)
+        n_cen = jnp.where(m > self.M_min, 1.0, 0.0)
         l_gal = self.l_gal(halo_model, m, z, nu)
         return n_cen[:, None] * l_gal
 
@@ -251,39 +249,39 @@ class S12CIBProfile(CIBProfile):
 
 @register_pytree_node_class
 class M21CIBProfile(CIBProfile):
-    def __init__(self, nu, eta_max_cib=0.4028, zc_cib=1.5, tau_cib=1.204, fsub_cib=0.134, 
-                 M_min_cib=10**11.5, m_eff_cib=10**12.6, sigma2_LM_cib=0.5, s_nu_data=None):
+    def __init__(self, nu, eta_max=0.4028, z_c=1.5, tau=1.204, f_sub=0.134, 
+                 M_min=10**11.5, M_eff=10**12.6, sigma2_LM=0.5, s_nu=None):
         self.nu = nu
-        self.eta_max_cib, self.zc_cib, self.tau_cib, self.fsub_cib = eta_max_cib, zc_cib, tau_cib, fsub_cib
-        self.M_min_cib, self.m_eff_cib, self.sigma2_LM_cib = M_min_cib, m_eff_cib, sigma2_LM_cib
-        self.s_nu_data = s_nu_data # Passed from Tracer
+        self.eta_max, self.z_c, self.tau, self.f_sub = eta_max, z_c, tau, f_sub
+        self.M_min, self.M_eff, self.sigma2_LM = M_min, M_eff, sigma2_LM
+        self.s_nu = s_nu # Passed from Tracer
 
 
-        if s_nu_data is None:
+        if s_nu is None:
             s_nu_z_path = os.path.join(get_default_data_path(), "auxiliary_files", "filtered_snu_planck_z_fine.txt")
             s_nu_nu_path = os.path.join(get_default_data_path(), "auxiliary_files", "filtered_snu_planck_nu_fine.txt")
             s_nu_path = os.path.join(get_default_data_path(), "auxiliary_files", "filtered_snu_planck_fine.txt")
-            self.s_nu_data = (np.loadtxt(s_nu_z_path), np.loadtxt(s_nu_nu_path), np.loadtxt(s_nu_path))
+            self.s_nu = (np.loadtxt(s_nu_z_path), np.loadtxt(s_nu_nu_path), np.loadtxt(s_nu_path))
         else:
-            self.s_nu_data = s_nu_data
+            self.s_nu = s_nu
 
     @property
     def has_central_contribution(self):
         return True
         
     def tree_flatten(self):
-        leaves = (self.nu, self.eta_max_cib, self.zc_cib, self.tau_cib, self.fsub_cib, 
-                  self.M_min_cib, self.m_eff_cib, self.sigma2_LM_cib)
-        aux = self.s_nu_data
+        leaves = (self.nu, self.eta_max, self.z_c, self.tau, self.f_sub, 
+                  self.M_min, self.M_eff, self.sigma2_LM)
+        aux = self.s_nu
         return (leaves, aux)
 
     @classmethod
     def tree_unflatten(cls, aux, leaves):
-        return cls(*leaves, s_nu_data=aux)
+        return cls(*leaves, s_nu=aux)
 
 
     def update(self, **kwargs):
-        names = ['nu', 'eta_max_cib', 'zc_cib', 'tau_cib', 'fsub_cib', 'M_min_cib', 'm_eff_cib', 'sigma2_LM_cib']
+        names = ['nu', 'eta_max', 'z_c', 'tau', 'f_sub', 'M_min', 'M_eff', 'sigma2_LM']
         # Check for typos/invalid names
         if not set(kwargs).issubset(names):
             raise ValueError(f"Invalid CIB parameter(s): {set(kwargs) - set(names)}")
@@ -304,7 +302,7 @@ class M21CIBProfile(CIBProfile):
         return 46.1 * (1.0 + 1.11 * z[None, :]) * E_z[None, :] * (m[:, None] / 1e12) ** 1.1
 
 
-    def sfr_maniyar(self, halo_model, m, z):
+    def sfr(self, halo_model, m, z):
         """
         Compute Maniyar et al. CIB galaxy luminosity from halo mass and redshift.
     
@@ -317,7 +315,7 @@ class M21CIBProfile(CIBProfile):
         # Gather all relevant parameters 
         
         cparams = halo_model.cosmology.get_all_cosmo_params()
-        M_eff, sigma2_LM, eta_max, tau, z_c, f_sub = self.m_eff_cib, self.sigma2_LM_cib, self.eta_max_cib, self.tau_cib, self.zc_cib, self.fsub_cib 
+        M_eff, sigma2_LM, eta_max, tau, z_c, f_sub = self.M_eff, self.sigma2_LM, self.eta_max, self.tau, self.z_c, self.f_sub 
         m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
     
         # sigma^2 depends on whether M < M_eff or > M_eff
@@ -335,8 +333,8 @@ class M21CIBProfile(CIBProfile):
 
         return sfr
 
-    def s_nu_maniyar(self, z, nu):
-        ln_x_grid, ln_nu_grid, ln_s_nu_grid = jnp.log(1 + self.s_nu_data[0]), jnp.log(self.s_nu_data[1]), jnp.log(self.s_nu_data[2])
+    def _s_nu_interp(self, z, nu):
+        ln_x_grid, ln_nu_grid, ln_s_nu_grid = jnp.log(1 + self.s_nu[0]), jnp.log(self.s_nu[1]), jnp.log(self.s_nu[2])
         _s_nu_interp = jscipy.interpolate.RegularGridInterpolator((ln_x_grid, ln_nu_grid), ln_s_nu_grid)  
         s_nu = jnp.exp(_s_nu_interp((jnp.log(1 + z), jnp.log(nu))))
         return s_nu
@@ -345,17 +343,17 @@ class M21CIBProfile(CIBProfile):
 
     def l_gal(self, halo_model, m, z, nu):
         # Maniyar model logic: 4pi * s_nu * SFR
-        s_nu = self.s_nu_maniyar(z, nu)[None, :]
-        sfr = self.sfr_maniyar(halo_model, m, z)
+        s_nu = self._s_nu_interp(z, nu)[None, :]
+        sfr = self.sfr(halo_model, m, z)
         return 4 * jnp.pi * s_nu * sfr
 
 
 
     def l_sat(self, halo_model, m, z, nu):
         def integrate_single_halo(m_single):
-            ms_min = self.M_min_cib
+            ms_min = self.M_min
             # Host efficiency scaling uses mass corrected by fsub
-            ms_max = m_single * (1 - self.fsub_cib)
+            ms_max = m_single * (1 - self.f_sub)
             ngrid = 200
             
             ms_grid = jnp.logspace(jnp.log10(ms_min), jnp.log10(ms_max), ngrid)
@@ -375,8 +373,8 @@ class M21CIBProfile(CIBProfile):
 
     def l_cen(self, halo_model, m, z, nu):
         # Maniyar: Central mass is reduced by the subhalo fraction
-        m_eff = m * (1 - self.fsub_cib)
-        n_cen = jnp.where(m_eff > self.M_min_cib, 1.0, 0.0)
+        m_eff = m * (1 - self.f_sub)
+        n_cen = jnp.where(m_eff > self.M_min, 1.0, 0.0)
         l_gal = self.l_gal(halo_model, m_eff, z, nu)
         return n_cen[:, None] * l_gal
 

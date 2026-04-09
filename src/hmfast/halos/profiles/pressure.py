@@ -2,14 +2,12 @@ import os
 import numpy as np
 import jax
 import jax.numpy as jnp
-import jax.scipy as jscipy
 import mcfit
 import functools
-from jax.scipy.special import sici, erf
 from jax.tree_util import register_pytree_node_class
 
 from hmfast.download import get_default_data_path
-from hmfast.utils import lambertw, Const
+from hmfast.utils import Const
 from hmfast.halos.mass_definition import MassDefinition
 from hmfast.halos.profiles import HaloProfile, HankelTransform
 
@@ -67,9 +65,10 @@ class PressureProfile(HaloProfile):
 
 @register_pytree_node_class
 class GNFWPressureProfile(PressureProfile):
-    def __init__(self, x=None, P0=8.130, alpha=1.0620, beta=5.4807, gamma=0.3292, B=1.4):
+    def __init__(self, x=None, P0=8.130, c500=1.156, alpha=1.0620, beta=5.4807, gamma=0.3292, B=1.4):
 
         self.P0 = P0
+        self.c500 = c500
         self.alpha = alpha
         self.beta = beta
         self.gamma = gamma
@@ -93,7 +92,7 @@ class GNFWPressureProfile(PressureProfile):
 
     def tree_flatten(self):
         # The dynamic parameters JAX should track
-        leaves = (self.P0, self.alpha, self.beta, self.gamma, self.B)
+        leaves = (self.P0, self.c500, self.alpha, self.beta, self.gamma, self.B)
         # Static metadata: the grid and the Hankel object
         aux_data = (self._x, self._hankel)
         return (leaves, aux_data)
@@ -103,14 +102,14 @@ class GNFWPressureProfile(PressureProfile):
         x, hankel = aux_data
         # Create object without calling __init__ to avoid rebuilding Hankel
         obj = cls.__new__(cls)
-        obj.P0, obj.alpha, obj.beta, obj.gamma, obj.B = leaves
+        obj.P0, obj.c500, obj.alpha, obj.beta, obj.gamma, obj.B = leaves
         obj._x = x
         obj._hankel = hankel
         return obj
 
     def update(self, **kwargs):
         """Helper to return a NEW profile with updated leaf values."""
-        names = ["P0", "alpha", "beta", "gamma", "B"]
+        names = ["P0", "c500", "alpha", "beta", "gamma", "B"]
         
         # STRICT CHECK: Block typos immediately
         if not set(kwargs).issubset(names):
@@ -138,7 +137,7 @@ class GNFWPressureProfile(PressureProfile):
         
         H0 = halo_model.cosmology.H0
         
-        P0, alpha, beta, gamma, B = self.P0, self.alpha, self.beta, self.gamma, self.B 
+        P0, c500, alpha, beta, gamma, B = self.P0, self.c500, self.alpha, self.beta, self.gamma, self.B 
         x, m, z = jnp.atleast_1d(x), jnp.atleast_1d(m), jnp.atleast_1d(z) 
        
         # Helper variables for normalization
@@ -153,8 +152,7 @@ class GNFWPressureProfile(PressureProfile):
         P_500c = (1.65 * (h / 0.7) ** 2 * (H / H0) ** (8 / 3) * (m_delta_tilde / (0.7 * 3e14)) ** (2 / 3 + 0.12) * (0.7 / h) ** 1.5)  # (1, Nm, Nz)
     
         # Scaled radius and GNFW formula
-        c_delta = halo_model.c_delta(m, z)  # (Nm, Nz)
-        scaled_x = c_delta[None, :, :] * x[:, None, None]   # (Nx, Nm, Nz)
+        scaled_x = c500 * x[:, None, None]   # (Nx, Nm, Nz)
         Pe = P_500c * P0 * scaled_x ** (-gamma) * (1 + scaled_x ** alpha) ** ((gamma - beta) / alpha)
     
         return Pe  # shape: (Nx, Nm, Nz)

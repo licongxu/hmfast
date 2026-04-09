@@ -3,8 +3,6 @@ import jax
 import jax.numpy as jnp
 from jax.tree_util import register_pytree_node_class
 
-from hmfast.cosmology import Cosmology
-from hmfast.halos import HaloModel
 from hmfast.tracers.base_tracer import BaseTracer
 from hmfast.halos.profiles import MatterProfile, NFWMatterProfile
 from hmfast.utils import Const
@@ -86,7 +84,6 @@ class GalaxyLensingTracer(BaseTracer):
         Uses pre-loaded dndz_data = [z, phi_prime].
         Integrates only over sources behind the lens (z_s > z).
         """
-        
         
         z = jnp.atleast_1d(z)
         h = cosmology.H0 / 100

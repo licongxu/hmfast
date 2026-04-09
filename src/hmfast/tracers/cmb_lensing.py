@@ -5,8 +5,6 @@ import jax.scipy as jscipy
 from jax.scipy.special import sici, erf 
 from jax.tree_util import register_pytree_node_class
 
-from hmfast.cosmology import Cosmology
-from hmfast.halos import HaloModel
 from hmfast.tracers.base_tracer import BaseTracer
 from hmfast.download import get_default_data_path
 from hmfast.utils import Const

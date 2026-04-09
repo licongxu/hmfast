@@ -3,8 +3,6 @@ import jax.numpy as jnp
 import jax.scipy as jscipy
 from jax.tree_util import register_pytree_node_class
 
-from hmfast.cosmology import Cosmology
-from hmfast.halos import HaloModel
 from hmfast.tracers.base_tracer import BaseTracer
 from hmfast.utils import Const
 from hmfast.halos.profiles import DensityProfile, NFWDensityProfile, B16DensityProfile

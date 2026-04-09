@@ -30,7 +30,8 @@ class HaloModel:
     with automatic differentiation capabilities.
     """
     
-    def __init__(self, cosmology=Cosmology(cosmo_model=0), 
+    def __init__(self, 
+                 cosmology=Cosmology(cosmo_model=0), 
                  mass_definition=MassDefinition(delta=200, reference="critical"), 
                  mass_model = T08HaloMass(), 
                  bias_model = T10HaloBias(), 
