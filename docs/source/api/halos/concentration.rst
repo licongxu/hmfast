@@ -1,4 +1,4 @@
-Concentration
+hmfast.halos.concentration
 =============
 
 Concentration Models

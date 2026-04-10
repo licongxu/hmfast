@@ -1,11 +1,11 @@
-Halo Core
-=========
+hmfast.halos.mass_function
+====
 
-Core Classes
-------------
+Mass Models
+-----------
 
 .. autosummary::
    :toctree: generated
    :nosignatures:
 
-   hmfast.halos.T10HaloMass
+   hmfast.halos.mass_function.T08HaloMass

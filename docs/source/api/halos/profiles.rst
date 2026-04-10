@@ -1,4 +1,4 @@
-Profiles
+hmfast.halos.profiles
 ========
 
 Base Profile Utilities
