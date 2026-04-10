@@ -5,16 +5,8 @@ hmfast.tracers
    :members:
    :show-inheritance:
 
-Base Tracer
------------
 
-.. automodule:: hmfast.tracers.base_tracer
-   :members:
-   :show-inheritance:
-   :member-order: bysource
-
-Concrete Tracers
-----------------
+Tracers
 
 .. autosummary::
    :toctree: generated
