@@ -1,7 +1,14 @@
 Concentration
 =============
 
-.. automodule:: hmfast.halos.concentration
-   :members:
-   :show-inheritance:
-   :member-order: bysource
+Concentration Models
+--------------------
+
+.. autosummary::
+   :toctree: generated
+   :nosignatures:
+
+   hmfast.halos.concentration.ConstantConcentration
+   hmfast.halos.concentration.D08Concentration
+   hmfast.halos.concentration.B13Concentration
+   hmfast.halos.concentration.SC14Concentration

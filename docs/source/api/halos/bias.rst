@@ -1,7 +1,11 @@
 Bias
 ====
 
-.. automodule:: hmfast.halos.bias
-   :members:
-   :show-inheritance:
-   :member-order: bysource
+Bias Models
+-----------
+
+.. autosummary::
+   :toctree: generated
+   :nosignatures:
+
+   hmfast.halos.bias.T10HaloBias

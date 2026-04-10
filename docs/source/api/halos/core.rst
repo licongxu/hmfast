@@ -1,16 +1,12 @@
 Halo Core
 =========
 
-.. automodule:: hmfast.halos
-   :members:
-   :show-inheritance:
+Core Classes
+------------
 
-.. automodule:: hmfast.halos.halo_model
-   :members:
-   :show-inheritance:
-   :member-order: bysource
+.. autosummary::
+   :toctree: generated
+   :nosignatures:
 
-.. automodule:: hmfast.halos.mass_definition
-   :members:
-   :show-inheritance:
-   :member-order: bysource
+   hmfast.halos.HaloModel
+   hmfast.halos.MassDefinition

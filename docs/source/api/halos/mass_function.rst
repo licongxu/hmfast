@@ -1,7 +1,12 @@
-Mass Functions
-==============
+Halo Core
+=========
 
-.. automodule:: hmfast.halos.mass_function
-   :members:
-   :show-inheritance:
-   :member-order: bysource
+Core Classes
+------------
+
+.. autosummary::
+   :toctree: generated
+   :nosignatures:
+
+   hmfast.halos.HaloModel
+   hmfast.halos.MassDefinition
