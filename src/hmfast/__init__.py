@@ -16,7 +16,6 @@ download_emulators(models=["lcdm", "ede-v2"], skip_existing=True)
 
 
 #from .halos import HaloModel
-#from .emulator_load import EmulatorLoader, EmulatorLoaderPCA
 from .cosmology import Cosmology
 from . import tracers
 

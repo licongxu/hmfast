@@ -115,13 +115,24 @@ class HaloModel:
     #@partial(jax.jit, static_argnums=0)
     def delta_vir_to_crit(self, z):
         """
-        Bryan & Norman (1998) virial overdensity for a flat universe.
-        Returns Δ_vir relative to the critical density.
+        Compute the virial overdensity with respect to the critical density, $\Delta_{\mathrm{vir}}(z)$,
+        using the Bryan & Norman (1998) fitting formula for a flat universe.
+    
+        The formula is:
+            $$
+            \Delta_{\mathrm{vir}}(z) = 18\pi^2 + 82x - 39x^2
+            $$
+        where $x = \Omega_m(z) - 1$.
+    
+        Parameters
+        ----------
+        z : float or array-like
+            Redshift(s) at which to compute the virial overdensity.
     
         Returns
         -------
-        float or array
-            Δ_vir(z) relative to rho_crit
+        delta_vir : float or array-like
+            Virial overdensity relative to the critical density at redshift $z$.
         """
         omega_m = self.cosmology.omega_m(z)
         x = omega_m - 1.0
@@ -143,7 +154,7 @@ class HaloModel:
 
 
      #@partial(jax.jit, static_argnums=(0,1))
-    def convert_reference(self, z, delta, from_ref='critical', to_ref='mean'):
+    def _convert_reference(self, z, delta, from_ref='critical', to_ref='mean'):
         """
         Convert overdensity between 'critical' and 'mean' definitions.
         
@@ -329,7 +340,7 @@ class HaloModel:
     
         # Overdensity threshold
         delta_numeric = self._delta_numeric(z_grid)
-        delta_mean = self.convert_reference(z_grid, delta_numeric, from_ref=self.mass_definition.reference, to_ref='mean') 
+        delta_mean = self._convert_reference(z_grid, delta_numeric, from_ref=self.mass_definition.reference, to_ref='mean') 
     
         # Halo mass function grid, shape: (n_z, n_R)
         hmf_grid = self.mass_model.f_sigma(sigma_grid, z_grid, delta_mean)
@@ -346,10 +357,21 @@ class HaloModel:
 
 
     @jax.jit 
-    def halo_mass_function(self, m=jnp.geomspace(5e10, 3.5e15, 100), z=jnp.geomspace(0.005, 3.0, 100)) -> jnp.ndarray:
+    def halo_mass_function(self, m, z) -> jnp.ndarray:
         """
-        Compute the halo mass function for arbitrary m and z shapes.
-        Returns: dn/dlnM with shape (len(z), len(m))
+        Compute the halo mass function $dn/d\ln M$ for arbitrary mass and redshift arrays.
+    
+        Parameters
+        ----------
+        m : array-like
+            Halo mass grid.
+        z : array-like
+            Redshift grid.
+    
+        Returns
+        -------
+        dndlnM : array-like
+            Halo mass function values, shape (len(m), len(z)).
         """
         
         ln_x_grid, ln_M_grid, dn_dlnM_grid, _ = self._compute_hmf_grid()
@@ -364,7 +386,24 @@ class HaloModel:
        
 
     @partial(jax.jit, static_argnums=(3))
-    def halo_bias(self, m=jnp.geomspace(5e10, 3.5e15, 100), z=jnp.geomspace(0.005, 3.0, 100), order=1) -> jnp.ndarray:
+    def halo_bias(self, m, z, order=1):
+         """
+        Compute the halo bias $b_1$ or $b_2$ for arbitrary mass and redshift arrays.
+    
+        Parameters
+        ----------
+        m : array-like
+            Halo mass grid.
+        z : array-like
+            Redshift grid.
+        order : int, default 1
+            Bias order (1 for linear, 2 for quadratic).
+    
+        Returns
+        -------
+        bias : array-like
+            Halo bias values, shape (len(m), len(z)).
+        """
         
        
         m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
@@ -378,7 +417,7 @@ class HaloModel:
 
         # Handle delta values
         delta_numeric = self._delta_numeric(z)
-        delta_mean = self.convert_reference(z, delta_numeric, from_ref=self.mass_definition.reference, to_ref='mean')
+        delta_mean = self._convert_reference(z, delta_numeric, from_ref=self.mass_definition.reference, to_ref='mean')
         
         # Ensure delta_mean is 1D before indexing
         delta_mean = jnp.atleast_1d(delta_mean)
@@ -396,11 +435,30 @@ class HaloModel:
     
 
     @partial(jax.jit, static_argnums=(1, 2))
-    def pk_1h(self, tracer1, tracer2=None, 
-              k=jnp.geomspace(1e-3, 10., 100), 
-              m=jnp.geomspace(5e10, 3.5e15, 100), 
-              z=jnp.geomspace(0.005, 3.0, 100),  
-              kstar_damping=0.01):
+    def pk_1h(self, tracer1, tracer2, k, m, z,  kstar_damping=0.01):
+         """
+        Compute the 1-halo term of the 3D power spectrum $P_{1h}(k, z)$ for two tracers.
+    
+        Parameters
+        ----------
+        tracer1 : Tracer
+            First tracer object.
+        tracer2 : Tracer or None
+            Second tracer object (if None, uses tracer1).
+        k : array-like
+            Wavenumber grid.
+        m : array-like
+            Mass grid.
+        z : array-like
+            Redshift grid.
+        kstar_damping : float, default 0.01
+            Damping scale for small-scale power.
+    
+        Returns
+        -------
+        pk_1h : array-like
+            1-halo power spectrum, shape (len(k), len(z)).
+        """
     
         h = self.cosmology.H0 / 100
         k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
@@ -454,13 +512,29 @@ class HaloModel:
             
        
     @partial(jax.jit, static_argnums=(1, 2))
-    def cl_1h(self, tracer1, tracer2=None, 
-              l=jnp.geomspace(1e2, 3.5e3, 50), 
-              m=jnp.geomspace(5e10, 3.5e15, 100), 
-              z=jnp.geomspace(0.005, 3.0, 100), 
-              kstar_damping=0.01):
-        """
-        Compute the 1-halo term for angular Cl.
+    def cl_1h(self, tracer1, tracer2, l, m, z, kstar_damping=0.01):
+         """
+        Compute the 1-halo term of the angular power spectrum $C_\ell^{1h}$.
+    
+        Parameters
+        ----------
+        tracer1 : Tracer
+            First tracer object.
+        tracer2 : Tracer or None
+            Second tracer object (if None, uses tracer1).
+        l : array-like
+            Multipole grid.
+        m : array-like
+            Mass grid.
+        z : array-like
+            Redshift grid.
+        kstar_damping : float, default 0.01
+            Damping scale for small-scale power.
+    
+        Returns
+        -------
+        cl_1h : array-like
+            1-halo angular power spectrum, shape (len(l),).
         """
         
         h = self.cosmology.H0 / 100
@@ -488,11 +562,28 @@ class HaloModel:
 
 
     @partial(jax.jit, static_argnums=(1, 2))
-    def pk_2h(self, tracer1, tracer2=None, 
-                k=jnp.geomspace(1e-3, 10., 100), 
-                m=jnp.geomspace(5e10, 3.5e15, 100), 
-                z=jnp.geomspace(0.005, 3.0, 100), 
-                ):
+    def pk_2h(self, tracer1, tracer2, k, m, z):
+        """
+        Compute the 2-halo term of the 3D power spectrum $P_{2h}(k, z)$ for two tracers.
+    
+        Parameters
+        ----------
+        tracer1 : Tracer
+            First tracer object.
+        tracer2 : Tracer or None
+            Second tracer object (if None, uses tracer1).
+        k : array-like
+            Wavenumber grid.
+        m : array-like
+            Mass grid.
+        z : array-like
+            Redshift grid.
+    
+        Returns
+        -------
+        pk_2h : array-like
+            2-halo power spectrum, shape (len(k), len(z)).
+        """
         
         cparams = self.cosmology.get_all_cosmo_params()
         h, k, m, z = cparams["h"], jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
@@ -535,13 +626,27 @@ class HaloModel:
 
 
     @partial(jax.jit, static_argnums=(1, 2))
-    def cl_2h(self, tracer1, tracer2=None,
-              l=jnp.geomspace(1e2, 3.5e3, 50),
-              m=jnp.geomspace(5e10, 3.5e15, 100),
-              z=jnp.geomspace(0.005, 3.0, 100), 
-              ):
+    def cl_2h(self, tracer1, tracer2, l, m, z):
         """
-        Compute the 2-halo term for angular cross-power spectrum Cl_12.
+        Compute the 2-halo term of the angular power spectrum $C_\ell^{2h}$.
+    
+        Parameters
+        ----------
+        tracer1 : Tracer
+            First tracer object.
+        tracer2 : Tracer or None
+            Second tracer object (if None, uses tracer1).
+        l : array-like
+            Multipole grid.
+        m : array-like
+            Mass grid.
+        z : array-like
+            Redshift grid.
+    
+        Returns
+        -------
+        cl_2h : array-like
+            2-halo angular power spectrum, shape (len(l),).
         """
         
         tracer2 = tracer1 if tracer2 is None else tracer2

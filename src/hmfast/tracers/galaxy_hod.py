@@ -13,8 +13,7 @@ jax.config.update("jax_enable_x64", True)
 @register_pytree_node_class
 class GalaxyHODTracer(BaseTracer):
     """
-    Galaxy HOD tracer implementing central + satellite occupation.
-    Refactored with individual float attributes to support JAX JIT and Grad.
+    Galaxy counts tracer.
     """
 
     _required_profile_type = GalaxyHODProfile

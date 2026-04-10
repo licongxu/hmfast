@@ -12,8 +12,7 @@ from hmfast.download import get_default_data_path
 @register_pytree_node_class
 class CIBTracer(BaseTracer):
     """
-    CIB lensing tracer.
-    Refactored to support Shang and Maniyar models with JAX-traceable parameters.
+    Cosmic infrared background tracer.
     """
 
     _required_profile_type = CIBProfile

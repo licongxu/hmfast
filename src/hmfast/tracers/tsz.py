@@ -13,7 +13,7 @@ jax.config.update("jax_enable_x64", True)
 @register_pytree_node_class
 class tSZTracer(BaseTracer):
     """
-    tSZ tracer using GNFW profile.
+    thermal Sunyaev-Zeldovich effect tracer.
     """
 
     _required_profile_type = PressureProfile

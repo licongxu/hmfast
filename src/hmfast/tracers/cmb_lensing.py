@@ -15,15 +15,7 @@ jax.config.update("jax_enable_x64", True)
 @register_pytree_node_class
 class CMBLensingTracer(BaseTracer):
     """
-    CMB lensing tracer. Implements the formalism described in Kusiak et al (2023)
-    Link to paper: https://arxiv.org/pdf/2203.12583
-
-    Parameters
-    ----------
-    cosmology : 
-        Cosmological cosmology used to compute cosmological quantities
-     x : array
-        The x array used to define the radial profile over which the tracer will be evaluated
+    CMB weak lensing tracer.
     """
 
     _required_profile_type = MatterProfile

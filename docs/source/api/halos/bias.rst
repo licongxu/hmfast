@@ -1,4 +1,4 @@
-Bias
+hmfast.halos.bias
 ====
 
 Bias Models

@@ -14,16 +14,7 @@ jax.config.update("jax_enable_x64", True)
 @register_pytree_node_class
 class GalaxyLensingTracer(BaseTracer):
     """
-    Galaxy lensing tracer. Implements the formalism described in Kusiak et al (2023)
-    Link to paper: https://arxiv.org/pdf/2203.12583
-
-    Parameters
-    ----------
-    halo_model : 
-        Halo model used to compute relevant quantities
-    dndz :
-        The redshift distribution of the galaxy population. This distribution will be normalized if it is not already done.
-     
+    Galaxy weak lensing tracer. 
     """
 
     _required_profile_type = MatterProfile
