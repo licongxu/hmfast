@@ -3,7 +3,6 @@ import jax
 import jax.numpy as jnp
 import jax.scipy as jscipy
 from jax.scipy.special import sici, erf 
-from jax.tree_util import register_pytree_node_class
 
 from hmfast.tracers.base_tracer import Tracer
 from hmfast.download import get_default_data_path
@@ -12,7 +11,6 @@ from hmfast.halos.profiles import MatterProfile, NFWMatterProfile
 jax.config.update("jax_enable_x64", True)
 
 
-@register_pytree_node_class
 class CMBLensingTracer(Tracer):
     """
     CMB weak lensing tracer.
@@ -23,14 +21,14 @@ class CMBLensingTracer(Tracer):
     def __init__(self, profile=None):        
         super().__init__(profile=profile or NFWMatterProfile())
 
-    def tree_flatten(self):
+    def _tree_flatten(self):
         # We treat the profile as the only leaf. 
         leaves = (self.profile,)
         aux_data = None 
         return (leaves, aux_data)
 
     @classmethod
-    def tree_unflatten(cls, aux_data, leaves):
+    def _tree_unflatten(cls, aux_data, leaves):
         profile, = leaves
         obj = cls.__new__(cls)
         obj.profile = profile
@@ -77,4 +75,13 @@ class CMBLensingTracer(Tracer):
 
        
         return W_kappa_cmb 
+
+
+
+
+jax.tree_util.register_pytree_node(
+    CMBLensingTracer,
+    lambda obj: obj._tree_flatten(),
+    lambda aux_data, children: CMBLensingTracer._tree_unflatten(aux_data, children)
+)
 

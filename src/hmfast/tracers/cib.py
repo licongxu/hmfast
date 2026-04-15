@@ -2,14 +2,12 @@ import os
 import numpy as np
 import jax
 import jax.numpy as jnp
-from jax.tree_util import register_pytree_node_class
 
 from hmfast.tracers.base_tracer import Tracer
 from hmfast.halos.profiles import CIBProfile, S12CIBProfile
 from hmfast.utils import lambertw, Const
 from hmfast.download import get_default_data_path
 
-@register_pytree_node_class
 class CIBTracer(Tracer):
     """
     Cosmic infrared background tracer.
@@ -21,14 +19,14 @@ class CIBTracer(Tracer):
         super().__init__(profile=profile or S12CIBProfile(nu=100))
         
     # --- JAX PyTree Registration ---
-    def tree_flatten(self):
+    def _tree_flatten(self):
         # The Tracer's only dynamic component is the Profile PyTree
         leaves = (self.profile,)
         aux_data = None 
         return (leaves, aux_data)
 
     @classmethod
-    def tree_unflatten(cls, aux_data, leaves):
+    def _tree_unflatten(cls, aux_data, leaves):
         profile, = leaves
         obj = cls.__new__(cls)
         obj.profile = profile
@@ -52,6 +50,13 @@ class CIBTracer(Tracer):
         
         
         return s_nu_factor
+
+
+jax.tree_util.register_pytree_node(
+    CIBTracer,
+    lambda obj: obj._tree_flatten(),
+    lambda aux_data, children: CIBTracer._tree_unflatten(aux_data, children)
+)
 
 
   

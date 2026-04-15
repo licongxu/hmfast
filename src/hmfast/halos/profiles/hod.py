@@ -5,7 +5,6 @@ import jax.numpy as jnp
 import mcfit
 import functools
 from jax.scipy.special import erf
-from jax.tree_util import register_pytree_node_class
 
 from hmfast.download import get_default_data_path
 from hmfast.halos.profiles import HaloProfile
@@ -16,11 +15,9 @@ class GalaxyHODProfile(HaloProfile):
 
 
 
-@register_pytree_node_class
 class StandardGalaxyHODProfile(GalaxyHODProfile):
     """
-    Galaxy HOD tracer implementing central + satellite occupation.
-    Refactored with individual float attributes to support JAX JIT and Grad.
+    Galaxy HOD tracer.
     """
 
     def __init__(self, sigma_log10M=0.68, alpha_s=1.30, M1_prime=10**12.7, M_min=10**11.8, M0=0.0):        
@@ -34,14 +31,14 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
   
     # --- JAX PyTree Registration ---
 
-    def tree_flatten(self):
+    def _tree_flatten(self):
         # Dynamic leaves (JAX will track these for gradients/jit) and static metadata (changes will trigger a recompile)
         leaves = (self.sigma_log10M, self.alpha_s, self.M1_prime, self.M_min, self.M0)
         return (leaves, None)
 
 
     @classmethod
-    def tree_unflatten(cls, aux, leaves):
+    def _tree_unflatten(cls, aux, leaves):
         return cls(*leaves)
 
 
@@ -52,9 +49,9 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
         if not set(kwargs).issubset(names):
             raise ValueError(f"Invalid galaxy HOD parameter(s): {set(kwargs) - set(names)}")
     
-        leaves, treedef = jax.tree_util.tree_flatten(self)
+        leaves, treedef = self._tree_flatten()
         new_leaves = [kwargs.get(name, val) for name, val in zip(names, leaves)]
-        return jax.tree_util.tree_unflatten(treedef, new_leaves)
+        return self._tree_unflatten(treedef, new_leaves)
 
     # --- Physics Implementations ---
 
@@ -135,6 +132,12 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
             lambda _: (1/ng**2) * (Ns[None, :, None]**2 * u_m**2 + 2 * Ns[None, :, None] * u_m),
         ]
     
-        u_k_res = jax.lax.switch(moment - 1, moment_funcs, None)
-        return k, u_k_res
+        u_k = jax.lax.switch(moment - 1, moment_funcs, None)
+        return k, u_k
+        
 
+jax.tree_util.register_pytree_node(
+    StandardGalaxyHODProfile,
+    lambda obj: obj._tree_flatten(),
+    lambda aux_data, children: StandardGalaxyHODProfile._tree_unflatten(aux_data, children)
+)

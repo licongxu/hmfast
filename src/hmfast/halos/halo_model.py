@@ -8,7 +8,6 @@ import jax.scipy as jscipy
 from typing import Dict, Any, Optional, Callable
 from functools import partial
 from mcfit import TophatVar
-from jax.tree_util import register_pytree_node_class
 
 from hmfast.halos.massfunc import T08HaloMass, TW10SubHaloMass
 from hmfast.halos.bias import T10HaloBias
@@ -20,7 +19,6 @@ from hmfast.utils import newton_root
 jax.config.update("jax_enable_x64", True)
 
 
-@register_pytree_node_class
 class HaloModel:
     """
     Differentiable halo model.
@@ -84,7 +82,7 @@ class HaloModel:
         self._tophat_instance = partial(TophatVar(dummy_k, lowring=True, backend='jax'), extrap=True)
 
 
-    def tree_flatten(self):
+    def _tree_flatten(self):
         # The cosmology is a Pytree, so it is a child.
         # Everything else is configuration/metadata.
         children = (self.cosmology,)
@@ -94,7 +92,7 @@ class HaloModel:
         return (children, aux_data)
 
     @classmethod
-    def tree_unflatten(cls, aux_data, children):
+    def _tree_unflatten(cls, aux_data, children):
         cosmology, = children
         obj = cls.__new__(cls)
         obj.cosmology = cosmology
@@ -110,8 +108,8 @@ class HaloModel:
         """
         
         new_emulator = self.cosmology.update(**kwargs)
-        children, aux_data = self.tree_flatten()
-        new_instance = self.tree_unflatten(aux_data, (new_emulator,))
+        children, aux_data = self._tree_flatten()
+        new_instance = self._tree_unflatten(aux_data, (new_emulator,))
         
         return new_instance
        
@@ -679,6 +677,8 @@ class HaloModel:
         return jnp.trapezoid(integrand, x=z, axis=0)
 
 
-    
-    
-
+jax.tree_util.register_pytree_node(
+    HaloModel,
+    lambda obj: obj._tree_flatten(),
+    lambda aux_data, children: HaloModel._tree_unflatten(aux_data, children)
+)

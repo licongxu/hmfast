@@ -2,7 +2,7 @@ hmfast.halos.profiles
 ====
 
 
-Electron density Profiles
+Electron density profiles
 ----------------
 
 .. autosummary::
@@ -12,7 +12,7 @@ Electron density Profiles
    hmfast.halos.profiles.NFWDensityProfile
    hmfast.halos.profiles.B16DensityProfile
 
-Electron Pressure Profiles
+Electron pressure profiles
 -----------------
 
 .. autosummary::
@@ -21,7 +21,7 @@ Electron Pressure Profiles
 
    hmfast.halos.profiles.GNFWPressureProfile
 
-Matter Density Profiles
+Matter density profiles
 ---------------
 
 .. autosummary::
@@ -31,7 +31,7 @@ Matter Density Profiles
    hmfast.halos.profiles.NFWMatterProfile
 
 
-HOD Profiles
+HOD profiles
 ------------
 
 .. autosummary::
@@ -40,7 +40,7 @@ HOD Profiles
 
    hmfast.halos.profiles.StandardGalaxyHODProfile
 
-CIB Profiles
+CIB profiles
 ------------
 
 .. autosummary::

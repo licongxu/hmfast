@@ -4,7 +4,6 @@ import jax
 import jax.numpy as jnp
 import mcfit
 import functools
-from jax.tree_util import register_pytree_node_class
 
 from hmfast.download import get_default_data_path
 from hmfast.utils import Const
@@ -63,8 +62,6 @@ class PressureProfile(HaloProfile):
 
 
 
-
-@register_pytree_node_class
 class GNFWPressureProfile(PressureProfile):
     def __init__(self, x=None, P0=8.130, c500=1.156, alpha=1.0620, beta=5.4807, gamma=0.3292, B=1.4):
 
@@ -91,7 +88,7 @@ class GNFWPressureProfile(PressureProfile):
         self._hankel = HankelTransform(self._x, nu=0.5)
 
 
-    def tree_flatten(self):
+    def _tree_flatten(self):
         # The dynamic parameters JAX should track
         leaves = (self.P0, self.c500, self.alpha, self.beta, self.gamma, self.B)
         # Static metadata: the grid and the Hankel object
@@ -99,7 +96,7 @@ class GNFWPressureProfile(PressureProfile):
         return (leaves, aux_data)
 
     @classmethod
-    def tree_unflatten(cls, aux_data, leaves):
+    def _tree_unflatten(cls, aux_data, leaves):
         x, hankel = aux_data
         # Create object without calling __init__ to avoid rebuilding Hankel
         obj = cls.__new__(cls)
@@ -117,9 +114,9 @@ class GNFWPressureProfile(PressureProfile):
             invalid = set(kwargs) - set(names)
             raise ValueError(f"Invalid GNFW parameter(s): {invalid}. Expected: {names}")
 
-        leaves, treedef = jax.tree_util.tree_flatten(self)
+        leaves, treedef = self._tree_flatten()
         new_leaves = [kwargs.get(name, val) for name, val in zip(names, leaves)]
-        return jax.tree_util.tree_unflatten(treedef, new_leaves)
+        return self._tree_unflatten(treedef, new_leaves)
     
 
     def profile(self, halo_model, x, m, z):
@@ -162,8 +159,13 @@ class GNFWPressureProfile(PressureProfile):
         return Pe  # shape: (Nx, Nm, Nz)
 
 
+jax.tree_util.register_pytree_node(
+    GNFWPressureProfile,
+    lambda obj: obj._tree_flatten(),
+    lambda aux_data, children: GNFWPressureProfile._tree_unflatten(aux_data, children)
+)
 
-@register_pytree_node_class
+
 class B12PressureProfile(PressureProfile):
     def __init__(self, x=None, 
                  A_P0=18.1, A_xc=0.497, A_beta=4.35,
@@ -187,7 +189,7 @@ class B12PressureProfile(PressureProfile):
         self._x = value
         self._hankel = HankelTransform(self._x, nu=0.5)
 
-    def tree_flatten(self):
+    def _tree_flatten(self):
         leaves = (
             self.A_P0, self.A_xc, self.A_beta,
             self.alpha_m_P0, self.alpha_m_xc, self.alpha_m_beta,
@@ -197,7 +199,7 @@ class B12PressureProfile(PressureProfile):
         return (leaves, aux_data)
 
     @classmethod
-    def tree_unflatten(cls, aux_data, leaves):
+    def _tree_unflatten(cls, aux_data, leaves):
         x, hankel = aux_data
         obj = cls.__new__(cls)
         
@@ -222,9 +224,9 @@ class B12PressureProfile(PressureProfile):
             invalid = set(kwargs) - set(names)
             raise ValueError(f"Invalid parameter(s): {invalid}. Expected: {names}")
 
-        leaves, treedef = jax.tree_util.tree_flatten(self)
+        leaves, treedef = self._tree_flatten()
         new_leaves = [kwargs.get(name, val) for name, val in zip(names, leaves)]
-        return jax.tree_util.tree_unflatten(treedef, new_leaves)
+        return self._tree_unflatten(treedef, new_leaves)
 
     def profile(self, halo_model, x, m, z):
         """
@@ -268,3 +270,10 @@ class B12PressureProfile(PressureProfile):
         P_200c = ((m200c_b / r_200c[None, :, :]) * f_b * 2.61051e-18 * (H[None, None, :])**2)
     
         return P_200c * P0 * p_x
+
+
+jax.tree_util.register_pytree_node(
+    B12PressureProfile,
+    lambda obj: obj._tree_flatten(),
+    lambda aux_data, children: B12PressureProfile._tree_unflatten(aux_data, children)
+)

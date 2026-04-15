@@ -5,7 +5,6 @@ import jax.numpy as jnp
 import jax.scipy as jscipy
 import mcfit
 import functools
-from jax.tree_util import register_pytree_node_class
 
 from hmfast.download import get_default_data_path
 from hmfast.utils import lambertw, Const
@@ -17,7 +16,6 @@ class CIBProfile(HaloProfile):
 
 
 
-@register_pytree_node_class
 class S12CIBProfile(CIBProfile):
     def __init__(self, nu, L0=6.4e-8, alpha=0.36, beta=1.75, gamma=1.7,
                  T0=24.4, M_eff=10**12.6, sigma2_LM=0.5, 
@@ -32,14 +30,14 @@ class S12CIBProfile(CIBProfile):
     def has_central_contribution(self):
         return True
 
-    def tree_flatten(self):
+    def _tree_flatten(self):
         leaves = (self.nu, self.L0, self.alpha, self.beta, self.gamma, self.T0, 
                   self.M_eff, self.sigma2_LM, self.delta, self.z_p, self.M_min)
         return (leaves, None)
         
 
     @classmethod
-    def tree_unflatten(cls, aux, leaves):
+    def _tree_unflatten(cls, aux, leaves):
         return cls(*leaves)
 
     def update(self, **kwargs):
@@ -51,9 +49,9 @@ class S12CIBProfile(CIBProfile):
         if not set(kwargs).issubset(names):
             raise ValueError(f"Invalid CIB parameter(s): {set(kwargs) - set(names)}")
     
-        leaves, treedef = jax.tree_util.tree_flatten(self)
+        leaves, treedef = self._tree_flatten()
         new_leaves = [kwargs.get(name, val) for name, val in zip(names, leaves)]
-        return jax.tree_util.tree_unflatten(treedef, new_leaves)
+        return self._tree_unflatten(treedef, new_leaves)
 
 
     def sigma(self, m):
@@ -242,12 +240,18 @@ class S12CIBProfile(CIBProfile):
     
         return k, u_k
 
+        
 
+jax.tree_util.register_pytree_node(
+    S12CIBProfile,
+    lambda obj: obj._tree_flatten(),
+    lambda aux_data, children: S12CIBProfile._tree_unflatten(aux_data, children)
+)
         
 
 
 
-@register_pytree_node_class
+
 class M21CIBProfile(CIBProfile):
     def __init__(self, nu, eta_max=0.4028, z_c=1.5, tau=1.204, f_sub=0.134, 
                  M_min=10**11.5, M_eff=10**12.6, sigma2_LM=0.5, s_nu=None):
@@ -269,14 +273,14 @@ class M21CIBProfile(CIBProfile):
     def has_central_contribution(self):
         return True
         
-    def tree_flatten(self):
+    def _tree_flatten(self):
         leaves = (self.nu, self.eta_max, self.z_c, self.tau, self.f_sub, 
                   self.M_min, self.M_eff, self.sigma2_LM)
         aux = self.s_nu
         return (leaves, aux)
 
     @classmethod
-    def tree_unflatten(cls, aux, leaves):
+    def _tree_unflatten(cls, aux, leaves):
         return cls(*leaves, s_nu=aux)
 
 
@@ -286,9 +290,9 @@ class M21CIBProfile(CIBProfile):
         if not set(kwargs).issubset(names):
             raise ValueError(f"Invalid CIB parameter(s): {set(kwargs) - set(names)}")
     
-        leaves, treedef = jax.tree_util.tree_flatten(self)
+        leaves, treedef = self._tree_flatten()
         new_leaves = [kwargs.get(name, val) for name, val in zip(names, leaves)]
-        return jax.tree_util.tree_unflatten(treedef, new_leaves)
+        return self._tree_unflatten(treedef, new_leaves)
 
     
     def m_dot(self, halo_model, m, z):
@@ -477,4 +481,10 @@ class M21CIBProfile(CIBProfile):
     
         return k, u_k
 
-     
+
+jax.tree_util.register_pytree_node(
+    M21CIBProfile,
+    lambda obj: obj._tree_flatten(),
+    lambda aux_data, children: M21CIBProfile._tree_unflatten(aux_data, children)
+)
+

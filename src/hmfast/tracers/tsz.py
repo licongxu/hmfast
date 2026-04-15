@@ -1,7 +1,6 @@
 import jax
 import jax.numpy as jnp
 import jax.scipy as jscipy
-from jax.tree_util import register_pytree_node_class
 
 from hmfast.tracers.base_tracer import Tracer
 from hmfast.utils import Const
@@ -10,7 +9,6 @@ from hmfast.halos.profiles import PressureProfile, GNFWPressureProfile
 jax.config.update("jax_enable_x64", True)
 
 
-@register_pytree_node_class
 class tSZTracer(Tracer):
     """
     thermal Sunyaev-Zeldovich effect tracer.
@@ -24,14 +22,14 @@ class tSZTracer(Tracer):
 
     # --- Begin JAX PyTree Registration ---
 
-    def tree_flatten(self):
+    def _tree_flatten(self):
         # The profile is the dynamic leaf
         leaves = (self.profile,)
         aux_data = None 
         return (leaves, aux_data)
 
     @classmethod
-    def tree_unflatten(cls, aux_data, leaves):
+    def _tree_unflatten(cls, aux_data, leaves):
         profile, = leaves
         obj = cls.__new__(cls)
         obj.profile = profile
@@ -56,3 +54,10 @@ class tSZTracer(Tracer):
         mpc_per_h_to_cm =  Const._Mpc_over_m_ / h
         return (sigma_T / m_e) / (1+z) # Check this
 
+
+
+jax.tree_util.register_pytree_node(
+    tSZTracer,
+    lambda obj: obj._tree_flatten(),
+    lambda aux_data, children: tSZTracer._tree_unflatten(aux_data, children)
+)

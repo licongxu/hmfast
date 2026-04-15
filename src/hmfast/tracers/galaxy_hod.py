@@ -1,7 +1,6 @@
 import os
 import jax
 import jax.numpy as jnp
-from jax.tree_util import register_pytree_node_class
 
 from hmfast.tracers.base_tracer import Tracer
 from hmfast.halos.profiles import GalaxyHODProfile, StandardGalaxyHODProfile
@@ -10,7 +9,6 @@ from hmfast.download import get_default_data_path
 # Ensure high precision for cosmological integrations
 jax.config.update("jax_enable_x64", True)
 
-@register_pytree_node_class
 class GalaxyHODTracer(Tracer):
     """
     Galaxy counts tracer.
@@ -38,14 +36,14 @@ class GalaxyHODTracer(Tracer):
 
     # --- JAX PyTree Registration ---
 
-    def tree_flatten(self):
+    def _tree_flatten(self):
         # The profile IS the leaf. JAX will automatically 
         # drill down into the profile's own 5 leaves.
         leaves = (self.profile, self._dndz_data) 
         return (leaves, None)
 
     @classmethod
-    def tree_unflatten(cls, aux_data, leaves):
+    def _tree_unflatten(cls, aux_data, leaves):
         profile, dndz_data = leaves
         obj = cls.__new__(cls)
         obj.profile = profile
@@ -72,3 +70,12 @@ class GalaxyHODTracer(Tracer):
         chi_grid = cosmology.angular_diameter_distance(z) * (1.0 + z)
 
         return H_grid * (phi_prime_g_at_z / chi_grid**2)
+
+
+
+
+jax.tree_util.register_pytree_node(
+    GalaxyHODTracer,
+    lambda obj: obj._tree_flatten(),
+    lambda aux_data, children: GalaxyHODTracer._tree_unflatten(aux_data, children)
+)

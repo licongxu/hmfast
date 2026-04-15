@@ -4,7 +4,6 @@ import jax
 import jax.numpy as jnp
 import mcfit
 import functools
-from jax.tree_util import register_pytree_node_class
 
 from hmfast.download import get_default_data_path
 from hmfast.utils import lambertw, Const
@@ -65,7 +64,6 @@ class DensityProfile(HaloProfile):
         return ell_target, u_ell_interp
 
 
-@register_pytree_node_class
 class B16DensityProfile(DensityProfile):
     def __init__(self, x=None, 
                  A_rho0=4000.0, A_alpha=0.88, A_beta=3.83,
@@ -90,7 +88,7 @@ class B16DensityProfile(DensityProfile):
         self._hankel = HankelTransform(self._x, nu=0.5)
 
 
-    def tree_flatten(self):
+    def _tree_flatten(self):
         # Dynamic calibration parameters
         leaves = (
             self.A_rho0, self.A_alpha, self.A_beta,
@@ -102,7 +100,7 @@ class B16DensityProfile(DensityProfile):
         return (leaves, aux_data)
 
     @classmethod
-    def tree_unflatten(cls, aux_data, leaves):
+    def _tree_unflatten(cls, aux_data, leaves):
         x, hankel = aux_data
         obj = cls.__new__(cls)
         
@@ -129,10 +127,10 @@ class B16DensityProfile(DensityProfile):
             invalid = set(kwargs) - set(names)
             raise ValueError(f"Invalid parameter(s): {invalid}. Expected: {names}")
 
-        leaves, treedef = jax.tree_util.tree_flatten(self)
+        leaves, treedef = self._tree_flatten()
         # Create new leaf list by replacing values from kwargs if they exist
         new_leaves = [kwargs.get(name, val) for name, val in zip(names, leaves)]
-        return jax.tree_util.tree_unflatten(treedef, new_leaves)
+        return self._tree_unflatten(treedef, new_leaves)
 
     @staticmethod
     def get_params(model_key="agn"):
@@ -195,6 +193,13 @@ class B16DensityProfile(DensityProfile):
         
         return rho_gas
 
+
+jax.tree_util.register_pytree_node(
+    B16DensityProfile,
+    lambda obj: obj._tree_flatten(),
+    lambda aux_data, children: B16DensityProfile._tree_unflatten(aux_data, children)
+)
+
         
 
 class NFWDensityProfile(DensityProfile):
@@ -240,7 +245,6 @@ class NFWDensityProfile(DensityProfile):
 
 
 
-@register_pytree_node_class
 class BCMDensityProfile(DensityProfile):
     def __init__(self, x=None, 
                  log10Mc=13.25, theta_ej = 4.711, eta_star = 0.2, 
@@ -264,7 +268,7 @@ class BCMDensityProfile(DensityProfile):
         self._hankel = HankelTransform(self._x, nu=0.5)
 
 
-    def tree_flatten(self):
+    def _tree_flatten(self):
         # Dynamic calibration parameters
         leaves = (
             self.log10Mc, self.theta_ej, self.eta_star,
@@ -275,7 +279,7 @@ class BCMDensityProfile(DensityProfile):
         return (leaves, aux_data)
 
     @classmethod
-    def tree_unflatten(cls, aux_data, leaves):
+    def _tree_unflatten(cls, aux_data, leaves):
         x, hankel = aux_data
         obj = cls.__new__(cls)
         
@@ -300,10 +304,10 @@ class BCMDensityProfile(DensityProfile):
             invalid = set(kwargs) - set(names)
             raise ValueError(f"Invalid parameter(s): {invalid}. Expected: {names}")
 
-        leaves, treedef = jax.tree_util.tree_flatten(self)
+        leaves, treedef = self._tree_flatten()
         # Create new leaf list by replacing values from kwargs if they exist
         new_leaves = [kwargs.get(name, val) for name, val in zip(names, leaves)]
-        return jax.tree_util.tree_unflatten(treedef, new_leaves)
+        return self._tree_unflatten(treedef, new_leaves)
 
 
     def profile(self, halo_model, x, m, z):
@@ -354,6 +358,11 @@ class BCMDensityProfile(DensityProfile):
         return num / (denom1 * denom2) 
 
 
+jax.tree_util.register_pytree_node(
+    BCMDensityProfile,
+    lambda obj: obj._tree_flatten(),
+    lambda aux_data, children: BCMDensityProfile._tree_unflatten(aux_data, children)
+)
 
     
    

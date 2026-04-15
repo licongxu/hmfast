@@ -2,11 +2,9 @@ import jax
 import jax.numpy as jnp
 import jax.scipy as jscipy
 from functools import partial
-from jax.tree_util import register_pytree_node_class
 
 from hmfast.utils import newton_root
 
-@register_pytree_node_class
 class MassDefinition:
 
     def __init__(self, delta=200, reference="critical"):
@@ -57,7 +55,7 @@ class MassDefinition:
         raise ValueError("delta must be numeric or 'vir'")
 
 
-    def tree_flatten(self):
+    def _tree_flatten(self):
         # delta can be a tracer (numeric) or a static string ('vir')
         # reference is always a static string for critical/mean
         children = () 
@@ -65,10 +63,14 @@ class MassDefinition:
         return (children, aux_data)
 
     @classmethod
-    def tree_unflatten(cls, aux_data, children):
+    def _tree_unflatten(cls, aux_data, children):
         return cls(*aux_data)
 
 
-
+jax.tree_util.register_pytree_node(
+    MassDefinition,
+    lambda obj: obj._tree_flatten(),
+    lambda aux_data, children: MassDefinition._tree_unflatten(aux_data, children)
+)
 
 
