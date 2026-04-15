@@ -6,6 +6,36 @@ from functools import partial
 from hmfast.utils import newton_root
 
 class MassDefinition:
+    """
+    Mass definition for halos, specifying the overdensity threshold and reference density.
+
+    This class encapsulates the definition of a halo mass in terms of an overdensity
+    parameter (`delta`) and a reference density (`reference`). The mass can be defined
+    with respect to either the critical density or the mean matter density of the universe,
+    and can use a fixed overdensity (e.g., 200) or the redshift-dependent 'virial' value.
+
+    Parameters
+    ----------
+    delta : int, float, or str, optional
+        Overdensity parameter. Can be a numeric value (e.g., 200, 500) or the string 'vir'
+        for the redshift-dependent virial overdensity. Default is 200.
+    reference : {'critical', 'mean'}, optional
+        Reference density for the overdensity threshold. Must be either 'critical' (for
+        critical density) or 'mean' (for mean matter density). Default is 'critical'.
+
+    Attributes
+    ----------
+    delta : int, float, or str
+        The overdensity parameter. If 'vir', the virial overdensity is used.
+    reference : str
+        The reference density, either 'critical' or 'mean'.
+
+    Raises
+    ------
+    ValueError
+        If an invalid combination of `delta` and `reference` is provided, or if either
+        parameter is set to an unsupported value.
+    """
 
     def __init__(self, delta=200, reference="critical"):
         self._delta = None

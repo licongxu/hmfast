@@ -1,25 +1,35 @@
 import jax
 import jax.numpy as jnp
 from functools import partial
+from abc import ABC, abstractmethod
 
 
-class T10HaloBias:
+class HaloBias(ABC):
     """
-    Tinker et al. (2010) large-scale linear bias, JAX-friendly.
+    Abstract base class for all halo bias classes.
+    """
+    @abstractmethod
+    def b1_nu(self, sigmas, z, delta_mean):
+        """
+        Compute the first-order halo bias :math:`b_1(\\nu)`.
+        """
+        pass
 
-    Parameters
-    ----------
-    sigmas : jnp.ndarray
-        sigma(R,z) or sigma(M,z), shape (nM, n_z)
-    z : scalar or array_like
-        Redshift(s) (kept for API compatibility)
-    delta_mean : scalar or array_like
-        Halo overdensity Δ, shape (n_z,) or scalar
+    @abstractmethod
+    def b2_nu(self, sigmas, z, delta_mean):
+        """
+         Compute the second-order halo bias :math:`b_2(\\nu)`.
+        """
+        pass
 
-    Returns
-    -------
-    b_nu : jnp.ndarray
-        Halo bias, shape same as sigmas
+
+
+class T10HaloBias(HaloBias):
+    """
+    Halo bias model from `Tinker et al. (2010) <https://ui.adsabs.harvard.edu/abs/2010ApJ...724..878T/abstract>`_.
+
+    This class implements the large-scale halo bias relation as a function of peak height
+    :math:`\\nu` and redshift, calibrated for spherical overdensity halo definitions (e.g., 200m, 500c).
     """
 
     def __init__(self):
@@ -28,6 +38,23 @@ class T10HaloBias:
 
     @partial(jax.jit, static_argnums=(0,))
     def b1_nu(self, sigmas, z, delta_mean):
+        """
+        Compute the first-order halo bias :math:`b_1(\\nu)` following Tinker et al. (2010).
+    
+        Parameters
+        ----------
+        sigmas : array-like
+            Variance of the linear density field :math:`\\sigma(R, z)`.
+        z : float or array-like
+            Redshift(s).
+        delta_mean : float or array-like
+            Halo overdensity :math:`\\Delta`.
+    
+        Returns
+        -------
+        b1 : array-like
+            First-order halo bias values.
+        """
         y = jnp.log10(delta_mean)
         delta_c = 1.686  # the critical overdensity (slightly redshift-dependent in LCDM), so this is approximate
         
@@ -49,6 +76,23 @@ class T10HaloBias:
 
     @partial(jax.jit, static_argnums=(0,))
     def b2_nu(self, sigmas, z, delta_mean):
+        """
+        Compute the second-order halo bias :math:`b_2(\\nu)` following Tinker et al. (2010).
+    
+        Parameters
+        ----------
+        sigmas : array-like
+            Variance of the linear density field :math:`\\sigma(R, z)`.
+        z : float or array-like
+            Redshift(s).
+        delta_mean : float or array-like
+            Halo overdensity :math:`\\Delta`.
+    
+        Returns
+        -------
+        b2 : array-like
+            Second-order halo bias values.
+        """
 
         delta_c =  1.686
         nu = (delta_c / sigmas)**2
