@@ -15,6 +15,9 @@ class MatterProfile(HaloProfile):
 
 
 class NFWMatterProfile(MatterProfile):
+    """
+    Matter density profile from `Navarro, Frenk & White (1997) <https://ui.adsabs.harvard.edu/abs/1997ApJ...490..493N/abstract>`_.
+    """
     def __init__(self):
         pass
 

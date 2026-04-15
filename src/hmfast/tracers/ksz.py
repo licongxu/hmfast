@@ -10,7 +10,7 @@ jax.config.update("jax_enable_x64", True)
 
 class kSZTracer(Tracer):
     """
-    tSZ tracer using GNFW profile.
+    kinetic Sunyaev-Zeldovich effect tracer.
     """
     _required_profile_type = DensityProfile
     
@@ -35,7 +35,7 @@ class kSZTracer(Tracer):
 
     def update(self, **kwargs):
         """
-        Updates density profile parameters (e.g., core radius, slopes).
+        Updates parameters.
         """
         new_profile = self.profile.update(**kwargs)
         # Returns a new tracer instance with the updated profile

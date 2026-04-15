@@ -17,7 +17,7 @@ class GalaxyHODProfile(HaloProfile):
 
 class StandardGalaxyHODProfile(GalaxyHODProfile):
     """
-    Galaxy HOD tracer.
+    Standard Galaxy HOD profile.
     """
 
     def __init__(self, sigma_log10M=0.68, alpha_s=1.30, M1_prime=10**12.7, M_min=10**11.8, M0=0.0):        
@@ -43,6 +43,27 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
 
 
     def update(self, **kwargs):
+        """
+        Return a new profile instance with updated HOD parameters.
+
+        Parameters
+        ----------
+        sigma_log10M : float, optional
+            Scatter in log10 halo mass for central occupation.
+        alpha_s : float, optional
+            Power-law slope for satellite occupation.
+        M1_prime : float, optional
+            Characteristic mass for satellites.
+        M_min : float, optional
+            Minimum mass for central occupation.
+        M0 : float, optional
+            Cutoff mass for satellites.
+
+        Returns
+        -------
+        StandardGalaxyHODProfile
+            New profile instance with updated parameters.
+        """
         names = ['sigma_log10M', 'alpha_s', 'M1_prime', 'M_min', 'M0']
         
         # Block typos immediately
@@ -56,18 +77,81 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
     # --- Physics Implementations ---
 
     def n_cen(self, m):
-        """Mean central occupation."""
+        """
+        Expected number of central galaxies in a halo of mass m.
+    
+        The value is given by:
+    
+            .. math::
+    
+                N_\\mathrm{cen}(m) = \\frac{1}{2} \\left[1 + \\mathrm{erf}\\left(\\frac{\\log_{10} m - \\log_{10} M_\\mathrm{min}}{\\sigma_{\\log_{10} M}}\\right)\\right]
+    
+        Parameters
+        ----------
+        m : array-like
+            Halo mass.
+    
+        Returns
+        -------
+        n_cen : array-like
+            Expected number of central galaxies per halo.
+        """
         # Using attributes directly as they are now JAX-traced leaves
         x = (jnp.log10(m) - jnp.log10(self.M_min)) / self.sigma_log10M
         return 0.5 * (1.0 + erf(x))
 
     def n_sat(self, m):
-        """Mean satellite occupation."""
+        """
+        Expected number of satellite galaxies in a halo of mass m.
+    
+        The value is given by:
+    
+            .. math::
+    
+                N_\\mathrm{sat}(m) = H(m - M_0) \\, N_\\mathrm{cen}(m) \\, \\left(\\frac{m - M_0}{M_1'}\\right)^{\\alpha_s}
+
+    
+        where the term in parentheses is set to zero if negative.
+    
+        Parameters
+        ----------
+        m : array-like
+            Halo mass.
+    
+        Returns
+        -------
+        n_sat : array-like
+            Expected number of satellite galaxies per halo.
+        """
         pow_term = jnp.maximum((m - self.M0) / self.M1_prime, 0.0)**self.alpha_s
         return self.n_cen(m) * pow_term
 
     def ng_bar(self, halo_model, m, z):
-        """Comoving galaxy number density ng(z)."""
+        """
+        Comoving mean galaxy number density at redshift z.
+    
+        The value is given by:
+    
+            .. math::
+    
+                \\bar{n}_g(z) = \\langle N_\\mathrm{cen} + N_\\mathrm{sat} \\rangle_n
+    
+        where the average is over the halo mass function.
+    
+        Parameters
+        ----------
+        halo_model : HaloModel
+            The parent halo model instance.
+        m : array-like
+            Halo mass grid.
+        z : array-like
+            Redshift grid.
+    
+        Returns
+        -------
+        ng : array-like
+            Mean galaxy number density as a function of redshift.
+        """
        
         logm = jnp.log(m)
         z = jnp.atleast_1d(z)
@@ -80,7 +164,31 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
         return jax.lax.cond(halo_model.hm_consistency, lambda x: x + halo_model._counter_terms(m, z)[0] * Ntot[0], lambda x: x, ng_val)
 
     def galaxy_bias(self, halo_model, m, z):
-        """Compute the large-scale galaxy bias b_g(z)."""
+        """
+        Large-scale galaxy bias at redshift z.
+    
+        The value is given by:
+    
+            .. math::
+    
+                b_g(z) = \\frac{1}{\\bar{n}_g(z)} \\langle b^{(1)} (N_\\mathrm{cen} + N_\\mathrm{sat}) \\rangle_n
+    
+        where $b^{(1)}$ is the first-order halo bias and the average is over the halo mass function.
+    
+        Parameters
+        ----------
+        halo_model : HaloModel
+            The parent halo model instance.
+        m : array-like
+            Halo mass grid.
+        z : array-like
+            Redshift grid.
+    
+        Returns
+        -------
+        bias : array-like
+            Large-scale galaxy bias as a function of redshift.
+        """
        
         logm = jnp.log(m)
         z = jnp.atleast_1d(z)
@@ -118,7 +226,41 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
 
 
     def u_k(self, halo_model, k, m, z, moment=1):
-        """Compute 1st or 2nd moment of the galaxy HOD tracer."""
+        """
+        Fourier-space moment of the galaxy HOD profile.
+    
+        Computes the first or second moment of the galaxy HOD Fourier-space profile:
+    
+            .. math::
+    
+                u_k^{(1)}(k, m, z) = \\frac{N_\\mathrm{cen}(m) + N_\\mathrm{sat}(m) \\, u_m(k, m, z)}{\\bar{n}_g(z)}
+    
+            .. math::
+    
+                u_k^{(2)}(k, m, z) = \\frac{N_\\mathrm{sat}^2(m) \\, u_m^2(k, m, z) + 2 N_\\mathrm{sat}(m) \\, u_m(k, m, z)}{\\bar{n}_g^2(z)}
+    
+        where $u_m(k, m, z)$ is the normalized matter profile in Fourier space.
+    
+        Parameters
+        ----------
+        halo_model : HaloModel
+            The parent halo model instance.
+        k : array-like
+            Wavenumber grid.
+        m : array-like
+            Halo mass grid.
+        z : array-like
+            Redshift grid.
+        moment : int, optional
+            Moment to compute (1 for first, 2 for second). Default is 1.
+    
+        Returns
+        -------
+        k : array-like
+            Wavenumber grid.
+        u_k : array-like
+            Fourier-space profile moment.
+        """
        
         Ns = self.n_sat(m)
         Nc = self.n_cen(m)

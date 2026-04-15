@@ -2,8 +2,6 @@ hmfast.tracers
 ==============
 
 
-Tracers
-
 .. autosummary::
    :toctree: generated
    :nosignatures:

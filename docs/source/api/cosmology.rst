@@ -8,8 +8,3 @@ hmfast.cosmology
    :nosignatures:
 
    Cosmology
-
-.. automodule:: hmfast.cosmology
-   :members:
-   :show-inheritance:
-   :member-order: bysource

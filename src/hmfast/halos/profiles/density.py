@@ -65,6 +65,9 @@ class DensityProfile(HaloProfile):
 
 
 class B16DensityProfile(DensityProfile):
+    """
+    Electron density profile from `Battaglia et al. (2016) <https://ui.adsabs.harvard.edu/abs/2016JCAP...08..058B/abstract>`_.
+    """
     def __init__(self, x=None, 
                  A_rho0=4000.0, A_alpha=0.88, A_beta=3.83,
                  alpha_m_rho0=0.29, alpha_m_alpha=-0.03, alpha_m_beta=0.04,
@@ -115,7 +118,26 @@ class B16DensityProfile(DensityProfile):
 
 
     def update(self, **kwargs):
-        """Helper to return a NEW profile with updated leaf values."""
+        """
+        Return a new profile instance with updated calibration parameters.
+
+        Parameters
+        ----------
+        A_rho0 : float, optional
+        A_alpha : float, optional
+        A_beta : float, optional
+        alpha_m_rho0 : float, optional
+        alpha_m_alpha : float, optional
+        alpha_m_beta : float, optional
+        alpha_z_rho0 : float, optional
+        alpha_z_alpha : float, optional
+        alpha_z_beta : float, optional
+
+        Returns
+        -------
+        B16DensityProfile
+            New profile instance with updated parameters.
+        """
         names = [
             "A_rho0", "A_alpha", "A_beta",
             "alpha_m_rho0", "alpha_m_alpha", "alpha_m_beta",
@@ -155,12 +177,23 @@ class B16DensityProfile(DensityProfile):
 
     def profile(self, halo_model, x, m, z):
         """
-        Battaglia et al. 2016 gas density profile (AGN feedback model).
-        Fully vectorized to support:
-            x.shape = (Nx,)
-            m.shape = (Nm,)
-            z.shape = (Nz,)
-        Output shape: (Nx, Nm, Nz)
+        Compute the BCM gas density profile.
+
+        Parameters
+        ----------
+        halo_model : HaloModel
+            The parent halo model instance.
+        x : array-like
+            Dimensionless radius r/R_vir (Nx,).
+        m : array-like
+            Halo mass M_vir [M_sun/h] (Nm,).
+        z : array-like
+            Redshift (Nz,).
+
+        Returns
+        -------
+        rho_gas : array-like
+            Gas density 
         """
         cparams = halo_model.cosmology.get_all_cosmo_params()
         f_b = cparams["Omega_b"] / cparams["Omega0_m"]
@@ -203,6 +236,9 @@ jax.tree_util.register_pytree_node(
         
 
 class NFWDensityProfile(DensityProfile):
+    """
+    Matter density profile from `Navarro, Frenk & White (1997) <https://ui.adsabs.harvard.edu/abs/1997ApJ...490..493N/abstract>`_.
+    """
     def __init__(self, x=None):
         self.x = x if x is not None else jnp.logspace(jnp.log10(1e-4), jnp.log10(1.0), 256)
     
@@ -246,6 +282,10 @@ class NFWDensityProfile(DensityProfile):
 
 
 class BCMDensityProfile(DensityProfile):
+    """
+    Electron density profile from `Schneider et al. (2019) <https://ui.adsabs.harvard.edu/abs/2019JCAP...03..020S/abstract>`_, 
+    also known as the Baryon Correction Model (BCM).
+    """
     def __init__(self, x=None, 
                  log10Mc=13.25, theta_ej = 4.711, eta_star = 0.2, 
                  delta = 7.0, gamma = 2.5, mu = 1.0, nu_log10Mc = -0.038,
@@ -293,7 +333,24 @@ class BCMDensityProfile(DensityProfile):
 
 
     def update(self, **kwargs):
-        """Helper to return a NEW profile with updated leaf values."""
+        """
+        Return a new profile instance with updated calibration parameters.
+
+        Parameters
+        ----------
+        log10Mc : float, optional
+        theta_ej : float, optional
+        eta_star : float, optional
+        delta : float, optional
+        gamma : float, optional
+        mu : float, optional
+        nu_log10Mc : float, optional
+
+        Returns
+        -------
+        BCMDensityProfile
+            New profile instance with updated parameters.
+        """
         names = [
             "log10Mc", "theta_ej", "eta_star",
             "delta", "gamma", "mu", "nu_log10Mc"

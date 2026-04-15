@@ -1,7 +1,7 @@
 hmfast.halos.bias
 ====
 
-Bias Models
+Halo bias models
 -----------
 
 .. autosummary::

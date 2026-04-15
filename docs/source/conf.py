@@ -23,14 +23,13 @@ autosummary_generate = True
 autosummary_imported_members = False
 
 autodoc_member_order = "bysource"
-autoclass_content = "both"
+autoclass_content = "class"
 
 autodoc_default_options = {
     "members": True,
     "undoc-members": False,
     "show-inheritance": True,
     "inherited-members": False,
-    "exclude-members": "tree_flatten,tree_unflatten,__init__",
 }
 
 numpydoc_show_class_members = False

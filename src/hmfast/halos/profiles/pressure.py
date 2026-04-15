@@ -63,6 +63,10 @@ class PressureProfile(HaloProfile):
 
 
 class GNFWPressureProfile(PressureProfile):
+    """
+    Electron pressure profile from `Nagai, Kravtsov & Vikhlinin (2007) <https://ui.adsabs.harvard.edu/abs/2007ApJ...668....1N/abstract>`_.
+    """
+    
     def __init__(self, x=None, P0=8.130, c500=1.156, alpha=1.0620, beta=5.4807, gamma=0.3292, B=1.4):
 
         self.P0 = P0
@@ -106,7 +110,23 @@ class GNFWPressureProfile(PressureProfile):
         return obj
 
     def update(self, **kwargs):
-        """Helper to return a NEW profile with updated leaf values."""
+        """
+        Return a new profile instance with updated GNFW pressure profile parameters.
+    
+        Parameters
+        ----------
+        P0 : float, optional
+        c500 : float, optional
+        alpha : float, optional
+        beta : float, optional
+        gamma : float, optional
+        B : float, optional
+    
+        Returns
+        -------
+        GNFWPressureProfile
+            New profile instance with updated parameters.
+        """
         names = ["P0", "c500", "alpha", "beta", "gamma", "B"]
         
         # STRICT CHECK: Block typos immediately
@@ -167,6 +187,9 @@ jax.tree_util.register_pytree_node(
 
 
 class B12PressureProfile(PressureProfile):
+    """
+    Electron pressure profile from `Battaglia et al. (2012) <https://ui.adsabs.harvard.edu/abs/2012ApJ...758...74B/abstract>`_.
+    """
     def __init__(self, x=None, 
                  A_P0=18.1, A_xc=0.497, A_beta=4.35,
                  alpha_m_P0=0.154, alpha_m_xc=-0.00865, alpha_m_beta=0.0393,
@@ -213,7 +236,26 @@ class B12PressureProfile(PressureProfile):
         return obj
 
     def update(self, **kwargs):
-        """Helper to return a NEW profile with updated leaf values."""
+        """
+        Return a new profile instance with updated B12 pressure profile parameters.
+    
+        Parameters
+        ----------
+        A_P0 : float, optional
+        A_xc : float, optional
+        A_beta : float, optional
+        alpha_m_P0 : float, optional
+        alpha_m_xc : float, optional
+        alpha_m_beta : float, optional
+        alpha_z_P0 : float, optional
+        alpha_z_xc : float, optional
+        alpha_z_beta : float, optional
+    
+        Returns
+        -------
+        B12PressureProfile
+            New profile instance with updated parameters.
+        """
         names = [
             "A_P0", "A_xc", "A_beta",
             "alpha_m_P0", "alpha_m_xc", "alpha_m_beta",
