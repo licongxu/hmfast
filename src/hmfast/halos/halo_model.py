@@ -10,12 +10,10 @@ from functools import partial
 from mcfit import TophatVar
 from jax.tree_util import register_pytree_node_class
 
-from hmfast.halos.mass_function import T08HaloMass
+from hmfast.halos.massfunc import T08HaloMass, TW10SubHaloMass
 from hmfast.halos.bias import T10HaloBias
-from hmfast.halos.mass_function import TW10SubHaloMass
 from hmfast.halos.concentration import D08Concentration, B13Concentration
 from hmfast.cosmology import Cosmology
-from hmfast.halos.mass_definition import MassDefinition
 from hmfast.utils import newton_root
 
 jax.config.update("jax_enable_x64", True)
@@ -126,14 +124,10 @@ class HaloModel:
     #@partial(jax.jit, static_argnums=0)
     def delta_vir_to_crit(self, z):
         """
-        Compute the virial overdensity with respect to the critical density, $\Delta_{\mathrm{vir}}(z)$,
+        Compute the virial overdensity with respect to the critical density, $Delta_{mathrm{vir}}(z)$, 
         using the Bryan & Norman (1998) fitting formula for a flat universe.
-    
-        The formula is:
-        $$
-        \Delta_{\mathrm{vir}}(z) = 18\pi^2 + 82x - 39x^2
-        $$
-        where $x = \Omega_m(z) - 1$.
+
+        The formula is: $$ Delta_{mathrm{vir}}(z) = 18pi^2 + 82x - 39x^2 $$ where $x = Omega_m(z) - 1$.
     
         Parameters
         ----------
@@ -446,7 +440,7 @@ class HaloModel:
     
 
     @partial(jax.jit, static_argnums=(1, 2))
-    def pk_1h(self, tracer1, tracer2, k, m, z,  kstar_damping=0.01):
+    def pk_1h(self, tracer1, tracer2, k, m, z,  k_damp=0.01):
         """
         Compute the 1-halo term of the 3D power spectrum $P_{1h}(k, z)$ for two tracers.
     
@@ -462,7 +456,7 @@ class HaloModel:
             Mass grid.
         z : array-like
             Redshift grid.
-        kstar_damping : float, default 0.01
+        k_damp : float, default 0.01
             Damping scale for small-scale power.
     
         Returns
@@ -516,14 +510,14 @@ class HaloModel:
         pk1h = pk1h + self.hm_consistency * correction
     
         # Apply damping
-        mask = kstar_damping > 0
-        damping = jnp.where(mask, 1.0 - jnp.exp(-(k / jnp.where(mask, kstar_damping, 1.0))**2), 1.0)
+        mask = k_damp > 0
+        damping = jnp.where(mask, 1.0 - jnp.exp(-(k / jnp.where(mask, k_damp, 1.0))**2), 1.0)
     
         return pk1h * damping[:, None]
             
        
     @partial(jax.jit, static_argnums=(1, 2))
-    def cl_1h(self, tracer1, tracer2, l, m, z, kstar_damping=0.01):
+    def cl_1h(self, tracer1, tracer2, l, m, z, k_damp=0.01):
         """
         Compute the 1-halo term of the angular power spectrum $C_\ell^{1h}$.
     
@@ -539,7 +533,7 @@ class HaloModel:
             Mass grid.
         z : array-like
             Redshift grid.
-        kstar_damping : float, default 0.01
+        k_damp : float, default 0.01
             Damping scale for small-scale power.
     
         Returns
@@ -556,7 +550,7 @@ class HaloModel:
         def get_pk_slice(zi):
             chi_i = self.cosmology.angular_diameter_distance(zi) * (1 + zi) 
             ki = (l + 0.5) / chi_i
-            pk = self.pk_1h(tracer1, tracer2, k=ki, m=m, z=jnp.atleast_1d(zi), kstar_damping=kstar_damping)
+            pk = self.pk_1h(tracer1, tracer2, k=ki, m=m, z=jnp.atleast_1d(zi), k_damp=k_damp)
             return pk.flatten()
 
         # Get the halo model pk_1h, the kernel, and the comoving volume
