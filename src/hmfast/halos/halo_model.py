@@ -13,6 +13,7 @@ from jax.tree_util import register_pytree_node_class
 from hmfast.halos.massfunc import T08HaloMass, TW10SubHaloMass
 from hmfast.halos.bias import T10HaloBias
 from hmfast.halos.concentration import D08Concentration, B13Concentration
+from hmfast.halos.mass_definition import MassDefinition
 from hmfast.cosmology import Cosmology
 from hmfast.utils import newton_root
 
