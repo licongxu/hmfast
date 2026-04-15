@@ -25,6 +25,8 @@ class ConstantConcentration(Concentration):
     """
     Constant concentration-mass relation.
 
+    Valid for all mass definitions.
+
     The concentration parameter :math:`c_\\Delta` is fixed to a user-specified value for all halos.
     """
     def __init__(self, c):
@@ -33,8 +35,6 @@ class ConstantConcentration(Concentration):
 
     def c_delta(self, halo_model, m, z):
         """
-        Valid for all mass definitions.
-    
         Returns a constant value for the concentration parameter, broadcast to the shape of the input masses and redshifts.
         """
         return jnp.broadcast_to(self.c, (len(jnp.atleast_1d(m)), len(jnp.atleast_1d(z))))
@@ -44,6 +44,8 @@ class ConstantConcentration(Concentration):
 class D08Concentration(Concentration):
     """
     Concentration-mass relation from `Duffy et al. (2008) <https://ui.adsabs.harvard.edu/abs/2008MNRAS.390L..64D/abstract>`_.
+
+    Valid for 200c, 200m, and virial mass definitions.
     """
     def __init__(self):
         pass
@@ -51,8 +53,6 @@ class D08Concentration(Concentration):
 
     def c_delta(self, halo_model, m, z):
         """
-        Valid for 200c, 200m, and virial mass definitions.
-
         The relation is:
 
         .. math::
@@ -105,14 +105,14 @@ class D08Concentration(Concentration):
 class B13Concentration(Concentration):
     """
     Concentration-mass relation from `Bhattacharya et al. (2013) <https://ui.adsabs.harvard.edu/abs/2013ApJ...766...32B/abstract>`_.
+
+    Valid for 200c, 200m, and virial mass definitions.
     """
     def __init__(self):
         pass
 
     def c_delta(self, halo_model, m, z):
         """
-        Valid for 200c, 200m, and virial mass definitions.
-
         The relation is:
 
         .. math::
@@ -174,14 +174,14 @@ class B13Concentration(Concentration):
 class SC14Concentration(Concentration):
     """
     Concentration-mass relation from `Sanchez-Conde & Prada (2014) <https://ui.adsabs.harvard.edu/abs/2014MNRAS.442.2271S/abstract>`_.
+
+    Valid for 200c mass definition.
     """
     def __init__(self):
         pass
 
     def c_delta(self, halo_model, m, z):
         """
-        Valid for 200c mass definition.
-    
         The relation is:
     
         .. math::

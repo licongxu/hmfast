@@ -30,7 +30,7 @@ autodoc_default_options = {
     "undoc-members": False,
     "show-inheritance": True,
     "inherited-members": False,
-    "exclude-members": "tree_flatten,tree_unflatten",
+    "exclude-members": "tree_flatten,tree_unflatten,__init__",
 }
 
 numpydoc_show_class_members = False
