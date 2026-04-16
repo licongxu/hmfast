@@ -207,7 +207,7 @@ class Cosmology:
     @jax.jit
     def hubble_parameter(self, z):
         """
-        Get Hubble parameter $H(z)$ at redshift $z$ from the emulator.
+        Get Hubble parameter :math:`H(z)` at redshift :math:`z` from the emulator.
 
         Parameters
         ----------
@@ -217,7 +217,7 @@ class Cosmology:
         Returns
         -------
         jnp.ndarray
-            Hubble parameter(s) in Mpc$^{-1}$
+            Hubble parameter(s) in :math:`\\mathrm{Mpc}^{-1}`
         """
         
         params = self._to_dict()
@@ -228,7 +228,7 @@ class Cosmology:
     @jax.jit
     def angular_diameter_distance(self, z):
         """
-        Get angular diameter distance $D_A(z)$ at redshift $z$ from the emulator.
+        Get angular diameter distance :math:`D_A(z)` at redshift :math:`z` from the emulator.
 
         Parameters
         ----------
@@ -254,7 +254,7 @@ class Cosmology:
     @jax.jit
     def sigma8(self, z):
         """
-        Get $\sigma_8(z)$ at redshift $z$ from the emulator.
+        Get :math:`\\sigma_8(z)` at redshift :math:`z` from the emulator.
 
         Parameters
         ----------
@@ -264,7 +264,7 @@ class Cosmology:
         Returns
         -------
         jnp.ndarray
-            $\sigma_8$ value(s)
+            :math:`\\sigma_8` value(s)
         """
 
 
@@ -312,10 +312,11 @@ class Cosmology:
     @jax.jit
     def critical_density(self, z):
         """
-        Get critical density $\rho_{\mathrm{crit}}(z)$ at redshift $z$.
+        Get critical density :math:`\\rho_{\\mathrm{crit}}(z)` at redshift :math:`z`.
 
         .. math::
-            \rho_{\mathrm{crit}}(z) = \frac{3 H(z)^2}{8 \pi G}
+
+            \\rho_{\\mathrm{crit}}(z) = \\frac{3 H(z)^2}{8 \\pi G}
 
         Parameters
         ----------
@@ -325,7 +326,7 @@ class Cosmology:
         Returns
         -------
         jnp.ndarray
-            Critical density in $(M_\odot/h) / (\mathrm{Mpc}/h)^3$
+            Critical density in :math:`(M_\\odot / h) \\, (\\mathrm{Mpc} / h)^{-3}`
         """
         
         # Get Hubble parameter    
@@ -341,7 +342,7 @@ class Cosmology:
     @jax.jit
     def omega_m(self, z):
         """
-        Compute $\Omega_m(z) = \rho_m(z) / \rho_{\mathrm{crit}}(z)$ (without neutrinos).
+        Compute :math:`\\Omega_m(z) = \\rho_m(z) / \\rho_{\\mathrm{crit}}(z)` without neutrinos.
 
         Parameters
         ----------
@@ -351,7 +352,7 @@ class Cosmology:
         Returns
         -------
         omega_m : float or array
-            Dimensionless matter density at redshift $z$
+            Dimensionless matter density at redshift :math:`z`
         """
        
         params = self.get_all_cosmo_params()
@@ -363,7 +364,7 @@ class Cosmology:
     @jax.jit
     def growth_factor(self, z):
         """
-        Linear growth factor $D(z)$, normalized to $D(0)=1$.
+        Linear growth factor :math:`D(z)`, normalized to :math:`D(0)=1`.
 
         Parameters
         ----------
@@ -373,7 +374,7 @@ class Cosmology:
         Returns
         -------
         jnp.ndarray
-            Linear growth factor at $z$
+            Linear growth factor at :math:`z`
         """
         
         z = jnp.atleast_1d(z)
@@ -388,7 +389,11 @@ class Cosmology:
     @jax.jit
     def growth_rate(self, z):
         """
-        Linear growth rate $f(z) = d\ln D / d\ln a$.
+        Linear growth rate
+
+        .. math::
+
+            f(z) = \\frac{d \\ln D}{d \\ln a}
 
         Parameters
         ----------
@@ -398,7 +403,7 @@ class Cosmology:
         Returns
         -------
         jnp.ndarray
-            Linear growth rate at $z$
+            Linear growth rate at :math:`z`
         """
         
         z = jnp.atleast_1d(z)
@@ -414,7 +419,7 @@ class Cosmology:
     @jax.jit
     def v_rms_squared(self, z):
         """
-        Compute $v_\mathrm{rms}^2(z)$ from the linear growth factor and matter power spectrum.
+        Compute :math:`v_\\mathrm{rms}^2(z)` from the linear growth factor and matter power spectrum.
 
         Parameters
         ----------
@@ -424,7 +429,7 @@ class Cosmology:
         Returns
         -------
         jnp.ndarray
-            $v_\mathrm{rms}^2$ at $z$
+            :math:`v_\\mathrm{rms}^2` at :math:`z`
         """
         
         z = jnp.atleast_1d(z)
@@ -451,7 +456,8 @@ class Cosmology:
         Comoving volume element per unit redshift and solid angle.
 
         .. math::
-            \frac{dV}{dz d\Omega} = (1+z)^2 D_A(z)^2 / H(z)
+
+            \\frac{dV}{dz d\\Omega} = (1+z)^2 D_A(z)^2 / H(z)
 
         Parameters
         ----------
@@ -461,7 +467,7 @@ class Cosmology:
         Returns
         -------
         float
-            $dV / dz / d\Omega$ in $(\mathrm{Mpc}/h)^3 / \mathrm{sr}$
+            :math:`dV / dz / d\\Omega` in :math:`(\\mathrm{Mpc}/h)^3 \\, \\mathrm{sr}^{-1}`
         """
         
         h = self.H0 / 100
@@ -478,19 +484,19 @@ class Cosmology:
     #@partial(jax.jit, static_argnums=(2,))
     def pk(self, z, linear=True):
         """
-        Get the matter power spectrum $P(k, z)$ from the emulator.
+        Get the matter power spectrum :math:`P(k, z)` from the emulator.
 
         Parameters
         ----------
         z : float or jnp.ndarray
             Redshift(s)
         linear : bool
-            True for linear $P(k)$, False for nonlinear $P(k)$
+            True for linear :math:`P(k)`, False for nonlinear :math:`P(k)`
 
         Returns
         -------
         tuple[jnp.ndarray, jnp.ndarray]
-            $k$ array and $P(k)$ array
+            :math:`k` array and :math:`P(k)` array
         """
         params = self._to_dict()
         params["z_pk_save_nonclass"] = jnp.atleast_1d(z)[0]
@@ -516,7 +522,7 @@ class Cosmology:
     #@partial(jax.jit, static_argnums=(1,))
     def cl_tt(self, lmax=10000):
         """
-        Get CMB temperature power spectrum $C_\ell^{TT}$ up to $\ell_{\max}$ from the emulator.
+        Get CMB temperature power spectrum :math:`C_\\ell^{TT}` up to :math:`\\ell_{\\max}` from the emulator.
 
         Parameters
         ----------
@@ -526,7 +532,7 @@ class Cosmology:
         Returns
         -------
         tuple
-            $(\ell, C_\ell^{TT})$
+            :math:`(\\ell, C_\\ell^{TT})`
         """
         params = self._to_dict()
         preds = self._load_emulator("TT").ten_to_predictions(params)
@@ -536,7 +542,7 @@ class Cosmology:
     #@partial(jax.jit, static_argnums=(1,))
     def cl_ee(self, lmax=10000):
         """
-        Get CMB $E$-mode polarization power spectrum $C_\ell^{EE}$ up to $\ell_{\max}$ from the emulator.
+        Get CMB :math:`E`-mode polarization power spectrum :math:`C_\\ell^{EE}` up to :math:`\\ell_{\\max}` from the emulator.
 
         Parameters
         ----------
@@ -546,7 +552,7 @@ class Cosmology:
         Returns
         -------
         tuple
-            $(\ell, C_\ell^{EE})$
+            :math:`(\\ell, C_\\ell^{EE})`
         """
         params = self._to_dict()
         preds = self._load_emulator("EE").ten_to_predictions(params)
@@ -556,7 +562,7 @@ class Cosmology:
     #@partial(jax.jit, static_argnums=(1,))
     def cl_te(self, lmax=10000):
         """
-        Get CMB temperature-$E$-mode cross power spectrum $C_\ell^{TE}$ up to $\ell_{\max}$ from the emulator.
+        Get CMB temperature-:math:`E`-mode cross power spectrum :math:`C_\\ell^{TE}` up to :math:`\\ell_{\\max}` from the emulator.
 
         Parameters
         ----------
@@ -566,7 +572,7 @@ class Cosmology:
         Returns
         -------
         tuple
-            $(\ell, C_\ell^{TE})$
+            :math:`(\\ell, C_\\ell^{TE})`
         """
         params = self._to_dict()
         preds = self._load_emulator("TE").predictions(params)
@@ -576,7 +582,7 @@ class Cosmology:
     #@partial(jax.jit, static_argnums=(1,))
     def cl_pp(self, lmax=10000):
         """
-        Get CMB lensing potential power spectrum $C_\ell^{\phi\phi}$ up to $\ell_{\max}$ from the emulator.
+        Get CMB lensing potential power spectrum :math:`C_\\ell^{\\phi\\phi}` up to :math:`\\ell_{\\max}` from the emulator.
 
         Parameters
         ----------
@@ -586,7 +592,7 @@ class Cosmology:
         Returns
         -------
         tuple
-            $(\ell, C_\ell^{\phi\phi})$
+            :math:`(\\ell, C_\\ell^{\\phi\\phi})`
         """
         params = self._to_dict()
         preds = self._load_emulator("PP").ten_to_predictions(params)

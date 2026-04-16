@@ -113,15 +113,16 @@ class HaloModel:
     #@partial(jax.jit, static_argnums=0)
     def delta_vir_to_crit(self, z):
         """
-        Compute the virial overdensity with respect to the critical density, $\Delta_{\mathrm{vir}}(z)$,
+        Compute the virial overdensity with respect to the critical density, :math:`\\Delta_{\\mathrm{vir}}(z)`,
         using the Bryan & Norman (1998) fitting formula for a flat universe.
 
         The formula is:
 
         .. math::
-            \Delta_{\mathrm{vir}}(z) = 18\pi^2 + 82x - 39x^2
 
-        where $x = \Omega_m(z) - 1$.
+            \\Delta_{\\mathrm{vir}}(z) = 18\\pi^2 + 82x - 39x^2
+
+        where :math:`x = \\Omega_m(z) - 1`.
 
         Parameters
         ----------
@@ -131,7 +132,7 @@ class HaloModel:
         Returns
         -------
         delta_vir : float or array-like
-            Virial overdensity relative to the critical density at redshift $z$.
+            Virial overdensity relative to the critical density at redshift :math:`z`.
         """
         omega_m = self.cosmology.omega_m(z)
         x = omega_m - 1.0
@@ -179,12 +180,13 @@ class HaloModel:
     @partial(jax.jit, static_argnums=(3, 4, 6))
     def convert_m_delta(self, m, z, mass_def_old, mass_def_new, c_old=None, max_iter=20):
         """
-        Convert halo mass between two mass definitions by solving for $M_\mathrm{new}$ such that:
+        Convert halo mass between two mass definitions by solving for :math:`M_\\mathrm{new}` such that:
 
         .. math::
-            \frac{M_\mathrm{old}}{M_\mathrm{new}} = \frac{f_\mathrm{NFW}(c_\mathrm{old})}{f_\mathrm{NFW}(c_\mathrm{old} (M_\mathrm{new}/M_\mathrm{old} \cdot \Delta_\mathrm{old}/\Delta_\mathrm{new})^{1/3})}
 
-        where $f_\mathrm{NFW}(c) = \ln(1+c) - c/(1+c)$.
+            \\frac{M_\\mathrm{old}}{M_\\mathrm{new}} = \\frac{f_\\mathrm{NFW}(c_\\mathrm{old})}{f_\\mathrm{NFW}(c_\\mathrm{old} (M_\\mathrm{new}/M_\\mathrm{old} \\cdot \\Delta_\\mathrm{old}/\\Delta_\\mathrm{new})^{1/3})}
+
+        where :math:`f_\\mathrm{NFW}(c) = \\ln(1+c) - c/(1+c)`.
 
         Parameters
         ----------
@@ -250,10 +252,11 @@ class HaloModel:
    
     def r_delta(self, m, z, mass_definition=None):
         """
-        Compute the halo radius $r_\Delta$ corresponding to a given mass and overdensity at redshift $z$.
+        Compute the halo radius :math:`r_\\Delta` corresponding to a given mass and overdensity at redshift :math:`z`.
 
         .. math::
-            r_\Delta = \left[\frac{3M}{4\pi \Delta \rho_{\mathrm{ref}}}\right]^{1/3}
+
+            r_\\Delta = \\left[\\frac{3M}{4\\pi \\Delta \\rho_{\\mathrm{ref}}}\\right]^{1/3}
 
         Parameters
         ----------
@@ -267,7 +270,7 @@ class HaloModel:
         Returns
         -------
         float
-            Radius $r_\Delta$ within which the average density equals $\Delta \times \rho_{\mathrm{ref}}(z)$.
+            Radius :math:`r_\\Delta` within which the average density equals :math:`\\Delta \\times \\rho_{\\mathrm{ref}}(z)`.
         """
         
         mass_definition = self.mass_definition if mass_definition is None else mass_definition
@@ -294,7 +297,7 @@ class HaloModel:
     @jax.jit
     def _counter_terms(self, m, z):
         """
-        Compute $n_{\min}$, $b_{1,\min}$, $b_{2,\min}$ counter terms for halo model consistency.
+        Compute :math:`n_{\\min}`, :math:`b_{1,\\min}`, and :math:`b_{2,\\min}` counter terms for halo model consistency.
 
         Parameters
         ----------
@@ -341,18 +344,18 @@ class HaloModel:
     @jax.jit 
     def _compute_hmf_grid(self):
         """
-        Compute $\sigma(R, z)$ and the halo mass function grid for use in interpolation.
+        Compute :math:`\\sigma(R, z)` and the halo mass function grid for use in interpolation.
 
         Returns
         -------
         ln_x : array_like
-            $\ln(1+z)$ grid.
+            :math:`\\ln(1+z)` grid.
         ln_M : array_like
-            $\ln M$ grid.
+            :math:`\\ln M` grid.
         dn_dlnM_grid : array_like
-            $dn/d\ln M$ grid.
+            :math:`dn/\\ln M` grid.
         sigma_grid : array_like
-            $\sigma(R, z)$ values.
+            :math:`\\sigma(R, z)` values.
         """
         
         z_grid = self.cosmology._z_grid_pk()
@@ -399,7 +402,7 @@ class HaloModel:
     @jax.jit 
     def halo_mass_function(self, m, z) -> jnp.ndarray:
         """
-        Compute the halo mass function $\frac{dn}{d\ln M}$ for arbitrary mass and redshift arrays.
+        Compute the halo mass function :math:`\\frac{dn}{d\\ln M}` for arbitrary mass and redshift arrays.
 
         Parameters
         ----------
@@ -429,7 +432,7 @@ class HaloModel:
     @partial(jax.jit, static_argnums=(3))
     def halo_bias(self, m, z, order=1):
         """
-        Compute the halo bias $b_1$ or $b_2$ for arbitrary mass and redshift arrays.
+        Compute the halo bias :math:`b_1` or :math:`b_2` for arbitrary mass and redshift arrays.
 
         Parameters
         ----------
@@ -478,10 +481,11 @@ class HaloModel:
     @partial(jax.jit, static_argnums=(1, 2))
     def pk_1h(self, tracer1, tracer2, k, m, z,  k_damp=0.01):
         """
-        Compute the 1-halo term of the 3D power spectrum $P_{1h}(k, z)$ for two tracers.
+        Compute the 1-halo term of the 3D power spectrum :math:`P_{1h}(k, z)` for two tracers.
 
         .. math::
-            P_{1h}(k, z) = \int dM \frac{dn}{d\ln M} \, u_1(k, M, z) u_2(k, M, z)
+
+            P_{1h}(k, z) = \\int dM \\frac{dn}{d\\ln M} \\, u_1(k, M, z) u_2(k, M, z)
 
         Parameters
         ----------
@@ -558,7 +562,7 @@ class HaloModel:
     @partial(jax.jit, static_argnums=(1, 2))
     def cl_1h(self, tracer1, tracer2, l, m, z, k_damp=0.01):
         """
-        Compute the 1-halo term of the angular power spectrum $C_\ell^{1h}$.
+        Compute the 1-halo term of the angular power spectrum :math:`C_\\ell^{1h}`.
 
         Parameters
         ----------
@@ -609,10 +613,11 @@ class HaloModel:
     @partial(jax.jit, static_argnums=(1, 2))
     def pk_2h(self, tracer1, tracer2, k, m, z):
         """
-        Compute the 2-halo term of the 3D power spectrum $P_{2h}(k, z)$ for two tracers.
+        Compute the 2-halo term of the 3D power spectrum :math:`P_{2h}(k, z)` for two tracers.
 
         .. math::
-            P_{2h}(k, z) = P_{\mathrm{lin}}(k, z) I_1(k, z) I_2(k, z)
+
+            P_{2h}(k, z) = P_{\\mathrm{lin}}(k, z) I_1(k, z) I_2(k, z)
 
         Parameters
         ----------
@@ -676,7 +681,7 @@ class HaloModel:
     @partial(jax.jit, static_argnums=(1, 2))
     def cl_2h(self, tracer1, tracer2, l, m, z):
         """
-        Compute the 2-halo term of the angular power spectrum $C_\ell^{2h}$.
+        Compute the 2-halo term of the angular power spectrum :math:`C_\\ell^{2h}`.
 
         Parameters
         ----------
