@@ -1,7 +1,9 @@
 import jax
 import jax.numpy as jnp
+import jax.scipy as jscipy
 from functools import partial
 from abc import ABC, abstractmethod
+from mcfit import TophatVar
 
 
 class HaloBias(ABC):
@@ -9,20 +11,61 @@ class HaloBias(ABC):
     Abstract base class for all halo bias classes.
     """
     @abstractmethod
-    def b1_nu(self, sigmas, z, delta_mean):
+    def halo_bias(self, halo_model, m, z, order=1):
         """
-        Compute the first-order halo bias :math:`b_1(\\nu)`.
-        """
-        pass
-
-    @abstractmethod
-    def b2_nu(self, sigmas, z, delta_mean):
-        """
-         Compute the second-order halo bias :math:`b_2(\\nu)`.
+        Compute the halo bias of a given order.
         """
         pass
 
 
+    @partial(jax.jit, static_argnums=(0,))
+    def _compute_sigma_grid(self, halo_model):
+        """
+        Compute :math:`\sigma(R, z)` and the halo mass function grid for use in interpolation.
+
+        Returns
+        -------
+        ln_x : array_like
+            :math:`\ln(1+z)` grid.
+        ln_M : array_like
+            :math:`\ln M` grid.
+        dn_dlnM_grid : array_like
+            :math:`dn/d\ln M` grid.
+        sigma_grid : array_like
+            :math:`\sigma(R, z)` values.
+        """
+        
+        z_grid = halo_model.cosmology._z_grid_pk()
+        cparams = halo_model.cosmology.get_all_cosmo_params()
+        h = cparams["h"]
+    
+        # Power spectra for all redshifts, shape: (n_k, n_z)
+        pk_grid = jax.vmap(lambda zp: halo_model.cosmology.pk(zp, linear=True)[1].flatten())(z_grid).T
+    
+        # Compute σ²(R, z) and dσ²/dR using TophatVar
+        R_grid, var = jax.vmap(halo_model._tophat_instance, in_axes=1, out_axes=(0, 0))(pk_grid)
+        R_grid = R_grid[0].flatten()  # shape: (n_R,)
+    
+        # Compute dσ²/dR for each z, output shape: (n_z, n_R)
+        dvar_grid = jax.vmap(lambda v: jnp.gradient(v, R_grid), in_axes=0)(var)
+    
+        # Compute σ(R, z)
+        ln_sigma_grid = 0.5 * jnp.log(var)
+        sigma_grid = jnp.exp(ln_sigma_grid)
+    
+        # # Mass grid, shape: (n_R,)
+        rho_crit_0 = cparams["Rho_crit_0"]
+        Omega0_cb = cparams['Omega0_cb']
+        M_grid = 4.0 * jnp.pi / 3.0 * Omega0_cb * rho_crit_0 * (R_grid ** 3) * h ** 3
+    
+        # Grids for interpolation
+        ln_x = jnp.log(1. + z_grid)
+        ln_M = jnp.log(M_grid)
+    
+        return ln_x, ln_M, sigma_grid
+        
+
+   
 
 class T10HaloBias(HaloBias):
     """
@@ -37,7 +80,7 @@ class T10HaloBias(HaloBias):
 
 
     @partial(jax.jit, static_argnums=(0,))
-    def b1_nu(self, sigmas, z, delta_mean):
+    def _b1_nu(self, sigmas, z, delta_mean):
         """
         Compute the first-order halo bias :math:`b_1(\\nu)` following Tinker et al. (2010).
     
@@ -75,7 +118,7 @@ class T10HaloBias(HaloBias):
 
 
     @partial(jax.jit, static_argnums=(0,))
-    def b2_nu(self, sigmas, z, delta_mean):
+    def _b2_nu(self, sigmas, z, delta_mean):
         """
         Compute the second-order halo bias :math:`b_2(\\nu)` following Tinker et al. (2010).
     
@@ -128,4 +171,55 @@ class T10HaloBias(HaloBias):
         b2_nu = 2 * (1 + a2) * (eps1 + E1) + eps2 + E2
 
         return b2_nu
+
+
+    @partial(jax.jit, static_argnums=(0,4))
+    def halo_bias(self, halo_model, m, z, order=1):
+        """
+        Compute the halo bias :math:`b_1` or :math:`b_2` for arbitrary mass and redshift arrays.
+
+        Parameters
+        ----------
+        m : array-like
+            Halo mass grid.
+        z : array-like
+            Redshift grid.
+        order : int, default 1
+            Bias order (1 for linear, 2 for quadratic).
+
+        Returns
+        -------
+        bias : array-like
+            Halo bias values, shape (len(m), len(z)).
+        """
+       
+       
+        m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
+        ln_x_grid, ln_M_grid, sigma_grid = self._compute_sigma_grid(halo_model)
+
+        # Create the interpolator, the meshgrid, and then stack the points
+        _sigma_interp = jscipy.interpolate.RegularGridInterpolator((ln_x_grid, ln_M_grid), jnp.log(sigma_grid)) 
+        zz, mm = jnp.meshgrid(z, m, indexing='ij')
+        pts = jnp.stack([jnp.log(1. + zz), jnp.log(mm)], axis=-1)
+        sigma_M = jnp.exp(_sigma_interp(pts))
+
+        # Handle delta values
+        delta_numeric = halo_model._delta_numeric(z)
+        delta_mean = halo_model._convert_reference(z, delta_numeric, from_ref=halo_model.mass_definition.reference, to_ref='mean')
+        
+        # Ensure delta_mean is 1D before indexing
+        delta_mean = jnp.atleast_1d(delta_mean)
+        delta_mean_2d = delta_mean[:, None] 
+        
+        # Broadcast to (nz, nm)
+        delta_mean_broad = jnp.broadcast_to(delta_mean_2d, sigma_M.shape)
+
+        if order == 1: 
+            return self._b1_nu(sigma_M, zz, delta_mean_broad).T
+        elif order == 2:
+            return self._b2_nu(sigma_M, zz, delta_mean_broad).T
+        else:
+            raise ValueError("order must be either 1 or 2")
+
+
 
