@@ -28,6 +28,8 @@ autoclass_content = "class"
 autodoc_default_options = {
     "members": True,
     "undoc-members": False,
+    "private-members": False,  # Ensures private methods are not shown
+    "special-members": "",     # Do not include __init__ or other dunder methods
     "show-inheritance": True,
     "inherited-members": False,
 }
@@ -43,11 +45,3 @@ intersphinx_mapping = {
 
 html_theme = "sphinx_rtd_theme"
 html_static_path = ["_static"]
-
-def skip_init(app, what, name, obj, skip, options):
-    if name == "__init__":
-        return True
-    return skip
-
-def setup(app):
-    app.connect("autodoc-skip-member", skip_init)
