@@ -23,28 +23,10 @@ class HaloModel:
     """
     Differentiable halo model.
 
-    This class provides methods for computing halo model predictions with automatic differentiation,
+    Provides methods for computing halo model predictions with automatic differentiation,
     including the halo mass function, bias, and power spectra for various tracers.
-
-    Parameters
-    ----------
-    cosmology : Cosmology, optional
-        Cosmology object (default: LCDM with cosmo_model=0).
-    mass_definition : MassDefinition, optional
-        Mass definition (default: delta=200, reference='critical').
-    mass_model : object, optional
-        Halo mass function model (default: T08HaloMass).
-    bias_model : object, optional
-        Halo bias model (default: T10HaloBias).
-    subhalo_mass_model : object, optional
-        Subhalo mass function model (default: TW10SubHaloMass).
-    concentration : object, optional
-        Concentration-mass relation (default: D08Concentration).
-    hm_consistency : bool, optional
-        Enforce halo model consistency corrections (default: True).
-    convert_masses : bool, optional
-        If True, convert masses between definitions as needed (default: False).
     """
+   
 
     
     def __init__(self, 
@@ -56,9 +38,7 @@ class HaloModel:
                  concentration=D08Concentration(), 
                  hm_consistency=True, 
                  convert_masses=False):
-        """
-        Initialize the halo model.
-        """
+        """Initialize the halo model."""
         
         # Load cosmology and make sure the required files are loaded outside of jitted functions (note that DER is needed for CMB lensing tracers)
         self.cosmology = cosmology 
@@ -104,7 +84,17 @@ class HaloModel:
     
     def update(self, **kwargs):
         """
-        Updates the underlying cosmology parameters without re-initializing the whole class.
+        Return a new HaloModel instance with updated cosmology parameters.
+
+        Parameters
+        ----------
+        **kwargs : dict
+            Cosmological parameters to update.
+
+        Returns
+        -------
+        HaloModel
+            New instance with updated cosmology.
         """
         
         new_emulator = self.cosmology.update(**kwargs)
@@ -123,16 +113,21 @@ class HaloModel:
     #@partial(jax.jit, static_argnums=0)
     def delta_vir_to_crit(self, z):
         """
-        Compute the virial overdensity with respect to the critical density, $Delta_{mathrm{vir}}(z)$, 
+        Compute the virial overdensity with respect to the critical density, $\Delta_{\mathrm{vir}}(z)$,
         using the Bryan & Norman (1998) fitting formula for a flat universe.
 
-        The formula is: $$ Delta_{mathrm{vir}}(z) = 18pi^2 + 82x - 39x^2 $$ where $x = Omega_m(z) - 1$.
-    
+        The formula is:
+
+        .. math::
+            \Delta_{\mathrm{vir}}(z) = 18\pi^2 + 82x - 39x^2
+
+        where $x = \Omega_m(z) - 1$.
+
         Parameters
         ----------
         z : float or array-like
             Redshift(s) at which to compute the virial overdensity.
-    
+
         Returns
         -------
         delta_vir : float or array-like
@@ -183,6 +178,34 @@ class HaloModel:
 
     @partial(jax.jit, static_argnums=(3, 4, 6))
     def convert_m_delta(self, m, z, mass_def_old, mass_def_new, c_old=None, max_iter=20):
+        """
+        Convert halo mass between two mass definitions by solving for $M_\mathrm{new}$ such that:
+
+        .. math::
+            \frac{M_\mathrm{old}}{M_\mathrm{new}} = \frac{f_\mathrm{NFW}(c_\mathrm{old})}{f_\mathrm{NFW}(c_\mathrm{old} (M_\mathrm{new}/M_\mathrm{old} \cdot \Delta_\mathrm{old}/\Delta_\mathrm{new})^{1/3})}
+
+        where $f_\mathrm{NFW}(c) = \ln(1+c) - c/(1+c)$.
+
+        Parameters
+        ----------
+        m : array-like
+            Halo mass in the old definition.
+        z : array-like
+            Redshift(s).
+        mass_def_old : MassDefinition
+            Old mass definition.
+        mass_def_new : MassDefinition
+            New mass definition.
+        c_old : array-like, optional
+            Concentration in the old definition (if None, computed automatically).
+        max_iter : int, optional
+            Maximum number of Newton-Raphson iterations.
+
+        Returns
+        -------
+        array-like
+            Halo mass in the new definition.
+        """
        
         m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
         Nm, Nz = len(m), len(z)
@@ -227,23 +250,24 @@ class HaloModel:
    
     def r_delta(self, m, z, mass_definition=None):
         """
-        Compute the halo radius corresponding to a given mass and overdensity at redshift z.
-    
+        Compute the halo radius $r_\Delta$ corresponding to a given mass and overdensity at redshift $z$.
+
+        .. math::
+            r_\Delta = \left[\frac{3M}{4\pi \Delta \rho_{\mathrm{ref}}}\right]^{1/3}
+
         Parameters
         ----------
+        m : float
+            Halo mass enclosed within the overdensity radius.
         z : float
             Redshift at which to compute the radius.
-        m : float
-            Halo mass enclosed within the overdensity radius, in the same units as used for rho_crit.
-        delta : float
-            Overdensity parameter relative to the critical density (e.g., 200 for M_200).
-        
-       
-    
+        mass_definition : MassDefinition, optional
+            Mass definition (default: self.mass_definition).
+
         Returns
         -------
         float
-            Radius r_delta (e.g., R_200) within which the average density equals delta * rho_crit(z).
+            Radius $r_\Delta$ within which the average density equals $\Delta \times \rho_{\mathrm{ref}}(z)$.
         """
         
         mass_definition = self.mass_definition if mass_definition is None else mass_definition
@@ -270,16 +294,23 @@ class HaloModel:
     @jax.jit
     def _counter_terms(self, m, z):
         """
-        Compute n_min, b1_min, b2_min counter terms for halo model consistency.
-    
-        Args:
-            m: array-like, mass grid 
-            z: array-like, redshift(s)
-    
-        Returns:
-            n_min: array, shape (len(z),)
-            b1_min: array, shape (len(z),)
-            b2_min: array, shape (len(z),)
+        Compute $n_{\min}$, $b_{1,\min}$, $b_{2,\min}$ counter terms for halo model consistency.
+
+        Parameters
+        ----------
+        m : array-like
+            Mass grid.
+        z : array-like
+            Redshift(s).
+
+        Returns
+        -------
+        n_min : array
+            Minimum number density.
+        b1_min : array
+            Minimum linear bias.
+        b2_min : array
+            Minimum quadratic bias.
         """
        
         m = jnp.atleast_1d(m)
@@ -310,13 +341,18 @@ class HaloModel:
     @jax.jit 
     def _compute_hmf_grid(self):
         """
-        Compute σ(R, z) for use in halo mass function and bias.
-    
-        Returns:
-            ln_x : array_like, log(1+z) grid
-            ln_M : array_like, log(M) grid
-            dn_dlnM_grid : array_like, dn/dlnM grid
-            sigma_grid : array_like, σ(R, z) values
+        Compute $\sigma(R, z)$ and the halo mass function grid for use in interpolation.
+
+        Returns
+        -------
+        ln_x : array_like
+            $\ln(1+z)$ grid.
+        ln_M : array_like
+            $\ln M$ grid.
+        dn_dlnM_grid : array_like
+            $dn/d\ln M$ grid.
+        sigma_grid : array_like
+            $\sigma(R, z)$ values.
         """
         
         z_grid = self.cosmology._z_grid_pk()
@@ -363,20 +399,21 @@ class HaloModel:
     @jax.jit 
     def halo_mass_function(self, m, z) -> jnp.ndarray:
         """
-        Compute the halo mass function $dn/d\ln M$ for arbitrary mass and redshift arrays.
-    
+        Compute the halo mass function $\frac{dn}{d\ln M}$ for arbitrary mass and redshift arrays.
+
         Parameters
         ----------
         m : array-like
             Halo mass grid.
         z : array-like
             Redshift grid.
-    
+
         Returns
         -------
         dndlnM : array-like
             Halo mass function values, shape (len(m), len(z)).
         """
+       
         
         ln_x_grid, ln_M_grid, dn_dlnM_grid, _ = self._compute_hmf_grid()
 
@@ -393,7 +430,7 @@ class HaloModel:
     def halo_bias(self, m, z, order=1):
         """
         Compute the halo bias $b_1$ or $b_2$ for arbitrary mass and redshift arrays.
-    
+
         Parameters
         ----------
         m : array-like
@@ -402,13 +439,13 @@ class HaloModel:
             Redshift grid.
         order : int, default 1
             Bias order (1 for linear, 2 for quadratic).
-    
+
         Returns
         -------
         bias : array-like
             Halo bias values, shape (len(m), len(z)).
         """
-        
+       
        
         m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
         ln_x_grid, ln_M_grid, _, sigma_grid = self._compute_hmf_grid()
@@ -442,7 +479,10 @@ class HaloModel:
     def pk_1h(self, tracer1, tracer2, k, m, z,  k_damp=0.01):
         """
         Compute the 1-halo term of the 3D power spectrum $P_{1h}(k, z)$ for two tracers.
-    
+
+        .. math::
+            P_{1h}(k, z) = \int dM \frac{dn}{d\ln M} \, u_1(k, M, z) u_2(k, M, z)
+
         Parameters
         ----------
         tracer1 : Tracer
@@ -457,7 +497,7 @@ class HaloModel:
             Redshift grid.
         k_damp : float, default 0.01
             Damping scale for small-scale power.
-    
+
         Returns
         -------
         pk_1h : array-like
@@ -519,7 +559,7 @@ class HaloModel:
     def cl_1h(self, tracer1, tracer2, l, m, z, k_damp=0.01):
         """
         Compute the 1-halo term of the angular power spectrum $C_\ell^{1h}$.
-    
+
         Parameters
         ----------
         tracer1 : Tracer
@@ -534,12 +574,13 @@ class HaloModel:
             Redshift grid.
         k_damp : float, default 0.01
             Damping scale for small-scale power.
-    
+
         Returns
         -------
         cl_1h : array-like
             1-halo angular power spectrum, shape (len(l),).
         """
+        
         
         h = self.cosmology.H0 / 100
 
@@ -569,7 +610,10 @@ class HaloModel:
     def pk_2h(self, tracer1, tracer2, k, m, z):
         """
         Compute the 2-halo term of the 3D power spectrum $P_{2h}(k, z)$ for two tracers.
-    
+
+        .. math::
+            P_{2h}(k, z) = P_{\mathrm{lin}}(k, z) I_1(k, z) I_2(k, z)
+
         Parameters
         ----------
         tracer1 : Tracer
@@ -582,7 +626,7 @@ class HaloModel:
             Mass grid.
         z : array-like
             Redshift grid.
-    
+
         Returns
         -------
         pk_2h : array-like
@@ -633,7 +677,7 @@ class HaloModel:
     def cl_2h(self, tracer1, tracer2, l, m, z):
         """
         Compute the 2-halo term of the angular power spectrum $C_\ell^{2h}$.
-    
+
         Parameters
         ----------
         tracer1 : Tracer
@@ -646,13 +690,13 @@ class HaloModel:
             Mass grid.
         z : array-like
             Redshift grid.
-    
+
         Returns
         -------
         cl_2h : array-like
             2-halo angular power spectrum, shape (len(l),).
         """
-        
+       
         tracer2 = tracer1 if tracer2 is None else tracer2
 
         # Define the slice function for Limber integration
