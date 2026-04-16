@@ -127,7 +127,7 @@ class GalaxyLensingTracer(Tracer):
 
 
     def kernel(self, cosmology, z):
-         """
+        """
         Compute the galaxy lensing kernel $W_{\\kappa,g}(z)$ at redshift $z$.
 
         The kernel is given by:
