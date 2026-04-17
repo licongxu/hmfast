@@ -88,19 +88,9 @@ class S12CIBProfile(CIBProfile):
         return self._tree_unflatten(treedef, new_leaves)
 
 
-    def sigma(self, m):
+    def _sigma(self, m):
         """
-        Compute the halo-mass dependence of the Shang et al. CIB luminosity.
-
-        The mass weighting is modeled as a log-normal function,
-
-        .. math::
-
-            \\Sigma(M) = \\frac{M}{\\sqrt{2 \\pi \\, \\sigma_{LM}^2}}
-            \\exp\\left[
-            -\\frac{\\left(\\log_{10} M - \\log_{10} M_{\\mathrm{eff}}\\right)^2}
-            {2 \\sigma_{LM}^2}
-            \\right].
+        Compute the Shang et al. halo-mass weighting factor.
 
         Parameters
         ----------
@@ -121,19 +111,9 @@ class S12CIBProfile(CIBProfile):
         return Sigma_M
 
 
-    def phi(self, z):
+    def _phi(self, z):
         """
-        Compute the redshift evolution factor in the Shang et al. CIB model.
-
-        The evolution is implemented as
-
-        .. math::
-
-            \\Phi(z) =
-            \\begin{cases}
-            (1 + z)^{\\delta}, & z < z_p, \\
-            1, & z \\ge z_p.
-            \\end{cases}
+        Compute the Shang et al. redshift evolution factor.
 
         Parameters
         ----------
@@ -154,32 +134,14 @@ class S12CIBProfile(CIBProfile):
         return Phi_z
 
 
-    def theta(self, z):
+    def _theta(self, z):
         """
         Compute the Shang et al. spectral energy distribution factor.
-
-        The frequency dependence is modeled as
-
-        .. math::
-
-            \\Theta(\\nu, z) =
-            \\begin{cases}
-            \\left(\\nu / \\nu_0\\right)^{-\\gamma}, & \\nu \\ge \\nu_0, \\
-            \\left(\\nu / \\nu_0\\right)^{\\beta}
-            \\dfrac{B_\\nu(\\nu, T_d)}{B_\\nu(\\nu_0, T_d)}, & \\nu < \\nu_0,
-            \\end{cases}
-
-        where :math:`T_d(z) = T_0 (1 + z)^{\\alpha}` and
-        :math:`B_\\nu(\\nu, T)` is the Planck blackbody function.
-        The transition frequency :math:`\\nu_0(z)` is computed from the
-        continuity condition used in the implementation.
 
         Parameters
         ----------
         z : float or jnp.ndarray
             Redshift(s).
-        nu : float or jnp.ndarray
-            Frequency or frequencies in GHz.
 
         Returns
         -------
@@ -226,9 +188,40 @@ class S12CIBProfile(CIBProfile):
             L_\\nu^{\\mathrm{gal}}(M, z) = L_0 \\, \\Phi(z) \\, \\Sigma(M)
             \\, \\Theta\\!\\left((1+z)\\nu, z\\right),
 
-        where :math:`\\Phi(z)`, :math:`\\Sigma(M)`, and
-        :math:`\\Theta(\\nu, z)` are given by the Shang-profile helper
-        functions implemented in this class.
+        where
+
+        .. math::
+
+            \\Sigma(M) = \\frac{M}{\\sqrt{2 \\pi \\, \\sigma_{LM}^2}}
+            \\exp\\left[
+            -\\frac{\\left(\\log_{10} M - \\log_{10} M_{\\mathrm{eff}}\\right)^2}
+            {2 \\sigma_{LM}^2}
+            \\right],
+
+        .. math::
+
+            \\Phi(z) =
+            \\begin{cases}
+            (1 + z)^{\\delta}, & z < z_p, \\
+            1, & z \\ge z_p,
+            \\end{cases}
+
+        and
+
+        .. math::
+
+            \\Theta(\\nu, z) =
+            \\begin{cases}
+            \\left(\\nu / \\nu_0\\right)^{-\\gamma}, & \\nu \\ge \\nu_0, \\
+            \\left(\\nu / \\nu_0\\right)^{\\beta}
+            \\dfrac{B_\\nu(\\nu, T_d)}{B_\\nu(\\nu_0, T_d)}, & \\nu < \\nu_0,
+            \\end{cases}
+
+        with :math:`T_d(z) = T_0 (1 + z)^{\\alpha}` and
+        :math:`B_\\nu(\\nu, T)` the Planck blackbody function. In the
+        implementation, :math:`\\nu` is the observed frequency in GHz stored
+        in ``self.nu``, so the SED is evaluated at the rest-frame frequency
+        :math:`(1+z)\\nu`.
 
         Parameters
         ----------
@@ -246,9 +239,9 @@ class S12CIBProfile(CIBProfile):
             :math:`(N_M, N_z)`.
         """
         # Shang model logic: L0 * Phi(z) * Sigma(m) * Theta(nu_eff)
-        phi_z = jnp.atleast_1d(self.phi(z))[None, :]
-        sigma_m = jnp.atleast_1d(self.sigma(m))[:, None]
-        theta_val = jnp.atleast_1d(self.theta(z))[None, :]
+        phi_z = jnp.atleast_1d(self._phi(z))[None, :]
+        sigma_m = jnp.atleast_1d(self._sigma(m))[:, None]
+        theta_val = jnp.atleast_1d(self._theta(z))[None, :]
         return self.L0 * phi_z * sigma_m * theta_val
 
 
@@ -598,18 +591,9 @@ class M21CIBProfile(CIBProfile):
         return self._tree_unflatten(treedef, new_leaves)
 
     
-    def m_dot(self, halo_model, m, z):
+    def _m_dot(self, halo_model, m, z):
         """
-        Compute the halo mass accretion rate in the Maniyar et al. model.
-
-        The accretion rate is given by
-
-        .. math::
-
-            \\dot{M}(M, z) = 46.1 \\, (1 + 1.11 z) \\, E(z)
-            \\left(\\frac{M}{10^{12} M_{\\odot}}\\right)^{1.1},
-
-        where :math:`E(z) = H(z) / H_0`.
+        Compute the Maniyar et al. halo mass accretion rate.
 
         Parameters
         ----------
@@ -635,39 +619,9 @@ class M21CIBProfile(CIBProfile):
         return 46.1 * (1.0 + 1.11 * z[None, :]) * E_z[None, :] * (m[:, None] / 1e12) ** 1.1
 
 
-    def sfr(self, halo_model, m, z):
+    def _sfr(self, halo_model, m, z):
         """
-        Compute the star-formation rate in the Maniyar et al. model.
-    
-        The star-formation rate is modeled as
-    
-        .. math::
-    
-            \\mathrm{SFR}(M, z) = 10^{10} \\, f_b \\, \\dot{M}(M, z)
-            \\, \\mathrm{SFR}_c(M, z),
-    
-        where :math:`f_b = \\Omega_b / \\Omega_{m,0}` and
-    
-        .. math::
-    
-            \\mathrm{SFR}_c(M, z) = \\eta_{\\max}
-            \\exp\\left[
-            -\\frac{\\left(\\ln M - \\ln M_{\\mathrm{eff}}\\right)^2}
-            {2 \\, \\sigma_{\\ln M}^2(M, z)}
-            \\right].
-    
-        The logarithmic width is defined as
-    
-        .. math::
-    
-            \\sigma_{\\ln M}^2(M, z) =
-            \\left[
-            \\sigma_{\\ln M}^{\\star}
-            - H\\!\\left(M_{\\mathrm{eff}} - M\\right)
-            \\, \\tau \\, \\max\\left[0, z - z_c\\right]
-            \\right]^2,
-    
-        where :math:`H(x)` is the Heaviside function.
+        Compute the Maniyar et al. star-formation rate.
 
         Parameters
         ----------
@@ -694,7 +648,7 @@ class M21CIBProfile(CIBProfile):
         sigma2_lnM = jnp.where(m[:, None] < M_eff,sigma2_LM, (jnp.sqrt(sigma2_LM) - tau * jnp.maximum(0.0, z_c - z[None, :]))**2,)
 
         # Get the halo accretion rate, baryon fraction, and also take log of relevant quantities
-        Mdot = self.m_dot(halo_model, m, z)
+        Mdot = self._m_dot(halo_model, m, z)
         logM = jnp.log(m)[:, None]
         logMeff = jnp.log(M_eff)
         f_b = cparams["Omega_b"] / cparams["Omega0_m"]
@@ -724,8 +678,42 @@ class M21CIBProfile(CIBProfile):
             L_\\nu^{\\mathrm{gal}}(M, z) = 4\\pi \\, S_\\nu(z, \\nu)
             \\, \\mathrm{SFR}(M, z),
 
-        where :math:`s_\\nu(z, \\nu)` is obtained by interpolation from the
-        tabulated spectral template used in the implementation.
+        where :math:`S_\\nu(z, \\nu)` is obtained by interpolation from the
+        tabulated spectral template used in the implementation,
+
+        .. math::
+
+            \\mathrm{SFR}(M, z) = 10^{10} \\, f_b \\, \\dot{M}(M, z)
+            \\, \\mathrm{SFR}_c(M, z),
+
+        with :math:`f_b = \\Omega_b / \\Omega_{m,0}`,
+
+        .. math::
+
+            \\mathrm{SFR}_c(M, z) = \\eta_{\\max}
+            \\exp\\left[
+            -\\frac{\\left(\\ln M - \\ln M_{\\mathrm{eff}}\\right)^2}
+            {2 \\, \\sigma_{\\ln M}^2(M, z)}
+            \\right],
+
+        .. math::
+
+            \\sigma_{\\ln M}^2(M, z) =
+            \\left[
+            \\sigma_{\\ln M}^{\\star}
+            - H\\!\\left(M_{\\mathrm{eff}} - M\\right)
+            \\, \\tau \\, \\max\\left[0, z - z_c\\right]
+            \\right]^2,
+
+        and
+
+        .. math::
+
+            \\dot{M}(M, z) = 46.1 \\, (1 + 1.11 z) \\, E(z)
+            \\left(\\frac{M}{10^{12} M_{\\odot}}\\right)^{1.1},
+
+        where :math:`H(x)` is the Heaviside function and
+        :math:`E(z) = H(z) / H_0`.
 
         Parameters
         ----------
@@ -744,7 +732,7 @@ class M21CIBProfile(CIBProfile):
         """
         # Maniyar model logic: 4pi * s_nu * SFR
         s_nu = self._s_nu_interp(z, self.nu)[None, :]
-        sfr = self.sfr(halo_model, m, z)
+        sfr = self._sfr(halo_model, m, z)
         return 4 * jnp.pi * s_nu * sfr
 
 
