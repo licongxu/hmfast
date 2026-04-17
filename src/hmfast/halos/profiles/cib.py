@@ -154,7 +154,7 @@ class S12CIBProfile(CIBProfile):
         return Phi_z
 
 
-    def theta(self, z, nu):
+    def theta(self, z):
         """
         Compute the Shang et al. spectral energy distribution factor.
 
@@ -186,7 +186,7 @@ class S12CIBProfile(CIBProfile):
         float or jnp.ndarray
             Spectral energy distribution factor :math:`\\Theta(\\nu, z)`.
         """
-        
+        nu = self.nu * (1 + z)
         T0, alpha, beta, gamma = self.T0, self.alpha, self.beta, self.gamma
     
         h = Const._h_P_  # Planck [J s]
@@ -238,9 +238,7 @@ class S12CIBProfile(CIBProfile):
             Halo mass or masses.
         z : float or jnp.ndarray
             Redshift(s).
-        nu : float or jnp.ndarray
-            Observed frequency or frequencies in GHz.
-
+    
         Returns
         -------
         jnp.ndarray
@@ -250,7 +248,7 @@ class S12CIBProfile(CIBProfile):
         # Shang model logic: L0 * Phi(z) * Sigma(m) * Theta(nu_eff)
         phi_z = jnp.atleast_1d(self.phi(z))[None, :]
         sigma_m = jnp.atleast_1d(self.sigma(m))[:, None]
-        theta_val = jnp.atleast_1d(self.theta(z, self.nu * (1 + z)))[None, :]
+        theta_val = jnp.atleast_1d(self.theta(z))[None, :]
         return self.L0 * phi_z * sigma_m * theta_val
 
 
@@ -278,8 +276,6 @@ class S12CIBProfile(CIBProfile):
             Host halo mass or masses.
         z : float or jnp.ndarray
             Redshift(s).
-        nu : float or jnp.ndarray
-            Observed frequency or frequencies in GHz.
 
         Returns
         -------
@@ -328,8 +324,6 @@ class S12CIBProfile(CIBProfile):
             Halo mass or masses.
         z : float or jnp.ndarray
             Redshift(s).
-        nu : float or jnp.ndarray
-            Observed frequency or frequencies in GHz.
 
         Returns
         -------
@@ -366,8 +360,6 @@ class S12CIBProfile(CIBProfile):
             Halo mass grid in :math:`M_\\odot / h`.
         z : float or jnp.ndarray
             Redshift grid.
-        nu : float or jnp.ndarray
-            Observed frequency or frequencies in GHz.
 
         Returns
         -------
@@ -419,8 +411,6 @@ class S12CIBProfile(CIBProfile):
             Halo mass grid.
         z : float or jnp.ndarray
             Redshift grid.
-        nu : float or jnp.ndarray
-            Observed frequency or frequencies in GHz.
 
         Returns
         -------
@@ -450,7 +440,6 @@ class S12CIBProfile(CIBProfile):
         nu = self.nu
         h = cparams["h"]
        
-        #nu = self.nu 
         chi = halo_model.cosmology.angular_diameter_distance(z) * (1 + z) 
 
         # Compute the physical mass for ls and lc and then _u_k_matter from Tracer
@@ -649,34 +638,36 @@ class M21CIBProfile(CIBProfile):
     def sfr(self, halo_model, m, z):
         """
         Compute the star-formation rate in the Maniyar et al. model.
-
+    
         The star-formation rate is modeled as
-
+    
         .. math::
-
+    
             \\mathrm{SFR}(M, z) = 10^{10} \\, f_b \\, \\dot{M}(M, z)
-            \\, \\eta(M, z),
-
+            \\, \\mathrm{SFR}_c(M, z),
+    
         where :math:`f_b = \\Omega_b / \\Omega_{m,0}` and
-
+    
         .. math::
-
-            \\eta(M, z) = \\eta_{\\max}
+    
+            \\mathrm{SFR}_c(M, z) = \\eta_{\\max}
             \\exp\\left[
             -\\frac{\\left(\\ln M - \\ln M_{\\mathrm{eff}}\\right)^2}
-            {2 \\sigma_{\\ln M}^2(z)}
+            {2 \\, \\sigma_{\\ln M}^2(M, z)}
             \\right].
-
-        The width is implemented as
-
+    
+        The logarithmic width is defined as
+    
         .. math::
-
-            \\sigma_{\\ln M}^2(z) =
-            \\begin{cases}
-            \\sigma_{LM}^2, & M < M_{\\mathrm{eff}}, \\
-            \\left(\\sqrt{\\sigma_{LM}^2} - \\tau \\max(0, z_c - z)\\right)^2,
-            & M \\ge M_{\\mathrm{eff}}.
-            \\end{cases}
+    
+            \\sigma_{\\ln M}^2(M, z) =
+            \\left[
+            \\sigma_{\\ln M}^{\\star}
+            - H\\!\\left(M_{\\mathrm{eff}} - M\\right)
+            \\, \\tau \\, \\max\\left[0, z - z_c\\right]
+            \\right]^2,
+    
+        where :math:`H(x)` is the Heaviside function.
 
         Parameters
         ----------
@@ -730,7 +721,7 @@ class M21CIBProfile(CIBProfile):
 
         .. math::
 
-            L_\\nu^{\\mathrm{gal}}(M, z) = 4\\pi \\, s_\\nu(z, \\nu)
+            L_\\nu^{\\mathrm{gal}}(M, z) = 4\\pi \\, S_\\nu(z, \\nu)
             \\, \\mathrm{SFR}(M, z),
 
         where :math:`s_\\nu(z, \\nu)` is obtained by interpolation from the
@@ -744,8 +735,6 @@ class M21CIBProfile(CIBProfile):
             Halo mass or masses.
         z : float or jnp.ndarray
             Redshift(s).
-        nu : float or jnp.ndarray
-            Observed frequency or frequencies in GHz.
 
         Returns
         -------
@@ -786,8 +775,6 @@ class M21CIBProfile(CIBProfile):
             Host halo mass or masses.
         z : float or jnp.ndarray
             Redshift(s).
-        nu : float or jnp.ndarray
-            Observed frequency or frequencies in GHz.
 
         Returns
         -------
@@ -838,9 +825,7 @@ class M21CIBProfile(CIBProfile):
             Halo mass or masses.
         z : float or jnp.ndarray
             Redshift(s).
-        nu : float or jnp.ndarray
-            Observed frequency or frequencies in GHz.
-
+        
         Returns
         -------
         jnp.ndarray
@@ -877,8 +862,6 @@ class M21CIBProfile(CIBProfile):
             Halo mass grid in :math:`M_\\odot / h`.
         z : float or jnp.ndarray
             Redshift grid.
-        nu : float or jnp.ndarray
-            Observed frequency or frequencies in GHz.
 
         Returns
         -------
@@ -931,9 +914,7 @@ class M21CIBProfile(CIBProfile):
             Halo mass grid.
         z : float or jnp.ndarray
             Redshift grid.
-        nu : float or jnp.ndarray
-            Observed frequency or frequencies in GHz.
-
+        
         Returns
         -------
         float or jnp.ndarray
@@ -1021,10 +1002,7 @@ class M21CIBProfile(CIBProfile):
             :math:`(k, u_\\nu)` where the profile array has shape
             :math:`(N_k, N_M, N_z)`.
         """
-        # Get the individual components (scaled correctly by h_factors and 4pi)
-        
-
-        nu = self.nu
+    
         sat_term, cen_term = self._sat_and_cen_contribution(halo_model, k, m, z)
 
         moment_funcs = [
