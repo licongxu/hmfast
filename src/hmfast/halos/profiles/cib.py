@@ -154,7 +154,7 @@ class S12CIBProfile(CIBProfile):
         return Phi_z
 
 
-    def theta(self,  z, nu):
+    def theta(self, z, nu):
         """
         Compute the Shang et al. spectral energy distribution factor.
 
@@ -215,7 +215,7 @@ class S12CIBProfile(CIBProfile):
         return Theta
 
 
-    def l_gal(self, halo_model, m, z, nu):
+    def l_gal(self, halo_model, m, z):
         """
         Compute the Shang et al. galaxy luminosity assigned to a halo.
 
@@ -250,12 +250,12 @@ class S12CIBProfile(CIBProfile):
         # Shang model logic: L0 * Phi(z) * Sigma(m) * Theta(nu_eff)
         phi_z = jnp.atleast_1d(self.phi(z))[None, :]
         sigma_m = jnp.atleast_1d(self.sigma(m))[:, None]
-        theta_val = jnp.atleast_1d(self.theta(z, nu * (1 + z)))[None, :]
+        theta_val = jnp.atleast_1d(self.theta(z, self.nu * (1 + z)))[None, :]
         return self.L0 * phi_z * sigma_m * theta_val
 
 
 
-    def l_sat(self, halo_model, m, z, nu):
+    def l_sat(self, halo_model, m, z):
         """
         Compute the total satellite CIB luminosity in the Shang et al. model.
 
@@ -298,7 +298,7 @@ class S12CIBProfile(CIBProfile):
             # Subhalo mass function
             dn_dlnms = halo_model.subhalo_mass_model.dndlnmu(m_single, ms_grid)
             # Standard Shang luminosity
-            l_gal_grid = self.l_gal(halo_model, ms_grid, z, nu)
+            l_gal_grid = self.l_gal(halo_model, ms_grid, z)
             
             return jnp.sum(dn_dlnms[:, None] * l_gal_grid * dlnms, axis=0)
 
@@ -306,7 +306,7 @@ class S12CIBProfile(CIBProfile):
 
 
      
-    def l_cen(self, halo_model, m, z, nu):
+    def l_cen(self, halo_model, m, z):
         """
         Compute the central-galaxy CIB luminosity in the Shang et al. model.
 
@@ -339,12 +339,12 @@ class S12CIBProfile(CIBProfile):
         """
         # Shang: Central mass is the full halo mass
         n_cen = jnp.where(m > self.M_min, 1.0, 0.0)
-        l_gal = self.l_gal(halo_model, m, z, nu)
+        l_gal = self.l_gal(halo_model, m, z)
         return n_cen[:, None] * l_gal
 
 
      
-    def j_bar_nu(self, halo_model, m, z, nu):
+    def j_bar_nu(self, halo_model, m, z):
         """
         Compute the mean comoving emissivity in the Shang et al. CIB model.
 
@@ -357,14 +357,7 @@ class S12CIBProfile(CIBProfile):
             \\left[L_{\\nu}^{\\mathrm{cen}}(M, z) + L_{\\nu}^{\\mathrm{sat}}(M, z)\\right],
 
         where the luminosities are evaluated at the physical halo mass.
-        If halo-model consistency is enabled, the implementation adds the
-        low-mass counterterm
-
-        .. math::
-
-            \\Delta \\bar{j}_\\nu(z) = \\frac{h^3}{4 \\pi}
-            \\, n_{\\min}(z) \\, L_{\\nu}^{\\mathrm{cen}}(M_{\\min}, z).
-
+    
         Parameters
         ----------
         halo_model : HaloModel
@@ -386,8 +379,8 @@ class S12CIBProfile(CIBProfile):
 
         # Get the luminosities (ensure physical mass if needed)
         m_phys = m / h
-        lc = self.l_cen(halo_model, m_phys, z, nu) # Shape: (Nm, Nz)
-        ls = self.l_sat(halo_model, m_phys, z, nu) # Shape: (Nm, Nz)
+        lc = self.l_cen(halo_model, m_phys, z) # Shape: (Nm, Nz)
+        ls = self.l_sat(halo_model, m_phys, z) # Shape: (Nm, Nz)
         
         # Get the halo mass function dn/dlnm 
         dndlnm = halo_model.halo_mass_function(m, z) # Shape: (Nm, Nz)
@@ -405,7 +398,7 @@ class S12CIBProfile(CIBProfile):
         return j_bar * h**3 / (4 * jnp.pi) 
 
 
-    def monopole(self, halo_model, m, z, nu):
+    def monopole(self, halo_model, m, z):
         """
         Compute the CIB monopole intensity in the Shang et al. CIB model.
 
@@ -437,7 +430,7 @@ class S12CIBProfile(CIBProfile):
        
     
         # Get the mean comoving emissivity (Shape: Nz)
-        j_bar = self.j_bar_nu(halo_model, m, z, nu)
+        j_bar = self.j_bar_nu(halo_model, m, z)
         
         # dchi/dz = c / H(z), a(z) = 1/(1+z)
         dchi_dz = 1.0 / halo_model.cosmology.hubble_parameter(z)
@@ -462,8 +455,8 @@ class S12CIBProfile(CIBProfile):
 
         # Compute the physical mass for ls and lc and then _u_k_matter from Tracer
         m_physical = m/h
-        ls = self.l_sat(halo_model, m_physical, z, nu)
-        lc = self.l_cen(halo_model, m_physical, z, nu)
+        ls = self.l_sat(halo_model, m_physical, z)
+        lc = self.l_cen(halo_model, m_physical, z)
 
         # Apply flux cut if flux cut is not None
         #mask = ((ls + lc) / (4 * jnp.pi * (1 + z) * chi**2) * 1e3 > self.flux_cut) 
@@ -729,7 +722,7 @@ class M21CIBProfile(CIBProfile):
 
         
 
-    def l_gal(self, halo_model, m, z, nu):
+    def l_gal(self, halo_model, m, z):
         """
         Compute the Maniyar et al. galaxy luminosity assigned to a halo.
 
@@ -761,13 +754,13 @@ class M21CIBProfile(CIBProfile):
             :math:`(N_M, N_z)`.
         """
         # Maniyar model logic: 4pi * s_nu * SFR
-        s_nu = self._s_nu_interp(z, nu)[None, :]
+        s_nu = self._s_nu_interp(z, self.nu)[None, :]
         sfr = self.sfr(halo_model, m, z)
         return 4 * jnp.pi * s_nu * sfr
 
 
 
-    def l_sat(self, halo_model, m, z, nu):
+    def l_sat(self, halo_model, m, z):
         """
         Compute the total satellite CIB luminosity in the Maniyar et al. model.
 
@@ -814,8 +807,8 @@ class M21CIBProfile(CIBProfile):
             dn_dlnms = halo_model.subhalo_mass_model.dndlnmu(m_single, ms_grid)
             
             # Maniyar Clamping Logic
-            sfr_i = self.l_gal(halo_model, ms_grid, z, nu)
-            sfr_ii = self.l_gal(halo_model, ms_max, z, nu) * ms_grid[:, None] / ms_max
+            sfr_i = self.l_gal(halo_model, ms_grid, z)
+            sfr_ii = self.l_gal(halo_model, ms_max, z) * ms_grid[:, None] / ms_max
             l_gal_grid = jnp.minimum(sfr_i, sfr_ii)
             
             return jnp.sum(dn_dlnms[:, None] * l_gal_grid * dlnms, axis=0)
@@ -823,7 +816,7 @@ class M21CIBProfile(CIBProfile):
         return jax.vmap(integrate_single_halo)(m)
 
 
-    def l_cen(self, halo_model, m, z, nu):
+    def l_cen(self, halo_model, m, z):
         """
         Compute the central-galaxy CIB luminosity in the Maniyar et al. model.
 
@@ -857,12 +850,12 @@ class M21CIBProfile(CIBProfile):
         # Maniyar: Central mass is reduced by the subhalo fraction
         m_eff = m * (1 - self.f_sub)
         n_cen = jnp.where(m_eff > self.M_min, 1.0, 0.0)
-        l_gal = self.l_gal(halo_model, m_eff, z, nu)
+        l_gal = self.l_gal(halo_model, m_eff, z)
         return n_cen[:, None] * l_gal
 
     
     
-    def j_bar_nu(self, halo_model, m, z, nu):
+    def j_bar_nu(self, halo_model, m, z):
         """
         Compute the mean comoving emissivity in the Maniyar et al. CIB model.
 
@@ -875,13 +868,6 @@ class M21CIBProfile(CIBProfile):
             \\left[L_{\\nu}^{\\mathrm{cen}}(M, z) + L_{\\nu}^{\\mathrm{sat}}(M, z)\\right],
 
         where the luminosities are evaluated at the physical halo mass.
-        If halo-model consistency is enabled, the implementation adds the
-        low-mass counterterm
-
-        .. math::
-
-            \\Delta \\bar{j}_\\nu(z) = \\frac{h^3}{4 \\pi}
-            \\, n_{\\min}(z) \\, L_{\\nu}^{\\mathrm{cen}}(M_{\\min}, z).
 
         Parameters
         ----------
@@ -904,8 +890,8 @@ class M21CIBProfile(CIBProfile):
 
         # Get the luminosities (ensure physical mass if needed)
         m_phys = m / h
-        lc = self.l_cen(halo_model, m_phys, z, nu) # Shape: (Nm, Nz)
-        ls = self.l_sat(halo_model, m_phys, z, nu) # Shape: (Nm, Nz)
+        lc = self.l_cen(halo_model, m_phys, z) # Shape: (Nm, Nz)
+        ls = self.l_sat(halo_model, m_phys, z) # Shape: (Nm, Nz)
         
         # Get the halo mass function dn/dlnm 
         dndlnm = halo_model.halo_mass_function(m, z) # Shape: (Nm, Nz)
@@ -924,7 +910,7 @@ class M21CIBProfile(CIBProfile):
         return j_bar * h**3 / (4 * jnp.pi) * maniyar_factor
 
 
-    def monopole(self, halo_model, m, z, nu):
+    def monopole(self, halo_model, m, z):
         """
         Compute the CIB monopole intensity in the Maniyar et al. CIB model.
 
@@ -955,7 +941,7 @@ class M21CIBProfile(CIBProfile):
         """
     
         # Get the mean comoving emissivity (Shape: Nz)
-        j_bar = self.j_bar_nu(halo_model, m, z, nu)
+        j_bar = self.j_bar_nu(halo_model, m, z)
         
         # dchi/dz = c / H(z), a(z) = 1/(1+z)
         dchi_dz = 1.0 / halo_model.cosmology.hubble_parameter(z)
@@ -974,13 +960,12 @@ class M21CIBProfile(CIBProfile):
         nu = self.nu
         h = halo_model.cosmology.H0 / 100
        
-        #nu = self.nu 
         chi = halo_model.cosmology.angular_diameter_distance(z) * (1 + z) 
 
         # Compute the physical mass for ls and lc and then _u_k_matter from Tracer
         m_physical = m/h
-        ls = self.l_sat(halo_model, m_physical, z, nu)
-        lc = self.l_cen(halo_model, m_physical, z, nu)
+        ls = self.l_sat(halo_model, m_physical, z)
+        lc = self.l_cen(halo_model, m_physical, z)
 
         # Apply flux cut if flux cut is not None
         #mask = ((ls + lc) / (4 * jnp.pi * (1 + z) * chi**2) * 1e3 > self.flux_cut) 
