@@ -83,26 +83,59 @@ class HaloModel:
         return obj
 
     
-    def update(self, **kwargs):
-        """
-        Return a new HaloModel instance with updated cosmology parameters.
+    # def update(self, **kwargs):
+    #     """
+    #     Return a new HaloModel instance with updated cosmology parameters.
 
-        Parameters
-        ----------
-        **kwargs : dict
-            Cosmological parameters to update.
+    #     Parameters
+    #     ----------
+    #     **kwargs : dict
+    #         Cosmological parameters to update.
 
-        Returns
-        -------
-        HaloModel
-            New instance with updated cosmology.
-        """
+    #     Returns
+    #     -------
+    #     HaloModel
+    #         New instance with updated cosmology.
+    #     """
         
-        new_emulator = self.cosmology.update(**kwargs)
+    #     new_emulator = self.cosmology.update(**kwargs)
+    #     children, aux_data = self._tree_flatten()
+    #     new_instance = self._tree_unflatten(aux_data, (new_emulator,))
+        
+    #     return new_instance
+
+    def update(self, cosmology=None, mass_model=None, bias_model=None, subhalo_mass_model=None, concentration=None, mass_definition=None, 
+               hm_consistency=None, convert_masses=None):
+        """
+        Return a new HaloModel instance with updated components.
+        Only provided arguments are updated; others remain unchanged.
+        """
+        # Flatten current state
         children, aux_data = self._tree_flatten()
-        new_instance = self._tree_unflatten(aux_data, (new_emulator,))
-        
-        return new_instance
+        # Unpack
+        (cosmo_child,) = children
+        (
+            mass_model0, bias_model0, subhalo_mass_model0, concentration0,
+            mass_definition0, hm_consistency0, convert_masses0, tophat_instance0
+        ) = aux_data
+    
+        # Update only provided components
+        new_cosmo = cosmology if cosmology is not None else cosmo_child
+        new_mass_model = mass_model if mass_model is not None else mass_model0
+        new_bias_model = bias_model if bias_model is not None else bias_model0
+        new_subhalo_mass_model = subhalo_mass_model if subhalo_mass_model is not None else subhalo_mass_model0
+        new_concentration = concentration if concentration is not None else concentration0
+        new_mass_definition = mass_definition if mass_definition is not None else mass_definition0
+        new_hm_consistency = hm_consistency if hm_consistency is not None else hm_consistency0
+        new_convert_masses = convert_masses if convert_masses is not None else convert_masses0
+    
+        # Reuse the existing tophat instance (or update if needed)
+        new_aux_data = (
+            new_mass_model, new_bias_model, new_subhalo_mass_model, new_concentration,
+            new_mass_definition, new_hm_consistency, new_convert_masses, tophat_instance0
+        )
+        # Use _tree_unflatten to create the new instance efficiently
+        return self._tree_unflatten(new_aux_data, (new_cosmo,))
        
 
     #@partial(jax.jit, static_argnums=0)
@@ -190,7 +223,7 @@ class HaloModel:
             c_{\\Delta} \\, \\frac{r_{\\Delta'}}{r_{\\Delta}}
             \\right)},
         
-        where :math:`f_\\mathrm{NFW}(c) = \\ln(1+c) - c/(1+c)` and
+        where :math:`f_\\mathrm{NFW}(x) = \\ln(1+x) - x/(1+x)` and
         :math:`r_\\Delta = \\left[3 M_\\Delta / (4 \\pi \\, \\Delta \\, \\rho_\\mathrm{ref}(z))\\right]^{1/3}`.
         Here :math:`r_{\\Delta'}` is defined analogously using
         :math:`M_{\\Delta'}` and :math:`\\Delta'`.
