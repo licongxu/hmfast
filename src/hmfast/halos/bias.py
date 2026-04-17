@@ -90,8 +90,8 @@ class T10HaloBias(HaloBias):
     Halo bias model from `Tinker et al. (2010) <https://ui.adsabs.harvard.edu/abs/2010ApJ...724..878T/abstract>`_.
 
     This class implements the large-scale halo bias relation as a function of
-    peak height :math:`\\nu` and redshift, calibrated for spherical-overdensity
-    halo definitions.
+    peak height :math:`\\nu` and redshift, calibrated for the
+    :math:`200\\mathrm{m}` halo definition.
     """
 
     def __init__(self):
@@ -211,23 +211,27 @@ class T10HaloBias(HaloBias):
         
         - :math:`\\nu = \\delta_c / \\sigma(M)` is the peak height,
         - :math:`\\delta_c \\approx 1.686` is the critical density for collapse,
-        - :math:`A, a, B, b, C, c` and the definitions of :math:`\\epsilon_1, E_1, \\epsilon_2, E_2` are given in the original paper (see Tinker et al. 2010, ApJ 724, 878, Table 2).
+        - :math:`A, a, B, b, C, c` are given in `Tinker et al. (2010) <https://ui.adsabs.harvard.edu/abs/2010ApJ...724..878T/abstract>`_, Table 2.
+        - :math:`\\epsilon_1, E_1, \\epsilon_2, E_2` are given in `Hoffmann et al. (2015) <https://ui.adsabs.harvard.edu/abs/2015MNRAS.450.1674H/abstract>`_, Table 5.
         
         Please refer to the original paper for the parameter values and full expressions.
         
         Parameters
         ----------
+        halo_model : HaloModel
+            Halo-model instance supplying the cosmology and mass definition
+            used to evaluate the bias.
         m : array-like
             Halo mass grid.
         z : array-like
             Redshift grid.
+        order : int, optional
+            Bias order to evaluate. Supported values are ``1`` and ``2``.
         
         Returns
         -------
-        b1 : array-like
-            First-order (linear) halo bias, shape (len(m), len(z)).
-        b2 : array-like
-            Second-order (quadratic) halo bias, shape (len(m), len(z)).
+        array-like
+            Halo bias values of the requested order, shape ``(len(m), len(z))``.
         """
        
        

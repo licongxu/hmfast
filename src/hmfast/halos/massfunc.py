@@ -10,11 +10,11 @@ class HaloMass(ABC):
     """
     Abstract base class for halo mass function models.
 
-    Subclasses provide the dimensionless fitting function :math:`f_\\sigma`
+    Subclasses provide the dimensionless fitting function :math:`f(\\sigma)`
     entering :math:`dn / d\\ln M`, together with a public evaluator for the
     halo mass function on a mass-redshift grid.
     """
-    
+
     @partial(jax.jit, static_argnums=(0,))
     def _compute_hmf_grid(self, halo_model):
         """
@@ -53,12 +53,9 @@ class HaloMass(ABC):
         Omega0_cb = cparams['Omega0_cb']
         M_grid = 4.0 * jnp.pi / 3.0 * Omega0_cb * rho_crit_0 * (R_grid ** 3) * h ** 3
     
-        # Overdensity threshold
-        delta_numeric = halo_model._delta_numeric(z_grid)
-        delta_mean = halo_model._convert_reference(z_grid, delta_numeric, from_ref=halo_model.mass_definition.reference, to_ref='mean') 
     
         # Halo mass function grid, shape: (n_z, n_R)
-        hmf_grid = halo_model.mass_model.f_sigma(sigma_grid, z_grid, delta_mean)
+        hmf_grid = halo_model.mass_model.f_sigma(halo_model, sigma_grid, z_grid)
     
         # Compute d n / d ln(M)
         dlnnu_dlnR_grid = -dvar_grid * R_grid / jnp.exp(2. * ln_sigma_grid)
@@ -73,32 +70,33 @@ class HaloMass(ABC):
 
 
     @abstractmethod
-    def f_sigma(self, sigmas, z, delta_mean):
+    def f_sigma(self, halo_model, sigmas, z):
         """
-        Evaluate the dimensionless function :math:`f_\\sigma` entering the
+        Evaluate the dimensionless function :math:`f(\\sigma)` entering the
         halo mass function.
 
         In these models,
 
         .. math::
 
-            \frac{dn}{d\ln M} = f_\sigma \, \frac{d\ln \nu}{d\ln R}
-            \frac{1}{4\pi R^3 h^3}
+            \\frac{dn}{d\\ln M} = f(\\sigma) \, \\frac{d\\ln \\nu}{d\\ln R}
+            \\frac{1}{4\\pi R^3 h^3}
 
         Parameters
         ----------
+        halo_model : HaloModel
+            Halo model instance supplying the cosmology and mass definition
+            used to evaluate the fitting function.
         sigmas : array-like
             Root-mean-square linear density fluctuation
             :math:`\\sigma(R, z)`.
-        z : float or array-like
-            Redshift(s).
-        delta_mean : float or array-like
-            Spherical-overdensity threshold with respect to the mean density.
+        z : float or array-like, optional
+            Redshift(s), when required by the specific mass-function model.
 
         Returns
         -------
         array-like
-            Values of :math:`f_\\sigma` evaluated at the requested inputs.
+            Values of :math:`f(\\sigma)` evaluated at the requested inputs.
         """
         pass
 
@@ -107,16 +105,20 @@ class T08HaloMass(HaloMass):
     """
     Halo mass function from `Tinker et al. (2008) <https://ui.adsabs.harvard.edu/abs/2008ApJ...688..709T/abstract>`_.
 
-    Valid for spherical overdensity masses (e.g., 200m, 500c).
+    Calibrated for spherical-overdensity halo masses.
+
+    In this implementation, the fitting coefficients are interpolated over the
+    tabulated overdensity grid :math:`\\Delta_\\mathrm{m} = 200, 300, 400,
+    600, 800, 1200, 1600, 2400, 3200`.
     """
 
     def __init__(self):
         pass
 
     @partial(jax.jit, static_argnums=(0,))
-    def f_sigma(self, sigmas, z, delta_mean):
+    def f_sigma(self, halo_model, sigmas, z):
         """
-        Evaluate the Tinker et al. (2008) fitting function :math:`f_\\sigma`.
+        Evaluate the Tinker et al. (2008) fitting function :math:`f(\\sigma)`.
 
         .. math::
 
@@ -124,25 +126,32 @@ class T08HaloMass(HaloMass):
             \\exp\\left(-\\frac{c}{\\sigma^2}\\right)
 
         where :math:`A`, :math:`a`, :math:`b`, and :math:`c` depend on the
-        overdensity threshold and redshift.
+        overdensity threshold and redshift inferred from ``halo_model``. The
+        coefficients are interpolated over the tabulated overdensities
+        :math:`\\Delta_\\mathrm{m} = 200, 300, 400, 600, 800, 1200, 1600,
+        2400, 3200`.
     
         Parameters
         ----------
+        halo_model : HaloModel
+            Halo model instance supplying the cosmology and mass definition
+            used to evaluate the fitting function.
         sigmas : jnp.ndarray
             Root-mean-square linear density fluctuation
             :math:`\\sigma(R, z)`.
         z : float or jnp.ndarray
             Redshift(s) corresponding to ``sigmas``.
-        delta_mean : float or jnp.ndarray
-            Halo overdensity :math:`\\Delta` with respect to the mean density.
+        
     
         Returns
         -------
         f_sigma : jnp.ndarray
-            Values of :math:`f_\\sigma` with shape matching ``sigmas``.
+            Values of :math:`f(\\sigma)` with shape matching ``sigmas``.
         """
         
-        # Convert delta_mean to log scale
+        # Overdensity threshold converted to log scale
+        delta_numeric = halo_model._delta_numeric(z)
+        delta_mean = halo_model._convert_reference(z, delta_numeric, from_ref=halo_model.mass_definition.reference, to_ref='mean') 
         delta_mean = jnp.log10(delta_mean)
         
         # Define parameters as JAX arrays
@@ -172,9 +181,13 @@ class T08HaloMass(HaloMass):
     
         .. math::
     
-            \\frac{dn}{d\\ln M} = \\nu f(\\nu) \\frac{\\rho_{m,0}}{M} \\left| \\frac{d\\ln \\sigma^{-1}}{d\\ln M} \\right|
+            \\frac{dn}{d\\ln M} = f(\\sigma) \, \\frac{d\\ln \\nu}{d\\ln R}
+            \\frac{1}{4\\pi R^3 h^3}
     
-        where :math:`\\nu = \\delta_c / \\sigma(M)`, :math:`f(\\nu)` is the fitting function, :math:`\\rho_{m,0}` is the present-day mean matter density, :math:`M` is the halo mass, and :math:`\\sigma(M)` is the variance of the density field smoothed on mass scale :math:`M`.
+        where :math:`f(\\sigma)` is the Tinker et al. (2008) fitting function,
+        calibrated over a tabulated set of spherical-overdensity definitions,
+        and :math:`\\sigma(M)` is the variance of the density field smoothed on
+        the mass scale :math:`M`.
     
         Parameters
         ----------
@@ -206,35 +219,37 @@ class T10HaloMass(HaloMass):
     """
     Halo mass function from `Tinker et al. (2010) <https://ui.adsabs.harvard.edu/abs/2010ApJ...724..878T/abstract>`_.
 
-    Valid for spherical overdensity masses (e.g., 200m, 500c).
+    Calibrated for spherical-overdensity halo masses.
     """
 
     def __init__(self):
         pass
 
     @partial(jax.jit, static_argnums=(0,))
-    def f_sigma(self, sigmas, z, delta_mean):
+    def f_sigma(self, halo_model, sigmas, z):
         """
         Evaluate the Tinker et al. (2010) fitting function entering
         :math:`dn / d\\ln M`.
 
         .. math::
 
-            f(\\nu, z) = 0.5 \\alpha \\left[1 + (\\beta^2 \\nu)^{-\\phi}\\right]
-            \\nu^{\\eta} \\exp\\left(-\\frac{\\gamma \\nu}{2}\\right) \\sqrt{\\nu}
+            f(\\nu) = 0.5 \\alpha \\left[1 + (\\beta^2 \\nu)^{-\\phi}\\right]
+             \\nu^{\\eta} \\exp\\left(-\\frac{\\gamma \\nu}{2}\\right) \\sqrt{\\nu}
 
-        where :math:`\\nu = \\delta_c^2 / \\sigma^2` and the fitting parameters are
-        redshift dependent.
+        where :math:`\\nu = \\delta_c^2 / \\sigma^2` with
+        :math:`\\delta_c = 1.686`, and the fitting parameters are redshift
+        dependent and evaluated using the redshift grid stored on
+        ``halo_model``.
     
         Parameters
         ----------
+        halo_model : HaloModel
+            Halo model instance supplying the cosmology and mass definition
+            used to evaluate the fitting function. The redshift dependence of
+            the fitting parameters is handled internally.
         sigmas : jnp.ndarray
             Root-mean-square linear density fluctuation
             :math:`\\sigma(R, z)`.
-        z : float or jnp.ndarray
-            Redshift(s) corresponding to ``sigmas``.
-        delta_mean : float or jnp.ndarray
-            Halo overdensity :math:`\\Delta` with respect to the mean density.
     
         Returns
         -------
@@ -242,8 +257,7 @@ class T10HaloMass(HaloMass):
             Values of the dimensionless fitting function with shape matching
             ``sigmas``.
         """
-        delta_mean = jnp.log10(delta_mean)
-        delta_c = 1.686 
+        delta_c = 1.686
         log_nu = 2.0 * jnp.log(delta_c) - 2.0 * jnp.log(sigmas)
         nu = jnp.exp(log_nu)
         
@@ -285,7 +299,11 @@ class T10HaloMass(HaloMass):
     
             \\frac{dn}{d\\ln M} = \\nu f(\\nu) \\frac{\\rho_{m,0}}{M} \\left| \\frac{d\\ln \\sigma^{-1}}{d\\ln M} \\right|
     
-        where :math:`\\nu = \\delta_c / \\sigma(M)`, :math:`f(\\nu)` is the fitting function, :math:`\\rho_{m,0}` is the present-day mean matter density, :math:`M` is the halo mass, and :math:`\\sigma(M)` is the variance of the density field smoothed on mass scale :math:`M`.
+        where :math:`\\nu = \\delta_c^2 / \\sigma^2(M)` with
+        :math:`\\delta_c = 1.686`, :math:`f(\\nu)` is the fitting function,
+        :math:`\\rho_{m,0}` is the present-day mean matter density,
+        :math:`M` is the halo mass, and :math:`\\sigma(M)` is the variance of
+        the density field smoothed on mass scale :math:`M`.
     
         Parameters
         ----------

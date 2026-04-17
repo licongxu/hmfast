@@ -25,7 +25,7 @@ class ConstantConcentration(Concentration):
     """
     Constant concentration-mass relation.
 
-    Valid for all mass definitions.
+    Agnostic to the choice of mass definition.
 
     The concentration parameter :math:`c_\\Delta` is fixed to a user-specified value for all halos.
     """
@@ -45,7 +45,7 @@ class D08Concentration(Concentration):
     """
     Concentration-mass relation from `Duffy et al. (2008) <https://ui.adsabs.harvard.edu/abs/2008MNRAS.390L..64D/abstract>`_.
 
-    Valid for 200c, 200m, and virial mass definitions.
+    Calibrated for 200c, 200m, and virial mass definitions.
     """
     def __init__(self):
         pass
@@ -106,7 +106,7 @@ class B13Concentration(Concentration):
     """
     Concentration-mass relation from `Bhattacharya et al. (2013) <https://ui.adsabs.harvard.edu/abs/2013ApJ...766...32B/abstract>`_.
 
-    Valid for 200c, 200m, and virial mass definitions.
+    Calibrated for 200c, 200m, and virial mass definitions.
     """
     def __init__(self):
         pass
@@ -175,7 +175,7 @@ class SC14Concentration(Concentration):
     """
     Concentration-mass relation from `Sanchez-Conde & Prada (2014) <https://ui.adsabs.harvard.edu/abs/2014MNRAS.442.2271S/abstract>`_.
 
-    Valid for 200c mass definition.
+    Calibrated for 200c mass definition.
     """
     def __init__(self):
         pass
