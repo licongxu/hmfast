@@ -17,6 +17,9 @@ class CIBProfile(HaloProfile):
 
 
 class S12CIBProfile(CIBProfile):
+    """
+    CIB profile from `Shang et al. (2012) <https://ui.adsabs.harvard.edu/abs/2012MNRAS.421.2832S/abstract>`_.
+    """
     def __init__(self, nu, L0=6.4e-8, alpha=0.36, beta=1.75, gamma=1.7,
                  T0=24.4, M_eff=10**12.6, sigma2_LM=0.5, 
                  delta=3.6, z_p=1e100, M_min=10**11.5):
@@ -220,7 +223,7 @@ class S12CIBProfile(CIBProfile):
 
         .. math::
 
-            \\L_\\nu^{\\mathrm{gal}}(M, z) = L_0 \\, \\Phi(z) \\, \\Sigma(M)
+            L_\\nu^{\\mathrm{gal}}(M, z) = L_0 \\, \\Phi(z) \\, \\Sigma(M)
             \\, \\Theta\\!\\left((1+z)\\nu, z\\right),
 
         where :math:`\\Phi(z)`, :math:`\\Sigma(M)`, and
@@ -447,7 +450,7 @@ class S12CIBProfile(CIBProfile):
         return intensity
 
 
-    def sat_and_cen_contribution(self, halo_model, k, m, z):
+    def _sat_and_cen_contribution(self, halo_model, k, m, z):
 
         
         cparams = halo_model.cosmology._cosmo_params()
@@ -457,7 +460,7 @@ class S12CIBProfile(CIBProfile):
         #nu = self.nu 
         chi = halo_model.cosmology.angular_diameter_distance(z) * (1 + z) 
 
-        # Compute the physical mass for ls and lc and then u_k_matter from Tracer
+        # Compute the physical mass for ls and lc and then _u_k_matter from Tracer
         m_physical = m/h
         ls = self.l_sat(halo_model, m_physical, z, nu)
         lc = self.l_cen(halo_model, m_physical, z, nu)
@@ -466,7 +469,7 @@ class S12CIBProfile(CIBProfile):
         #mask = ((ls + lc) / (4 * jnp.pi * (1 + z) * chi**2) * 1e3 > self.flux_cut) 
         #lc, ls = jax.lax.cond(self.flux_cut is not None, lambda _: (jnp.where(mask, 0.0, lc), jnp.where(mask, 0.0, ls)), lambda _: (lc, ls), operand=None)
 
-        _, u_m = self.u_k_matter(halo_model, k, m, z)
+        _, u_m = self._u_k_matter(halo_model, k, m, z)
 
         # Compute central and satellite terms
         sat_term =  1  / (4*jnp.pi)    *   (ls[None, :, :] * u_m ) 
@@ -480,8 +483,7 @@ class S12CIBProfile(CIBProfile):
         Compute the first or second CIB profile moment in Fourier space.
 
         Writing :math:`u_m(k, M, z)` for the normalized analytic Fourier
-        transform of the NFW matter profile returned by
-        :meth:`u_k_matter`, the implemented first moment is
+        transform of the NFW profile, the implemented first moment is
 
         .. math::
 
@@ -519,7 +521,7 @@ class S12CIBProfile(CIBProfile):
         """
         # Get the individual components (scaled correctly by h_factors and 4pi)
         
-        sat_term, cen_term = self.sat_and_cen_contribution(halo_model, k, m, z)
+        sat_term, cen_term = self._sat_and_cen_contribution(halo_model, k, m, z)
 
         moment_funcs = [
             lambda _: cen_term + sat_term,                         # prefactor * (lc[None, :, :] + ls[None, :, :] * u_m ) 
@@ -543,6 +545,9 @@ jax.tree_util.register_pytree_node(
 
 
 class M21CIBProfile(CIBProfile):
+    """
+    CIB profile from `Maniyar et al. (2021) <https://ui.adsabs.harvard.edu/abs/2021A%26A...645A..40M/abstract>`_.
+    """
     def __init__(self, nu, eta_max=0.4028, z_c=1.5, tau=1.204, f_sub=0.134, 
                  M_min=10**11.5, M_eff=10**12.6, sigma2_LM=0.5, s_nu=None):
         self.nu = nu
@@ -629,7 +634,7 @@ class M21CIBProfile(CIBProfile):
         halo_model : HaloModel
             Halo model providing the cosmology.
         m : float or jnp.ndarray
-            Halo mass or masses in :math:`M_{\odot}`.
+            Halo mass or masses in :math:`M_{\\odot}`.
         z : float or jnp.ndarray
             Redshift(s).
 
@@ -685,7 +690,7 @@ class M21CIBProfile(CIBProfile):
         halo_model : HaloModel
             Halo model providing the cosmology.
         m : float or jnp.ndarray
-            Halo mass or masses in :math:`M_{\odot}`.
+            Halo mass or masses in :math:`M_{\\odot}`.
         z : float or jnp.ndarray
             Redshift(s).
 
@@ -963,7 +968,7 @@ class M21CIBProfile(CIBProfile):
         return intensity
 
     
-    def sat_and_cen_contribution(self, halo_model, k, m, z):
+    def _sat_and_cen_contribution(self, halo_model, k, m, z):
 
         cparams = halo_model.cosmology._cosmo_params()
         nu = self.nu
@@ -972,7 +977,7 @@ class M21CIBProfile(CIBProfile):
         #nu = self.nu 
         chi = halo_model.cosmology.angular_diameter_distance(z) * (1 + z) 
 
-        # Compute the physical mass for ls and lc and then u_k_matter from Tracer
+        # Compute the physical mass for ls and lc and then _u_k_matter from Tracer
         m_physical = m/h
         ls = self.l_sat(halo_model, m_physical, z, nu)
         lc = self.l_cen(halo_model, m_physical, z, nu)
@@ -981,7 +986,7 @@ class M21CIBProfile(CIBProfile):
         #mask = ((ls + lc) / (4 * jnp.pi * (1 + z) * chi**2) * 1e3 > self.flux_cut) 
         #lc, ls = jax.lax.cond(self.flux_cut is not None, lambda _: (jnp.where(mask, 0.0, lc), jnp.where(mask, 0.0, ls)), lambda _: (lc, ls), operand=None)
 
-        _, u_m = self.u_k_matter(halo_model, k, m, z)
+        _, u_m = self._u_k_matter(halo_model, k, m, z)
 
         # Compute central and satellite terms
         sat_term =  1  / (4*jnp.pi)    *   (ls[None, :, :] * u_m ) 
@@ -995,8 +1000,7 @@ class M21CIBProfile(CIBProfile):
         Compute the first or second CIB profile moment in Fourier space.
 
         Writing :math:`u_m(k, M, z)` for the normalized analytic Fourier
-        transform of the NFW matter profile returned by
-        :meth:`u_k_matter`, the implemented first moment is
+        transform of the NFW profile, the implemented first moment is
 
         .. math::
 
@@ -1036,7 +1040,7 @@ class M21CIBProfile(CIBProfile):
         
 
         nu = self.nu
-        sat_term, cen_term = self.sat_and_cen_contribution(halo_model, k, m, z)
+        sat_term, cen_term = self._sat_and_cen_contribution(halo_model, k, m, z)
 
         moment_funcs = [
             lambda _: cen_term + sat_term,                         # prefactor * (lc[None, :, :] + ls[None, :, :] * u_m ) 

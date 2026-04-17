@@ -205,7 +205,7 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
         return bg_num / ng
 
 
-    def sat_and_cen_contribution(self, halo_model, k, m, z):
+    def _sat_and_cen_contribution(self, halo_model, k, m, z):
         """ 
         Compute either the first or second moment of the galaxy HOD tracer u_ell.
         For galaxy HOD:, 
@@ -219,7 +219,7 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
         Nc = self.n_cen(m)
         ng = self.ng_bar(halo_model, m, z) * (halo_model.cosmology.H0 / 100)**3
 
-        _, u_m = self.u_k_matter(halo_model, k, m, z)  
+        _, u_m = self._u_k_matter(halo_model, k, m, z)  
 
         sat_term = (1/ng) * (Ns[None, :, None] * u_m)
         cen_term = (1/ng) * (Nc[None, :, None]**0)
@@ -268,7 +268,7 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
         Nc = self.n_cen(m)
         ng = self.ng_bar(halo_model, m, z) * (halo_model.cosmology.H0 / 100)**3
 
-        _, u_m = self.u_k_matter(halo_model, k, m, z)
+        _, u_m = self._u_k_matter(halo_model, k, m, z)
     
         moment_funcs = [
             

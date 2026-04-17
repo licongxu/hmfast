@@ -65,7 +65,7 @@ class NFWMatterProfile(MatterProfile):
         k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
     
         # Compute u_m_k from Tracer
-        k, u_m = self.u_k_matter(halo_model, k, m, z) 
+        k, u_m = self._u_k_matter(halo_model, k, m, z) 
         
         rho_mean_0 = cparams["Rho_crit_0"] * cparams["Omega0_m"]
         m_over_rho_mean = (m / rho_mean_0)[:, None]  # shape (N_m, 1)

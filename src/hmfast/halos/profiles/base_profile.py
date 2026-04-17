@@ -41,7 +41,7 @@ class HaloProfile:
         return False
 
         
-    def u_k_hankel(self, halo_model, x, m, z):
+    def _u_k_hankel(self, halo_model, x, m, z):
         """
         Hankel-transform a 3D halo/tracer profile to u_ell for halo model use.
     
@@ -82,7 +82,7 @@ class HaloProfile:
  
         return k_native, u_k_native
 
-    def u_k_matter(self, halo_model, k, m, z):
+    def _u_k_matter(self, halo_model, k, m, z):
         """
         Calculate u^m(k, M, z) supporting independent dimensions for k, m, and z.
         

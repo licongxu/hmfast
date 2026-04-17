@@ -34,7 +34,7 @@ class PressureProfile(HaloProfile):
         ell_target = k[:, None] * chi[None, :] - 0.5 
         
         # Get native Hankel transform outputs, which may not align with the k from this function's input
-        k_native, u_k_native = self.u_k_hankel(halo_model, self.x, m, z)  
+        k_native, u_k_native = self._u_k_hankel(halo_model, self.x, m, z)  
         
         # Calculate native u_ell and the native ell grid
         u_ell_native = u_k_native * jnp.sqrt(jnp.pi / (2 * k_native[:, None, None])) 

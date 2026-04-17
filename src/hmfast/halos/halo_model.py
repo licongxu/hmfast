@@ -355,7 +355,7 @@ class HaloModel:
     @jax.jit
     def _counter_terms(self, m, z):
         """
-        Compute :math:`n_{\min}`, :math:`b_{1,\min}`, and :math:`b_{2,\min}` counter terms for halo model consistency.
+        Compute :math:`n_{\\min}`, :math:`b_{1,\\min}`, and :math:`b_{2,\\min}` counter terms for halo model consistency.
 
         Parameters
         ----------
@@ -406,8 +406,7 @@ class HaloModel:
 
         .. math::
 
-            P_{1h}(k, z) = \\int d\\ln M \, \\frac{dn}{d\\ln M}
-            \, u_1(k, M, z) u_2(k, M, z)
+            P_{1h}(k, z) = \\int d\\ln M \\, \\frac{dn}{d\\ln M} \\, u_1(k, M, z) u_2(k, M, z)
 
         where :math:`dn/d\\ln M` is the halo mass function 
         and :math:`u_i(k \\mid M, z)` is the Fourier-space tracer profile.
@@ -455,8 +454,8 @@ class HaloModel:
                 _, uk_sq_full = tracer1.profile.u_k(self, k/h, m, z, moment=2)
                 uk_sq_row = uk_sq_full[:, i, :]
             elif tracer1.profile.has_central_contribution and tracer2.profile.has_central_contribution:
-                s1, c1 = tracer1.profile.sat_and_cen_contribution(self, k/h, m, z)
-                s2, c2 = tracer2.profile.sat_and_cen_contribution(self, k/h, m, z)
+                s1, c1 = tracer1.profile._sat_and_cen_contribution(self, k/h, m, z)
+                s2, c2 = tracer2.profile._sat_and_cen_contribution(self, k/h, m, z)
                 # Pull only row i
                 uk_sq_row = s1[:, i, :] * s2[:, i, :] + s1[:, i, :] * c2[:, i, :] + s2[:, i, :] * c1[:, i, :]
             else:

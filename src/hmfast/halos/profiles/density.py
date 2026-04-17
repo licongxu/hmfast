@@ -39,7 +39,7 @@ class DensityProfile(HaloProfile):
         prefactor = (4 * jnp.pi * r_delta**3 * f_free / mu_e * (1 + z)[None, :]**3 / chi[None, :]**2 * vrms[None, :])
     
         # Get native Hankel transform outputs, which may not align with the k from this function's input
-        k_native, u_k_native = self.u_k_hankel(halo_model, self.x, m, z)   # New way
+        k_native, u_k_native = self._u_k_hankel(halo_model, self.x, m, z)   # New way
         
         # Calculate native u_ell and the native ell grid
         u_ell_native = u_k_native * jnp.sqrt(jnp.pi / (2 * k_native[:, None, None]))
