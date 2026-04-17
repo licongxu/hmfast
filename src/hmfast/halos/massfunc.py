@@ -70,7 +70,11 @@ class HaloMass(ABC):
 
 
     @abstractmethod
+<<<<<<< HEAD
     def f_sigma(self, halo_model, sigmas, z):
+=======
+    def f_sigma(self, halo_model, sigma, z):
+>>>>>>> c96a955 (Made minor improvements to the docs for massfunc, bias, and concentration)
         """
         Evaluate the dimensionless function :math:`f(\\sigma)` entering the
         halo mass function.
@@ -87,7 +91,11 @@ class HaloMass(ABC):
         halo_model : HaloModel
             Halo model instance supplying the cosmology and mass definition
             used to evaluate the fitting function.
+<<<<<<< HEAD
         sigmas : array-like
+=======
+        sigma : array-like
+>>>>>>> c96a955 (Made minor improvements to the docs for massfunc, bias, and concentration)
             Root-mean-square linear density fluctuation
             :math:`\\sigma(R, z)`.
         z : float or array-like, optional
@@ -105,8 +113,12 @@ class T08HaloMass(HaloMass):
     """
     Halo mass function from `Tinker et al. (2008) <https://ui.adsabs.harvard.edu/abs/2008ApJ...688..709T/abstract>`_.
 
+<<<<<<< HEAD
     Calibrated for spherical-overdensity halo masses.
 
+=======
+    Calibrated for spherical-overdensity halo masses. 
+>>>>>>> c96a955 (Made minor improvements to the docs for massfunc, bias, and concentration)
     In this implementation, the fitting coefficients are interpolated over the
     tabulated overdensity grid :math:`\\Delta_\\mathrm{m} = 200, 300, 400,
     600, 800, 1200, 1600, 2400, 3200`.
@@ -116,7 +128,11 @@ class T08HaloMass(HaloMass):
         pass
 
     @partial(jax.jit, static_argnums=(0,))
+<<<<<<< HEAD
     def f_sigma(self, halo_model, sigmas, z):
+=======
+    def f_sigma(self, halo_model, sigma, z):
+>>>>>>> c96a955 (Made minor improvements to the docs for massfunc, bias, and concentration)
         """
         Evaluate the Tinker et al. (2008) fitting function :math:`f(\\sigma)`.
 
@@ -125,28 +141,44 @@ class T08HaloMass(HaloMass):
             f(\\sigma) = 0.5 A \\left[\\left(\\frac{\\sigma}{b}\\right)^{-a} + 1\\right]
             \\exp\\left(-\\frac{c}{\\sigma^2}\\right)
 
+<<<<<<< HEAD
         where :math:`A`, :math:`a`, :math:`b`, and :math:`c` depend on the
         overdensity threshold and redshift inferred from ``halo_model``. The
         coefficients are interpolated over the tabulated overdensities
         :math:`\\Delta_\\mathrm{m} = 200, 300, 400, 600, 800, 1200, 1600,
         2400, 3200`.
+=======
+        where :math:`A`, :math:`a`, :math:`b`, and :math:`c` are redshift-dependent fitting parameters. 
+>>>>>>> c96a955 (Made minor improvements to the docs for massfunc, bias, and concentration)
     
         Parameters
         ----------
         halo_model : HaloModel
             Halo model instance supplying the cosmology and mass definition
             used to evaluate the fitting function.
+<<<<<<< HEAD
         sigmas : jnp.ndarray
             Root-mean-square linear density fluctuation
             :math:`\\sigma(R, z)`.
         z : float or jnp.ndarray
             Redshift(s) corresponding to ``sigmas``.
+=======
+        sigma : jnp.ndarray
+            Root-mean-square linear density fluctuation
+            :math:`\\sigma(R, z)`.
+        z : float or jnp.ndarray
+            Redshift(s) corresponding to ``sigma``.
+>>>>>>> c96a955 (Made minor improvements to the docs for massfunc, bias, and concentration)
         
     
         Returns
         -------
         f_sigma : jnp.ndarray
+<<<<<<< HEAD
             Values of :math:`f(\\sigma)` with shape matching ``sigmas``.
+=======
+            Values of :math:`f(\\sigma)` with shape matching ``sigma``.
+>>>>>>> c96a955 (Made minor improvements to the docs for massfunc, bias, and concentration)
         """
         
         # Overdensity threshold converted to log scale
@@ -168,7 +200,7 @@ class T08HaloMass(HaloMass):
         c = jnp.interp(delta_mean, delta_mean_tab, c_tab)
         
         # Calculate final result f(σ)
-        f_sigma = 0.5 * Ap[:, None] * (jnp.power(sigmas / b[:, None], -a[:, None]) + 1) * jnp.exp(-c[:, None] / sigmas**2)
+        f_sigma = 0.5 * Ap[:, None] * (jnp.power(sigma / b[:, None], -a[:, None]) + 1) * jnp.exp(-c[:, None] / sigma**2)
         return f_sigma
 
 
@@ -181,8 +213,12 @@ class T08HaloMass(HaloMass):
     
         .. math::
     
+<<<<<<< HEAD
             \\frac{dn}{d\\ln M} = f(\\sigma) \, \\frac{d\\ln \\nu}{d\\ln R}
             \\frac{1}{4\\pi R^3 h^3}
+=======
+            \\frac{dn}{d\\ln M} = f(\\sigma) \\frac{\\rho_{m,0}}{M} \\left| \\frac{d\\ln \\sigma^{-1}}{d\\ln M} \\right|
+>>>>>>> c96a955 (Made minor improvements to the docs for massfunc, bias, and concentration)
     
         where :math:`f(\\sigma)` is the Tinker et al. (2008) fitting function,
         calibrated over a tabulated set of spherical-overdensity definitions,
@@ -191,6 +227,9 @@ class T08HaloMass(HaloMass):
     
         Parameters
         ----------
+        halo_model : HaloModel
+            Halo model instance supplying the cosmology and mass definition
+            used to evaluate the fitting function.
         m : array-like
             Halo mass grid.
         z : array-like
@@ -219,14 +258,22 @@ class T10HaloMass(HaloMass):
     """
     Halo mass function from `Tinker et al. (2010) <https://ui.adsabs.harvard.edu/abs/2010ApJ...724..878T/abstract>`_.
 
+<<<<<<< HEAD
     Calibrated for spherical-overdensity halo masses.
+=======
+    Calibrated for 200m mass definition.
+>>>>>>> c96a955 (Made minor improvements to the docs for massfunc, bias, and concentration)
     """
 
     def __init__(self):
         pass
 
     @partial(jax.jit, static_argnums=(0,))
+<<<<<<< HEAD
     def f_sigma(self, halo_model, sigmas, z):
+=======
+    def f_sigma(self, halo_model, sigma, z):
+>>>>>>> c96a955 (Made minor improvements to the docs for massfunc, bias, and concentration)
         """
         Evaluate the Tinker et al. (2010) fitting function entering
         :math:`dn / d\\ln M`.
@@ -237,17 +284,28 @@ class T10HaloMass(HaloMass):
              \\nu^{\\eta} \\exp\\left(-\\frac{\\gamma \\nu}{2}\\right) \\sqrt{\\nu}
 
         where :math:`\\nu = \\delta_c^2 / \\sigma^2` with
+<<<<<<< HEAD
         :math:`\\delta_c = 1.686`, and the fitting parameters are redshift
         dependent and evaluated using the redshift grid stored on
         ``halo_model``.
+=======
+        :math:`\\delta_c = 1.686`, 
+        and :math:`\\alpha`, :math:`\\beta`, :math:`\\gamma`, :math:`\\eta`, and :math:`\\phi` 
+        are redshift-dependent fitting parameters.
+>>>>>>> c96a955 (Made minor improvements to the docs for massfunc, bias, and concentration)
     
         Parameters
         ----------
         halo_model : HaloModel
             Halo model instance supplying the cosmology and mass definition
+<<<<<<< HEAD
             used to evaluate the fitting function. The redshift dependence of
             the fitting parameters is handled internally.
         sigmas : jnp.ndarray
+=======
+            used to evaluate the fitting function. 
+        sigma : jnp.ndarray
+>>>>>>> c96a955 (Made minor improvements to the docs for massfunc, bias, and concentration)
             Root-mean-square linear density fluctuation
             :math:`\\sigma(R, z)`.
     
@@ -255,10 +313,14 @@ class T10HaloMass(HaloMass):
         -------
         f_nu : jnp.ndarray
             Values of the dimensionless fitting function with shape matching
-            ``sigmas``.
+            ``sigma``.
         """
         delta_c = 1.686
+<<<<<<< HEAD
         log_nu = 2.0 * jnp.log(delta_c) - 2.0 * jnp.log(sigmas)
+=======
+        log_nu = 2.0 * jnp.log(delta_c) - 2.0 * jnp.log(sigma)
+>>>>>>> c96a955 (Made minor improvements to the docs for massfunc, bias, and concentration)
         nu = jnp.exp(log_nu)
         
         # Base parameters
@@ -297,7 +359,7 @@ class T10HaloMass(HaloMass):
     
         .. math::
     
-            \\frac{dn}{d\\ln M} = \\nu f(\\nu) \\frac{\\rho_{m,0}}{M} \\left| \\frac{d\\ln \\sigma^{-1}}{d\\ln M} \\right|
+            \\frac{dn}{d\\ln M} = f(\\sigma) \\frac{\\rho_{m,0}}{M} \\left| \\frac{d\\ln \\sigma^{-1}}{d\\ln M} \\right|
     
         where :math:`\\nu = \\delta_c^2 / \\sigma^2(M)` with
         :math:`\\delta_c = 1.686`, :math:`f(\\nu)` is the fitting function,
@@ -307,6 +369,9 @@ class T10HaloMass(HaloMass):
     
         Parameters
         ----------
+        halo_model : HaloModel
+            Halo model instance supplying the cosmology and mass definition
+            used to evaluate the fitting function. 
         m : array-like
             Halo mass grid.
         z : array-like
