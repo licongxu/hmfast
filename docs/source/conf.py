@@ -31,7 +31,7 @@ autodoc_default_options = {
     "private-members": False,  # Ensures private methods are not shown
     "special-members": "",     # Do not include __init__ or other dunder methods
     "show-inheritance": True,
-    "inherited-members": False,
+    "inherited-members": True,
 }
 
 numpydoc_show_class_members = False

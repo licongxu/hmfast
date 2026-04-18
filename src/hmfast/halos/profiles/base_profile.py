@@ -40,48 +40,7 @@ class HaloProfile:
         """
         return False
 
-        
-    def _u_k_hankel(self, halo_model, x, m, z):
-        """
-        Hankel-transform a 3D halo/tracer profile to u_ell for halo model use.
     
-        Parameters
-        ----------
-        x : arrat like
-            Radius r scaled by the scale radius x = r / r_s
-        z : float or array_like
-            Redshift(s).
-        m : float or array_like
-            Halo mass(es).
-        k : array_like, optional
-            k values over which the hankel transform will be evaluated. 
-            If None, the transform's natural k grid will be output.
-            If not None, the transform will be inteprolated to match this k
-       
-
-        Returns ell, u_ell_m
-    
-        """
-
-       
-        cparams = halo_model.cosmology._cosmo_params()
-        h = cparams['h']
-       
-        W_x = jnp.where((x >= x[0]) & (x <= x[-1]), 1.0, 0.0)
-
-        def single_m_z(m_val, z_val):
-            profile = jnp.squeeze(self.profile(halo_model, x, m_val, z_val))  # remove extra axes
-            return profile * x**0.5 * W_x  # shape (Nx,)
-
-        hankel_integrand = jax.vmap(jax.vmap(single_m_z, in_axes=(None, 0)), in_axes=(0, None) )(m, z)
-            
-        # We need u_k_native to have shape (Nx, Nm, Nz)
-        k_native, u_k_native = self._hankel.transform(hankel_integrand)
-        u_k_native = jnp.swapaxes(u_k_native, 2, 0)
-        u_k_native = jnp.swapaxes(u_k_native, 2, 1)
- 
-        return k_native, u_k_native
-
     def _u_k_matter(self, halo_model, k, m, z):
         """
         Calculate u^m(k, M, z) supporting independent dimensions for k, m, and z.

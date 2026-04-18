@@ -15,8 +15,60 @@ class DensityProfile(HaloProfile):
     
     def u_k(self, halo_model, k, m, z, moment=1):
         """
-        Compute the kSZ tracer u_ell (Nk, Nm, Nz).
-        Supports arbitrary input shapes for k, m, and z.
+        Compute the projected Fourier-space density profile for halo-model calculations.
+
+        For a three-dimensional density profile :math:`\\rho(r, M, z)`, this method
+        computes the projected transform used in the kSZ halo model. The input radial
+        coordinate is the dimensionless variable :math:`x = r / r_\\Delta`, and the
+        projected profile is evaluated as
+
+        .. math::
+
+            u_\\ell(\\ell, M, z) =
+            A(M, z)
+            \\int dx \\, x^2 \\, \\rho(x, M, z) \\,
+            \\frac{\\sin\\!\\left[(\\ell / \\ell_\\Delta) x\\right]}
+            {(\\ell / \\ell_\\Delta) x},
+
+        where :math:`\\ell_\\Delta(M, z) = d_A(z) / r_\\Delta(M, z)` and
+        :math:`d_A(z)` is the angular-diameter distance. In the implementation, the
+        prefactor is
+
+        .. math::
+
+            A(M, z) =
+            4 \\pi \\, r_\\Delta^3 \\, \frac{f_{\\mathrm{free}}}{\\mu_e}
+            \\, \frac{(1+z)^3}{\\chi(z)^2} \\, v_{\\mathrm{rms}}(z),
+
+        with :math:`\\mu_e = 1.14`, :math:`f_{\\mathrm{free}} = 1`, and
+        :math:`\\chi(z) = (1+z) d_A(z)`.
+
+        The transform is evaluated on the native radial grid ``self.x`` using a
+        Hankel transform and then interpolated to the Limber-related target multipoles
+        :math:`\\ell \\approx k \\chi(z) - 1/2`.
+
+        For ``moment=1``, the method returns :math:`u_\\ell(\\ell, M, z)`. For
+        ``moment=2``, it returns the squared profile
+        :math:`u_\\ell^{(2)}(\\ell, M, z) = u_\\ell(\\ell, M, z)^2`.
+
+        Parameters
+        ----------
+        halo_model : HaloModel
+            Halo model providing the cosmology and halo-radius relation.
+        k : float or jnp.ndarray
+            Comoving wavenumber(s).
+        m : float or jnp.ndarray
+            Halo mass or masses.
+        z : float or jnp.ndarray
+            Redshift(s).
+        moment : int, optional
+            Profile moment to return. Supported values are ``1`` and ``2``.
+
+        Returns
+        -------
+        tuple
+            Tuple :math:`(\\ell, u_\\ell)` where ``ell`` has shape :math:`(N_k, N_z)`
+            and the transformed profile has shape :math:`(N_k, N_M, N_z)`.
         """
         
         h = halo_model.cosmology.H0 / 100
@@ -62,6 +114,50 @@ class DensityProfile(HaloProfile):
         u_ell_interp = vmapped_interp(ell_target, ell_native, u_ell_val)
         
         return ell_target, u_ell_interp
+
+
+        
+    def _u_k_hankel(self, halo_model, x, m, z):
+        """
+        Hankel-transform a 3D halo/tracer profile to u_ell for halo model use.
+    
+        Parameters
+        ----------
+        x : arrat like
+            Radius r scaled by the scale radius x = r / r_s
+        z : float or array_like
+            Redshift(s).
+        m : float or array_like
+            Halo mass(es).
+        k : array_like, optional
+            k values over which the hankel transform will be evaluated. 
+            If None, the transform's natural k grid will be output.
+            If not None, the transform will be inteprolated to match this k
+       
+
+        Returns ell, u_ell_m
+    
+        """
+
+       
+        cparams = halo_model.cosmology._cosmo_params()
+        h = cparams['h']
+       
+        W_x = jnp.where((x >= x[0]) & (x <= x[-1]), 1.0, 0.0)
+
+        def single_m_z(m_val, z_val):
+            profile = jnp.squeeze(self.density_profile(halo_model, x, m_val, z_val))  # remove extra axes
+            return profile * x**0.5 * W_x  # shape (Nx,)
+
+        hankel_integrand = jax.vmap(jax.vmap(single_m_z, in_axes=(None, 0)), in_axes=(0, None) )(m, z)
+            
+        # We need u_k_native to have shape (Nx, Nm, Nz)
+        k_native, u_k_native = self._hankel.transform(hankel_integrand)
+        u_k_native = jnp.swapaxes(u_k_native, 2, 0)
+        u_k_native = jnp.swapaxes(u_k_native, 2, 1)
+ 
+        return k_native, u_k_native
+
 
 
 class B16DensityProfile(DensityProfile):
@@ -115,44 +211,6 @@ class B16DensityProfile(DensityProfile):
         obj._x = x
         obj._hankel = hankel
         return obj
-
-
-    # def update(self, **kwargs):
-    #     """
-    #     Return a new profile instance with updated calibration parameters.
-
-    #     Parameters
-    #     ----------
-    #     A_rho0 : float, optional
-    #     A_alpha : float, optional
-    #     A_beta : float, optional
-    #     alpha_m_rho0 : float, optional
-    #     alpha_m_alpha : float, optional
-    #     alpha_m_beta : float, optional
-    #     alpha_z_rho0 : float, optional
-    #     alpha_z_alpha : float, optional
-    #     alpha_z_beta : float, optional
-
-    #     Returns
-    #     -------
-    #     B16DensityProfile
-    #         New profile instance with updated parameters.
-    #     """
-    #     names = [
-    #         "A_rho0", "A_alpha", "A_beta",
-    #         "alpha_m_rho0", "alpha_m_alpha", "alpha_m_beta",
-    #         "alpha_z_rho0", "alpha_z_alpha", "alpha_z_beta"
-    #     ]
-        
-    #     # Strict Check: Block typos immediately
-    #     if not set(kwargs).issubset(names):
-    #         invalid = set(kwargs) - set(names)
-    #         raise ValueError(f"Invalid parameter(s): {invalid}. Expected: {names}")
-
-    #     leaves, treedef = self._tree_flatten()
-    #     # Create new leaf list by replacing values from kwargs if they exist
-    #     new_leaves = [kwargs.get(name, val) for name, val in zip(names, leaves)]
-    #     return self._tree_unflatten(treedef, new_leaves)
 
     def update(self, A_rho0=None, A_alpha=None, A_beta=None,
                alpha_m_rho0=None, alpha_m_alpha=None, alpha_m_beta=None,
@@ -214,25 +272,53 @@ class B16DensityProfile(DensityProfile):
         return presets[key]
         
 
-    def profile(self, halo_model, x, m, z):
+    def density_profile(self, halo_model, x, m, z):
         """
-        Compute the BCM gas density profile.
+        Compute the Battaglia et al. (2016) electron-density profile.
+
+        The profile is evaluated as a function of the dimensionless radius
+        :math:`x = r / r_{200c}`. The implemented model is
+
+        .. math::
+
+            \\rho_e(x, M, z) =
+            \\rho_{\\mathrm{crit}}(z) \\, f_b \\, \\rho_0(M, z) \\, p(x, M, z),
+
+        where :math:`f_b = \\Omega_b / \\Omega_{m,0}` and the profile shape is
+
+        .. math::
+
+            p(x, M, z)
+            = \\left(\\frac{x}{x_c}\\right)^\\gamma
+            \\left[1 + \\left(\\frac{x}{x_c}\\right)^\\alpha\\right]^{-(\\beta + \\gamma)/\\alpha}.
+
+        In this implementation, :math:`x_c = 0.5` and :math:`\\gamma = -0.2`. The
+        remaining profile parameters follow the generic Battaglia scaling
+
+        .. math::
+
+            X(M_{200c}, z) = A_X
+            \\left(\\frac{M_{200c} / h}{10^{14} M_\\odot}\\right)^{\\alpha_m^X}
+            (1 + z)^{\\alpha_z^X},
+
+        where :math:`X` stands for the mass- and redshift-dependent profile parameters
+        used in the model, such as :math:`\\rho_0`, :math:`\\alpha`, and :math:`\\beta`.
 
         Parameters
         ----------
         halo_model : HaloModel
-            The parent halo model instance.
-        x : array-like
-            Dimensionless radius r/R_vir (Nx,).
-        m : array-like
-            Halo mass M_vir [M_sun/h] (Nm,).
-        z : array-like
-            Redshift (Nz,).
+            Halo model providing the cosmology.
+        x : float or jnp.ndarray
+            Dimensionless radius :math:`x = r / r_{200c}`.
+        m : float or jnp.ndarray
+            Halo mass or masses in :math:`M_\\odot / h`.
+        z : float or jnp.ndarray
+            Redshift(s).
 
         Returns
         -------
-        rho_gas : array-like
-            Gas density 
+        jnp.ndarray
+            Electron-density profile with shape :math:`(N_x, N_M, N_z)`.
         """
         cparams = halo_model.cosmology._cosmo_params()
         f_b = cparams["Omega_b"] / cparams["Omega0_m"]
@@ -295,7 +381,49 @@ class NFWDensityProfile(DensityProfile):
         self._hankel = HankelTransform(self._x, nu=0.5)
         
 
-    def profile(self, halo_model, x, m, z):
+    def density_profile(self, halo_model, x, m, z):
+        """
+        Compute the NFW-based electron-density profile.
+
+        The profile is obtained by taking an NFW matter profile and scaling it by the
+        cosmic baryon fraction :math:`f_b = \\Omega_b / \\Omega_{m,0}`. Writing
+        :math:`x = r / r_s`, the implemented profile is
+
+        .. math::
+
+            \\rho_e(x, M, z) = f_b \\, \\frac{\\rho_s(M, z)}{x (1+x)^2},
+
+        where the scale radius is :math:`r_s = r_\\Delta / c_\\Delta` and the NFW
+        normalization is
+
+        .. math::
+
+            \\rho_s(M, z) =
+            \\frac{M}{4 \\pi r_s^3}
+            \\left[
+            \\ln(1+c_\\Delta) - \\frac{c_\\Delta}{1+c_\\Delta}
+            \\right]^{-1}.
+
+        Here :math:`c_\\Delta(M, z)` is the halo concentration returned by the halo
+        model, and :math:`r_\\Delta(M, z)` is the halo radius associated with the
+        active mass definition.
+
+        Parameters
+        ----------
+        halo_model : HaloModel
+            Halo model providing the cosmology, halo radius, and concentration model.
+        x : float or jnp.ndarray
+            Dimensionless radius :math:`x = r / r_s`.
+        m : float or jnp.ndarray
+            Halo mass or masses.
+        z : float or jnp.ndarray
+            Redshift(s).
+
+        Returns
+        -------
+        jnp.ndarray
+            Electron-density profile with shape :math:`(N_x, N_M, N_z)`.
+        """
         cparams = halo_model.cosmology._cosmo_params()
         x, m, z = jnp.atleast_1d(x), jnp.atleast_1d(m), jnp.atleast_1d(z)
        
@@ -406,16 +534,58 @@ class BCMDensityProfile(DensityProfile):
         return self._tree_unflatten(treedef, new_leaves)
 
 
-    def profile(self, halo_model, x, m, z):
+    def density_profile(self, halo_model, x, m, z):
         """
-        BCM gas density profile based.
-        
-        Args:
-            x: Dimensionless radius r/R200c (Nx,)
-            m: Halo mass M200c [M_sun/h] (Nm,)
-            z: Redshift (Nz,)
-        Returns:
-            rho_gas: Gas density in [M_sun h^2 / Mpc^3] (Nx, Nm, Nz)
+        Compute the BCM gas-density profile.
+
+        The profile is evaluated using the virial radius, with dimensionless radius
+        :math:`x = r / r_{\\mathrm{vir}}`. The implemented model is
+
+        .. math::
+
+            \\rho_{\\mathrm{gas}}(x, M, z)
+            = \\frac{f_b - f_\\star(M)}
+            {\\left(1 + 10 x\\right)^{\\beta_M(M, z)}
+            \\left[1 + \\left(\\frac{x}{\\theta_{\\mathrm{ej}}}\\right)^\\gamma\\right]^{(\\delta - \\beta_M(M, z))/\\gamma}},
+
+        where the stellar fraction is
+
+        .. math::
+
+            f_\\star(M) = f_{\\star, M_s}
+            \\left(\\frac{M}{M_s}\\right)^{-\\eta_\\star},
+
+        and the mass-dependent outer slope is
+
+        .. math::
+
+            \\beta_M(M, z) =
+            \\frac{3 (M / M_c(z))^\\mu}{1 + (M / M_c(z))^\\mu}.
+
+        The characteristic mass scale evolves as
+
+        .. math::
+
+            \\log_{10} M_c(z) = \\log_{10} M_c \\, (1+z)^{\\nu_{\\log_{10} M_c}}.
+
+        In the implementation, :math:`M_s = 2.5 \\times 10^{11} \\, M_\\odot / h` and
+        :math:`f_{\\star, M_s} = 0.055` are fixed constants.
+
+        Parameters
+        ----------
+        halo_model : HaloModel
+            Halo model providing the cosmology and virial radius.
+        x : float or jnp.ndarray
+            Dimensionless radius :math:`x = r / r_{\\mathrm{vir}}`.
+        m : float or jnp.ndarray
+            Halo mass or masses in :math:`M_\\odot / h`.
+        z : float or jnp.ndarray
+            Redshift(s).
+
+        Returns
+        -------
+        jnp.ndarray
+            Gas-density profile with shape :math:`(N_x, N_M, N_z)`.
         """
        
         cparams = halo_model.cosmology._cosmo_params()

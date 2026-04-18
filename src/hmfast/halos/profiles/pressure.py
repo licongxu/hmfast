@@ -13,9 +13,53 @@ from hmfast.halos.profiles import HaloProfile, HankelTransform
 
 
 class PressureProfile(HaloProfile):
-     def u_k(self, halo_model, k, m, z, moment=1):
-        
-        
+    def u_k(self, halo_model, k, m, z, moment=1):
+        """
+        Compute the projected Fourier-space pressure profile for halo-model calculations.
+
+        For a three-dimensional electron-pressure profile :math:`P_e(r, M, z)`, this
+        method computes the spherically symmetric transform used in the halo model.
+        The input radial coordinate is the dimensionless variable
+        :math:`x = r / r_\\Delta`, and the projected profile is evaluated as
+
+        .. math::
+
+            u_\\ell(\\ell, M, z) =
+            \\frac{4 \\pi (1+z) r_\\Delta}{\\ell_\\Delta^2}
+            \\int dx \\, x^2 \\, P_e(x, M, z) \\,
+            \\frac{\\sin\\!\\left[(\\ell / \\ell_\\Delta) x\\right]}
+            {(\\ell / \\ell_\\Delta) x},
+
+        where :math:`\\ell_\\Delta(M, z) = d_A(z) / r_\\Delta(M, z)` and :math:`d_A(z)`
+        is the angular-diameter distance. In the implementation, the transform is
+        evaluated on the native radial grid ``self.x`` using a Hankel transform and
+        then interpolated to the Limber-related target multipoles
+        :math:`\\ell \\approx k \\chi(z) - 1/2`, with
+        :math:`\\chi(z) = (1+z) d_A(z)`.
+
+        For ``moment=1``, the method returns :math:`u_\\ell(\\ell, M, z)`. For
+        ``moment=2``, it returns the squared profile
+        :math:`u_\\ell^{(2)}(\\ell, M, z) = u_\\ell(\\ell, M, z)^2`.
+
+        Parameters
+        ----------
+        halo_model : HaloModel
+            Halo model providing the cosmology and halo-radius relation.
+        k : float or jnp.ndarray
+            Comoving wavenumber(s).
+        m : float or jnp.ndarray
+            Halo mass or masses.
+        z : float or jnp.ndarray
+            Redshift(s).
+        moment : int, optional
+            Profile moment to return. Supported values are ``1`` and ``2``.
+
+        Returns
+        -------
+        tuple
+            Tuple :math:`(\\ell, u_\\ell)` where ``ell`` has shape :math:`(N_k, N_z)`
+            and the transformed profile has shape :math:`(N_k, N_M, N_z)`.
+        """
         h = halo_model.cosmology.H0 / 100 
         B = 1.0 #self.B
         delta = halo_model.mass_definition.delta
@@ -57,6 +101,50 @@ class PressureProfile(HaloProfile):
         u_ell_interp = vmap_interp(ell_target, ell_native, u_ell_val)
         
         return ell_target, u_ell_interp
+
+
+        
+    def _u_k_hankel(self, halo_model, x, m, z):
+        """
+        Hankel-transform a 3D halo/tracer profile to u_ell for halo model use.
+    
+        Parameters
+        ----------
+        x : arrat like
+            Radius r scaled by the scale radius x = r / r_s
+        z : float or array_like
+            Redshift(s).
+        m : float or array_like
+            Halo mass(es).
+        k : array_like, optional
+            k values over which the hankel transform will be evaluated. 
+            If None, the transform's natural k grid will be output.
+            If not None, the transform will be inteprolated to match this k
+       
+
+        Returns ell, u_ell_m
+    
+        """
+
+       
+        cparams = halo_model.cosmology._cosmo_params()
+        h = cparams['h']
+       
+        W_x = jnp.where((x >= x[0]) & (x <= x[-1]), 1.0, 0.0)
+
+        def single_m_z(m_val, z_val):
+            pressure_profile = jnp.squeeze(self.pressure_profile(halo_model, x, m_val, z_val))  # remove extra axes
+            return pressure_profile * x**0.5 * W_x  # shape (Nx,)
+
+        hankel_integrand = jax.vmap(jax.vmap(single_m_z, in_axes=(None, 0)), in_axes=(0, None) )(m, z)
+            
+        # We need u_k_native to have shape (Nx, Nm, Nz)
+        k_native, u_k_native = self._hankel.transform(hankel_integrand)
+        u_k_native = jnp.swapaxes(u_k_native, 2, 0)
+        u_k_native = jnp.swapaxes(u_k_native, 2, 1)
+ 
+        return k_native, u_k_native
+
 
 
 
@@ -141,14 +229,52 @@ class GNFWPressureProfile(PressureProfile):
         return self._tree_unflatten(treedef, new_leaves)
     
 
-    def profile(self, halo_model, x, m, z):
+    def pressure_profile(self, halo_model, x, m, z):
         """
-        GNFW pressure profile as a function of dimensionless scaled radius x = r/r_delta.
-        Fully vectorized: supports
-            x.shape = (Nx,)
-            m.shape = (Nm,)
-            z.shape = (Nz,)
-        Output shape: (Nx, Nm, Nz)
+        Compute the generalized NFW electron-pressure profile.
+
+        The profile is evaluated as a function of the dimensionless radius
+        :math:`x = r / r_\\Delta`, but its normalization and shape are defined using
+        the native :math:`500c` calibration mass and radius. The implemented profile is
+
+        .. math::
+
+            P_e(x, M, z) = P_{500c}(M_{500c}, z) \\, P_0 \\,
+            \\left(c_{500} x_{500c}\\right)^{-\\gamma}
+            \\left[1 + \\left(c_{500} x_{500c}\\right)^\\alpha\\right]^{(\\gamma-\\beta)/\\alpha},
+
+        where :math:`x_{500c} = r / r_{500c} = x \\, r_\\Delta / r_{500c}`.
+
+        The pressure normalization is
+
+        .. math::
+
+            P_{500c}(M_{500c}, z) =
+            1.65
+            \\left(\\frac{h}{0.7}\\right)^2
+            E(z)^{8/3}
+            \\left(\\frac{M_{500c} / B}{0.7 \\times 3 \\times 10^{14} \\, M_\\odot}\\right)^{2/3 + 0.12}
+            \\left(\\frac{0.7}{h}\\right)^{3/2},
+
+        with :math:`E(z) = H(z) / H_0`. In the implementation, the input halo mass is
+        first converted from the halo model's mass definition to :math:`M_{500c}`.
+
+        Parameters
+        ----------
+        halo_model : HaloModel
+            Halo model providing the cosmology, mass-definition conversion, and halo
+            radius.
+        x : float or jnp.ndarray
+            Dimensionless radius :math:`x = r / r_\\Delta`.
+        m : float or jnp.ndarray
+            Halo mass or masses in the halo model's native mass definition.
+        z : float or jnp.ndarray
+            Redshift(s).
+
+        Returns
+        -------
+        jnp.ndarray
+            Electron pressure profile with shape :math:`(N_x, N_M, N_z)`.
         """
         H0 = halo_model.cosmology.H0
         P0, c500, alpha, beta, gamma, B = self.P0, self.c500, self.alpha, self.beta, self.gamma, self.B
@@ -276,10 +402,57 @@ class B12PressureProfile(PressureProfile):
         
         return self._tree_unflatten(treedef, new_leaves)
 
-    def profile(self, halo_model, x, m, z):
+    def pressure_profile(self, halo_model, x, m, z):
         """
-        Battaglia 2012 pressure profile generalized for arbitrary mass definition.
-        Always normalizes and scales using the native 200c definition.
+        Compute the Battaglia et al. (2012) electron-pressure profile.
+
+        The profile is evaluated as a function of the dimensionless radius
+        :math:`x = r / r_\\Delta`, but its normalization and shape are defined using
+        the native :math:`200c` calibration mass and radius. The implemented model is
+
+        .. math::
+
+            P_e(x, M, z) \\propto P_0(M_{200c}, z) \\, p(x_{200c}, M_{200c}, z),
+
+        where :math:`x_{200c} = r / r_{200c} = x \\, r_\\Delta / r_{200c}` and the
+        generalized NFW shape is
+
+        .. math::
+
+            p(x_{200c}, M_{200c}, z)
+            = \\left(\\frac{x_{200c}}{x_c}\\right)^\\gamma
+            \\left[1 + \\left(\\frac{x_{200c}}{x_c}\\right)^\\alpha\\right]^{-\\beta}.
+
+        In this implementation, :math:`\\alpha = 1` and :math:`\\gamma = -0.3`. The
+        remaining profile parameters follow the generic Battaglia scaling
+
+        .. math::
+
+            X(M_{200c}, z) = A_X
+            \\left(\\frac{M_{200c} / h}{10^{14} M_\\odot}\\right)^{\\alpha_m^X}
+            (1 + z)^{\\alpha_z^X},
+
+        where :math:`X` stands for the mass- and redshift-dependent profile parameters
+        used in the model, such as :math:`P_0`, :math:`x_c`, and :math:`\\beta`. In the
+        implementation, the input halo mass is first converted from the halo model's
+        mass definition to :math:`M_{200c}`.
+
+        Parameters
+        ----------
+        halo_model : HaloModel
+            Halo model providing the cosmology, mass-definition conversion, and halo
+            radius.
+        x : float or jnp.ndarray
+            Dimensionless radius :math:`x = r / r_\\Delta`.
+        m : float or jnp.ndarray
+            Halo mass or masses in the halo model's native mass definition.
+        z : float or jnp.ndarray
+            Redshift(s).
+
+        Returns
+        -------
+        jnp.ndarray
+            Electron pressure profile with shape :math:`(N_x, N_M, N_z)`.
         """
         cparams = halo_model.cosmology._cosmo_params()
         h = cparams["h"]

@@ -82,27 +82,7 @@ class HaloModel:
          obj.convert_masses, obj._tophat_instance) = aux_data
         return obj
 
-    
-    # def update(self, **kwargs):
-    #     """
-    #     Return a new HaloModel instance with updated cosmology parameters.
-
-    #     Parameters
-    #     ----------
-    #     **kwargs : dict
-    #         Cosmological parameters to update.
-
-    #     Returns
-    #     -------
-    #     HaloModel
-    #         New instance with updated cosmology.
-    #     """
-        
-    #     new_emulator = self.cosmology.update(**kwargs)
-    #     children, aux_data = self._tree_flatten()
-    #     new_instance = self._tree_unflatten(aux_data, (new_emulator,))
-        
-    #     return new_instance
+   
 
     def update(self, cosmology=None, mass_model=None, bias_model=None, subhalo_mass_model=None, concentration=None, mass_definition=None, 
                hm_consistency=None, convert_masses=None):
@@ -203,7 +183,6 @@ class HaloModel:
             return delta * omega_m
         else:
             raise ValueError("from_ref and to_ref must be 'critical' or 'mean'")
-
 
 
     @partial(jax.jit, static_argnums=(3, 4, 6))

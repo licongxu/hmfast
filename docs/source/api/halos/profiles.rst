@@ -20,6 +20,7 @@ Electron pressure profiles
    :nosignatures:
 
    hmfast.halos.profiles.GNFWPressureProfile
+   hmfast.halos.profiles.B12PressureProfile
 
 Matter density profiles
 ---------------
