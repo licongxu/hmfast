@@ -24,6 +24,9 @@ class Tracer(ABC):
 
     @property
     def profile(self):
+        """
+        :noindex:
+        """
         return self._profile
 
     @profile.setter

@@ -24,32 +24,22 @@ class DensityProfile(HaloProfile):
 
         .. math::
 
-            u_\\ell(\\ell, M, z) =
-            A(M, z)
-            \\int dx \\, x^2 \\, \\rho(x, M, z) \\,
-            \\frac{\\sin\\!\\left[(\\ell / \\ell_\\Delta) x\\right]}
-            {(\\ell / \\ell_\\Delta) x},
+            u_k(k, M, z) =
+            4 \\pi \\, r_\\Delta^3 \\, \\frac{f_{\\mathrm{free}}}{\\mu_e}
+            \\, \\frac{(1+z)^3}{\\chi^2(z)} \\, v_{\\mathrm{rms}}(z)
+            \\int dx \\, x^2 \\, \\rho(x, M, z) \\, 
+            \\frac{\\sin\\!\\left[(k r_\\Delta) x\\right]}
+            {(k r_\\Delta) x},
 
-        where :math:`\\ell_\\Delta(M, z) = d_A(z) / r_\\Delta(M, z)` and
-        :math:`d_A(z)` is the angular-diameter distance. In the implementation, the
-        prefactor is
-
-        .. math::
-
-            A(M, z) =
-            4 \\pi \\, r_\\Delta^3 \\, \frac{f_{\\mathrm{free}}}{\\mu_e}
-            \\, \frac{(1+z)^3}{\\chi(z)^2} \\, v_{\\mathrm{rms}}(z),
-
-        with :math:`\\mu_e = 1.14`, :math:`f_{\\mathrm{free}} = 1`, and
-        :math:`\\chi(z) = (1+z) d_A(z)`.
+        where :math:`\\mu_e = 1.14`, :math:`f_{\\mathrm{free}} = 1`, and
+        :math:`\\chi(z) = (1+z) d_A(z)` is the comoving distance.
 
         The transform is evaluated on the native radial grid ``self.x`` using a
-        Hankel transform and then interpolated to the Limber-related target multipoles
-        :math:`\\ell \\approx k \\chi(z) - 1/2`.
+        Hankel transform and then interpolated to the target wavenumbers.
 
-        For ``moment=1``, the method returns :math:`u_\\ell(\\ell, M, z)`. For
+        For ``moment=1``, the method returns :math:`u_k(k, M, z)`. For
         ``moment=2``, it returns the squared profile
-        :math:`u_\\ell^{(2)}(\\ell, M, z) = u_\\ell(\\ell, M, z)^2`.
+        :math:`u_k^{(2)}(k, M, z) = u_k(k, M, z)^2`.
 
         Parameters
         ----------
@@ -67,7 +57,7 @@ class DensityProfile(HaloProfile):
         Returns
         -------
         tuple
-            Tuple :math:`(\\ell, u_\\ell)` where ``ell`` has shape :math:`(N_k, N_z)`
+            Tuple :math:`(k, u_k)` where ``k`` has shape :math:`(N_k, N_z)`
             and the transformed profile has shape :math:`(N_k, N_M, N_z)`.
         """
         
@@ -386,27 +376,13 @@ class NFWDensityProfile(DensityProfile):
         Compute the NFW-based electron-density profile.
 
         The profile is obtained by taking an NFW matter profile and scaling it by the
-        cosmic baryon fraction :math:`f_b = \\Omega_b / \\Omega_{m,0}`. Writing
-        :math:`x = r / r_s`, the implemented profile is
+        cosmic baryon fraction. Writing :math:`x = r / r_s`, the implemented profile is
 
         .. math::
 
-            \\rho_e(x, M, z) = f_b \\, \\frac{\\rho_s(M, z)}{x (1+x)^2},
+            \\rho_e(x, M, z) = f_b \\, f_{\\mathrm{free}} \\, \\rho_{\\mathrm{NFW}}(x)
 
-        where the scale radius is :math:`r_s = r_\\Delta / c_\\Delta` and the NFW
-        normalization is
-
-        .. math::
-
-            \\rho_s(M, z) =
-            \\frac{M}{4 \\pi r_s^3}
-            \\left[
-            \\ln(1+c_\\Delta) - \\frac{c_\\Delta}{1+c_\\Delta}
-            \\right]^{-1}.
-
-        Here :math:`c_\\Delta(M, z)` is the halo concentration returned by the halo
-        model, and :math:`r_\\Delta(M, z)` is the halo radius associated with the
-        active mass definition.
+        where :math:`\\rho_{\\mathrm{NFW}}(r) = \\rho_{m,0} \, u_{\\mathrm{NFW}}(r)`.
 
         Parameters
         ----------
