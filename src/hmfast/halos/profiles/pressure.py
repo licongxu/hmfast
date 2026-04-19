@@ -239,7 +239,7 @@ class GNFWPressureProfile(PressureProfile):
 
         .. math::
 
-            P_e(x, M, z) = P_{500c}(M_{500c}, z) \\, P_0 \\,
+            P_e(x, M, z) = P_{500c} \\, P_0 \\,
             \\left(c_{500} x_{500c}\\right)^{-\\gamma}
             \\left[1 + \\left(c_{500} x_{500c}\\right)^\\alpha\\right]^{(\\gamma-\\beta)/\\alpha},
 
@@ -249,7 +249,7 @@ class GNFWPressureProfile(PressureProfile):
 
         .. math::
 
-            P_{500c}(M_{500c}, z) =
+            P_{500c} =
             1.65
             \\left(\\frac{h}{0.7}\\right)^2
             E(z)^{8/3}

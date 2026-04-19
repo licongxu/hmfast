@@ -11,6 +11,11 @@ jax.config.update("jax_enable_x64", True)
 class kSZTracer(Tracer):
     """
     kinetic Sunyaev-Zeldovich effect tracer.
+
+    Attributes
+    ----------
+    profile : DensityProfile
+        Electron density profile used to model the kinetic Sunyaev-Zeldovich signal.
     """
     _required_profile_type = DensityProfile
     

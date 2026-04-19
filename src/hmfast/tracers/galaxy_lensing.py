@@ -13,6 +13,13 @@ jax.config.update("jax_enable_x64", True)
 class GalaxyLensingTracer(Tracer):
     """
     Galaxy weak lensing tracer. 
+
+    Attributes
+    ----------
+    profile : MatterProfile
+        Matter profile used to model the lensing signal sourced by large-scale structure.
+    dndz : tuple of jnp.ndarray
+        Normalized source redshift distribution stored as :math:`(z, dN/dz)`.
     """
 
     _required_profile_type = MatterProfile

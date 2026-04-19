@@ -27,6 +27,41 @@ class Cosmology:
     Cosmology model and emulator interface.
 
     Provides access to cosmological parameters and emulator-based predictions for distances, Hubble parameter, power spectra, CMB spectra, and derived parameters.
+
+    Attributes
+    ----------
+    cosmo_model : int
+        Integer identifier selecting the cosmological model and corresponding emulator set.
+    H0 : float
+        Hubble constant at :math:`z = 0` in units of km/s/Mpc.
+    omega_cdm : float
+        Physical cold dark matter density :math:`\Omega_{\mathrm{cdm}} h^2`.
+    omega_b : float
+        Physical baryon density :math:`\Omega_b h^2`.
+    ln1e10A_s : float
+        Logarithmic primordial scalar amplitude :math:`\ln(10^{10} A_s)`.
+    n_s : float
+        Scalar spectral index of primordial perturbations.
+    tau_reio : float
+        Optical depth to reionization.
+    m_ncdm : float
+        Total non-cold dark matter mass, used if a massive-neutrino cosmological model is selected.
+    N_ur : float
+        Effective number of ultra-relativistic species, used if a model with additional radiation degrees of freedom is selected.
+    w0_fld : float
+        Present-day dark energy equation-of-state parameter, used if a :math:`w`CDM cosmological model is selected.
+    fEDE : float
+        Maximum fractional contribution of early dark energy, used if an early dark energy cosmological model is selected.
+    log10z_c : float
+        Base-10 logarithm of the critical redshift for the early dark energy transition, used if an early dark energy cosmological model is selected.
+    thetai_scf : float
+        Initial scalar field displacement for the early dark energy model, in radians, used if an early dark energy cosmological model is selected.
+    r : float
+        Tensor-to-scalar ratio, used if a cosmological model including primordial tensors is selected.
+    T_cmb : float
+        CMB temperature today in Kelvin, used when non-emulator background quantities require it.
+    deg_ncdm : float
+        Degeneracy factor for the non-cold dark matter species, used if a massive-neutrino cosmological model is selected.
     """
     def __init__(self, cosmo_model=0, 
                  H0=68.0, omega_cdm=0.12, omega_b=0.02246576, ln1e10A_s=3.035173309489548, n_s=0.965, tau_reio=0.0544,      # LCDM
@@ -549,21 +584,10 @@ class Cosmology:
     # CMB
     # ------------------------------------------------------------------
 
-    def _get_ell_and_n(self, emu_preds, lmax):
-        """Helper to determine the multipole range."""
-        n = min(len(emu_preds), lmax - 1)
-        ell = jnp.arange(2, n + 2)
-        return ell, n
-
     #@partial(jax.jit, static_argnums=(1,))
-    def cl_tt(self, lmax=10000):
+    def cl_tt(self):
         """
-        Get CMB temperature power spectrum :math:`C_\\ell^{TT}` up to :math:`\\ell_{\\max}` from the emulator.
-
-        Parameters
-        ----------
-        lmax : int
-            Maximum multipole.
+        Get CMB temperature power spectrum :math:`C_\\ell^{TT}` from the emulator.
 
         Returns
         -------
@@ -572,18 +596,13 @@ class Cosmology:
         """
         params = self._to_dict()
         preds = self._load_emulator("TT").ten_to_predictions(params)
-        ell, n = self._get_ell_and_n(preds, lmax)
-        return ell, preds[:n]
+        ell = jnp.arange(2, len(preds) + 2)
+        return ell, preds
 
     #@partial(jax.jit, static_argnums=(1,))
-    def cl_ee(self, lmax=10000):
+    def cl_ee(self):
         """
-        Get CMB :math:`E`-mode polarization power spectrum :math:`C_\\ell^{EE}` up to :math:`\\ell_{\\max}` from the emulator.
-
-        Parameters
-        ----------
-        lmax : int
-            Maximum multipole.
+        Get CMB :math:`E`-mode polarization power spectrum :math:`C_\\ell^{EE}` from the emulator.
 
         Returns
         -------
@@ -592,18 +611,13 @@ class Cosmology:
         """
         params = self._to_dict()
         preds = self._load_emulator("EE").ten_to_predictions(params)
-        ell, n = self._get_ell_and_n(preds, lmax)
-        return ell, preds[:n]
+        ell = jnp.arange(2, len(preds) + 2)
+        return ell, preds
 
     #@partial(jax.jit, static_argnums=(1,))
-    def cl_te(self, lmax=10000):
+    def cl_te(self):
         """
-        Get CMB temperature-:math:`E`-mode cross power spectrum :math:`C_\\ell^{TE}` up to :math:`\\ell_{\\max}` from the emulator.
-
-        Parameters
-        ----------
-        lmax : int
-            Maximum multipole.
+        Get CMB temperature-:math:`E`-mode cross power spectrum :math:`C_\\ell^{TE}` from the emulator.
 
         Returns
         -------
@@ -612,18 +626,13 @@ class Cosmology:
         """
         params = self._to_dict()
         preds = self._load_emulator("TE").predictions(params)
-        ell, n = self._get_ell_and_n(preds, lmax)
-        return ell, preds[:n]
+        ell = jnp.arange(2, len(preds) + 2)
+        return ell, preds
 
     #@partial(jax.jit, static_argnums=(1,))
-    def cl_pp(self, lmax=10000):
+    def cl_pp(self):
         """
-        Get CMB lensing potential power spectrum :math:`C_\\ell^{\\phi\\phi}` up to :math:`\\ell_{\\max}` from the emulator.
-
-        Parameters
-        ----------
-        lmax : int
-            Maximum multipole.
+        Get CMB lensing potential power spectrum :math:`C_\\ell^{\\phi\\phi}` from the emulator.
 
         Returns
         -------
@@ -632,11 +641,11 @@ class Cosmology:
         """
         params = self._to_dict()
         preds = self._load_emulator("PP").ten_to_predictions(params)
-        ell, n = self._get_ell_and_n(preds, lmax)
+        ell = jnp.arange(2, len(preds) + 2)
         # Apply the 1/(2pi) normalization used in your original code
-        return ell, preds[:n] / (2 * jnp.pi)
+        return ell, preds / (2 * jnp.pi)
 
-    # def cl_bb(self, lmax=10000):
+    # def cl_bb(self):
     #     if self.cosmo_model != 6: 
     #         raise ValueError("This function is only implemented for EDE-v2 emulators.")
     #     params = self._to_dict()

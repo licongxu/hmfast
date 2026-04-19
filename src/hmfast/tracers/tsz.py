@@ -12,6 +12,11 @@ jax.config.update("jax_enable_x64", True)
 class tSZTracer(Tracer):
     """
     thermal Sunyaev-Zeldovich effect tracer.
+
+    Attributes
+    ----------
+    profile : PressureProfile
+        Pressure profile used to model the thermal Sunyaev-Zeldovich signal.
     """
 
     _required_profile_type = PressureProfile

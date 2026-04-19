@@ -12,6 +12,13 @@ jax.config.update("jax_enable_x64", True)
 class GalaxyHODTracer(Tracer):
     """
     Galaxy counts tracer.
+
+    Attributes
+    ----------
+    profile : GalaxyHODProfile
+        Halo occupation distribution profile used to model galaxy number counts.
+    dndz : tuple of jnp.ndarray
+        Normalized galaxy redshift distribution stored as :math:`(z, dN/dz)`.
     """
 
     _required_profile_type = GalaxyHODProfile

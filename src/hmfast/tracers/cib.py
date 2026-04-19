@@ -11,6 +11,11 @@ from hmfast.download import get_default_data_path
 class CIBTracer(Tracer):
     """
     Cosmic infrared background tracer.
+
+    Attributes
+    ----------
+    profile : CIBProfile
+        Infrared emissivity profile used to model the cosmic infrared background signal.
     """
 
     _required_profile_type = CIBProfile

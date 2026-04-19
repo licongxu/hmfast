@@ -14,6 +14,11 @@ jax.config.update("jax_enable_x64", True)
 class CMBLensingTracer(Tracer):
     """
     CMB weak lensing tracer.
+
+    Attributes
+    ----------
+    profile : MatterProfile
+        Matter profile used to model the CMB lensing convergence signal.
     """
 
     _required_profile_type = MatterProfile
