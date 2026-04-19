@@ -157,7 +157,7 @@ class GNFWPressureProfile(PressureProfile):
     Attributes
     ----------
     x : jnp.ndarray
-        Dimensionless radial grid :math:`x = r / r_\Delta` used to tabulate the profile and define the Hankel transform.
+        Dimensionless radial grid :math:`x = r / r_\\Delta` used to tabulate the profile and define the Hankel transform.
     P0 : float
         Dimensionless gNFW normalization.
     c500 : float
@@ -334,7 +334,7 @@ class B12PressureProfile(PressureProfile):
     Attributes
     ----------
     x : jnp.ndarray
-        Dimensionless radial grid :math:`x = r / r_\Delta` used to tabulate the profile and define the Hankel transform.
+        Dimensionless radial grid :math:`x = r / r_\\Delta` used to tabulate the profile and define the Hankel transform.
     A_P0 : float
         Amplitude of the pressure normalization scaling.
     A_xc : float
@@ -346,13 +346,13 @@ class B12PressureProfile(PressureProfile):
     alpha_m_xc : float
         Mass-scaling exponent of :math:`x_c`.
     alpha_m_beta : float
-        Mass-scaling exponent of :math:`\beta`.
+        Mass-scaling exponent of :math:`\\beta`.
     alpha_z_P0 : float
         Redshift-scaling exponent of :math:`P_0`.
     alpha_z_xc : float
         Redshift-scaling exponent of :math:`x_c`.
     alpha_z_beta : float
-        Redshift-scaling exponent of :math:`\beta`.
+        Redshift-scaling exponent of :math:`\\beta`.
     """
     def __init__(self, x=None, 
                  A_P0=18.1, A_xc=0.497, A_beta=4.35,

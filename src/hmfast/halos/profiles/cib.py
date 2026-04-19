@@ -558,7 +558,7 @@ class M21CIBProfile(CIBProfile):
     sigma2_LM : float
         Variance parameter entering the log-normal efficiency model.
     s_nu : tuple
-        Tabulated Maniyar spectral energy distribution grid stored as :math:`(z, \nu, S_\nu)`.
+        Tabulated Maniyar spectral energy distribution grid stored as :math:`(z, \\nu, S_\\nu)`.
     """
     def __init__(self, nu, eta_max=0.4028, z_c=1.5, tau=1.204, f_sub=0.134, 
                  M_min=10**11.5, M_eff=10**12.6, sigma2_LM=0.5, s_nu=None):

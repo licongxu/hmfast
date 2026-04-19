@@ -22,7 +22,7 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
     Attributes
     ----------
     sigma_log10M : float
-        Scatter in :math:`\log_{10} M` for the central-galaxy occupation threshold.
+        Scatter in :math:`\\log_{10} M` for the central-galaxy occupation threshold.
     alpha_s : float
         Power-law slope of the satellite occupation.
     M1_prime : float

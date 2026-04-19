@@ -157,7 +157,7 @@ class B16DensityProfile(DensityProfile):
     Attributes
     ----------
     x : jnp.ndarray
-        Dimensionless radial grid :math:`x = r / r_\Delta` used to tabulate the profile and define the Hankel transform.
+        Dimensionless radial grid :math:`x = r / r_\\Delta` used to tabulate the profile and define the Hankel transform.
     A_rho0 : float
         Amplitude of the density normalization scaling.
     A_alpha : float
@@ -165,17 +165,17 @@ class B16DensityProfile(DensityProfile):
     A_beta : float
         Amplitude of the outer-slope scaling.
     alpha_m_rho0 : float
-        Mass-scaling exponent of :math:`\rho_0`.
+        Mass-scaling exponent of :math:`\\rho_0`.
     alpha_m_alpha : float
-        Mass-scaling exponent of :math:`\alpha`.
+        Mass-scaling exponent of :math:`\\alpha`.
     alpha_m_beta : float
-        Mass-scaling exponent of :math:`\beta`.
+        Mass-scaling exponent of :math:`\\beta`.
     alpha_z_rho0 : float
-        Redshift-scaling exponent of :math:`\rho_0`.
+        Redshift-scaling exponent of :math:`\\rho_0`.
     alpha_z_alpha : float
-        Redshift-scaling exponent of :math:`\alpha`.
+        Redshift-scaling exponent of :math:`\\alpha`.
     alpha_z_beta : float
-        Redshift-scaling exponent of :math:`\beta`.
+        Redshift-scaling exponent of :math:`\\beta`.
     """
     def __init__(self, x=None, 
                  A_rho0=4000.0, A_alpha=0.88, A_beta=3.83,
@@ -450,7 +450,7 @@ class BCMDensityProfile(DensityProfile):
     Attributes
     ----------
     x : jnp.ndarray
-        Dimensionless radial grid :math:`x = r / r_{\mathrm{vir}}` used to tabulate the profile and define the Hankel transform.
+        Dimensionless radial grid :math:`x = r / r_{\\mathrm{vir}}` used to tabulate the profile and define the Hankel transform.
     log10Mc : float
         Characteristic halo-mass scale controlling the gas fraction suppression.
     theta_ej : float
