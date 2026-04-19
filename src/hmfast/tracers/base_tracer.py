@@ -24,9 +24,6 @@ class Tracer(ABC):
 
     @property
     def profile(self):
-        """
-        :meta private:
-        """
         return self._profile
 
     @profile.setter
