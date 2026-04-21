@@ -20,7 +20,7 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
     General halo occupation distribution (HOD) profile following
     `Zheng et al. (2007) <https://ui.adsabs.harvard.edu/abs/2007ApJ...667..760Z/abstract>`_
     and
-    `Zheng et al. (2011) <https://ui.adsabs.harvard.edu/abs/2011ApJ...736...59Z/abstract>`_.
+    `Zehavi et al. (2011) <https://ui.adsabs.harvard.edu/abs/2011ApJ...736...59Z/abstract>`_.
 
     In this model, the real-space galaxy profile is written as
 
@@ -28,7 +28,7 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
 
         u_r(r, m, z) = \\frac{1}{\\bar{n}_g(z)}
         \\left[N_{\\mathrm{cen}}(m) + N_{\\mathrm{sat}}(m) \\, u_{\\mathrm{sat}}(r, m, z)\\right]
-        \\tag{1}\\label{eq-hod-real-space}
+        \\tag{1}
 
     where :math:`u_{\\mathrm{sat}}(r, m, z)` is taken to be the NFW satellite
     profile. Central galaxies are naturally assumed to live at the halo center,
@@ -43,13 +43,13 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
         N_{\\mathrm{cen}}(m) = \\frac{1}{2} \\left[1 + \\mathrm{erf}\\left(
         \\frac{\\log_{10} m - \\log_{10} M_{\\mathrm{min}}}{\\sigma_{\\log_{10} M}}
         \\right)\\right]
-        \\tag{2}\\label{eq-hod-n-cen}
+        \\tag{2}
 
     .. math::
 
         N_{\\mathrm{sat}}(m) = H(m - M_0) \\, N_{\\mathrm{cen}}(m)
         \\, \\left(\\frac{m - M_0}{M_1'}\\right)^{\\alpha_s}
-        \\tag{3}\\label{eq-hod-n-sat}
+        \\tag{3}
 
     with the power-law term set to zero when :math:`m < M_0`.
 
@@ -59,7 +59,7 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
 
         \\bar{n}_g(z) = \\int d\\ln M \\, \\frac{dn}{d\\ln M}(M, z)
         \\left[N_{\\mathrm{cen}}(M) + N_{\\mathrm{sat}}(M)\\right]
-        \\tag{4}\\label{eq-hod-ng-bar}
+        \\tag{4}
 
     where :math:`dn / d\\ln M` is the halo model's halo mass function, and the
     large-scale galaxy bias is
@@ -68,7 +68,7 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
 
         b_g(z) = \\frac{1}{\\bar{n}_g(z)} \\int d\\ln M \\, \\frac{dn}{d\\ln M}(M, z)
         \\, b^{(1)}_h(M, z) \\left[N_{\\mathrm{cen}}(M) + N_{\\mathrm{sat}}(M)\\right]
-        \\tag{5}\\label{eq-hod-galaxy-bias}
+        \\tag{5}
 
     Here :math:`b_h^{(1)}` is the halo model's first-order halo bias.
 
@@ -143,7 +143,7 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
         """
         Expected number of central galaxies in a halo of mass ``m``.
 
-        See Eq. :eq:`eq-hod-n-cen` for the explicit form of
+        See Eq. (2) for the explicit form of
         :math:`N_{\\mathrm{cen}}(m)`.
 
         Parameters
@@ -164,7 +164,7 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
         """
         Expected number of satellite galaxies in a halo of mass ``m``.
 
-        See Eq. :eq:`eq-hod-n-sat` for the explicit form of
+        See Eq. (3) for the explicit form of
         :math:`N_{\\mathrm{sat}}(m)`.
 
         Parameters
@@ -184,7 +184,7 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
         """
         Comoving mean galaxy number density at redshift ``z``.
 
-        See Eq. :eq:`eq-hod-ng-bar` for :math:`\\bar{n}_g(z)`.
+        See Eq. (4) for :math:`\\bar{n}_g(z)`.
 
         Parameters
         ----------
@@ -215,7 +215,7 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
         """
         Large-scale galaxy bias at redshift ``z``.
 
-        See Eq. :eq:`eq-hod-galaxy-bias` for :math:`b_g(z)`.
+        See Eq. (5) for :math:`b_g(z)`.
 
         Parameters
         ----------
@@ -267,7 +267,7 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
         """
         Real-space galaxy HOD profile.
 
-        This evaluates Eq. :eq:`eq-hod-real-space`, with
+        This evaluates Eq. (1), with
         :math:`u_{\\mathrm{sat}}` identified with the NFW satellite profile.
 
         Parameters
@@ -303,7 +303,7 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
         """
         Fourier-space galaxy HOD profile.
 
-        This is the Fourier-space analogue of Eq. :eq:`eq-hod-real-space`,
+        This is the Fourier-space analogue of Eq. (1),
         with the satellite term traced by the NFW matter profile in Fourier
         space using the analytic Fourier transform of :math:`u_{\\mathrm{sat}}`.
     

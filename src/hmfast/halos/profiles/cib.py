@@ -20,30 +20,120 @@ class S12CIBProfile(CIBProfile):
     """
     CIB profile from `Shang et al. (2012) <https://ui.adsabs.harvard.edu/abs/2012MNRAS.421.2832S/abstract>`_.
 
+    In this model, the real-space first CIB moment is written as
+
+    .. math::
+
+        u_\\nu(r, M, z) = \\frac{1}{4\\pi}
+        \\left[L_\\nu^{\\mathrm{cen}}(M, z)
+        + L_\\nu^{\\mathrm{sat}}(M, z) \\, u_m(r, M, z)\\right]
+        \\tag{1}
+
+    where :math:`u_m(r, M, z)` is the normalized real-space NFW matter
+    profile. Central galaxies are assumed to live
+    at the halo center, so their real-space profile is a Dirac delta function,
+    while satellite galaxies are assumed to trace the NFW matter profile.
+
+    The central and satellite luminosities are
+
+    .. math::
+
+        L_\\nu^{\\mathrm{cen}}(M, z) = N_{\\mathrm{cen}}(M)
+        \\, L_\\nu^{\\mathrm{gal}}(M, z)
+        \\tag{2}
+
+    .. math::
+
+        L_\\nu^{\\mathrm{sat}}(M, z) =
+        \\int d\\ln m_s \\, \\frac{dN}{d\\ln m_s}(m_s \\mid M)
+        \\, L_\\nu^{\\mathrm{gal}}(m_s, z)
+        \\tag{3}
+
+    where :math:`N_{\\mathrm{cen}}(M) = 1` for :math:`M > M_{\\min}` and zero
+    otherwise.
+
+    The galaxy luminosity is
+
+    .. math::
+
+        L_\\nu^{\\mathrm{gal}}(M, z) = L_0 \\, \\Phi(z) \\, \\Sigma(M)
+        \\, \\Theta\\!\\left((1+z)\\nu, z\\right)
+        \\tag{4}
+
+    where
+
+    .. math::
+
+        \\Sigma(M) = \\frac{M}{\\sqrt{2 \\pi \\, \\sigma_{LM}^2}}
+        \\exp\\left[
+        -\\frac{\\left(\\log_{10} M - \\log_{10} M_{\\mathrm{eff}}\\right)^2}
+        {2 \\sigma_{LM}^2}
+        \\right]
+        \\tag{5}
+
+    .. math::
+
+        \\Phi(z) =
+        \\begin{cases}
+        (1 + z)^{\\delta}, & z < z_p, \\
+        1, & z \\ge z_p,
+        \\end{cases}
+        \\tag{6}
+
+    .. math::
+
+        \\Theta(\\nu, z) =
+        \\begin{cases}
+        \\left(\\nu / \\nu_0\\right)^{-\\gamma}, & \\nu \\ge \\nu_0, \\
+        \\left(\\nu / \\nu_0\\right)^{\\beta}
+        \\dfrac{B_\\nu(\\nu, T_d)}{B_\\nu(\\nu_0, T_d)}, & \\nu < \\nu_0,
+        \\end{cases}
+        \\tag{7}
+
+    with :math:`T_d(z) = T_0 (1 + z)^{\\alpha}` and :math:`B_\\nu(\\nu, T)` the
+    Planck blackbody function. In the implementation, the observed frequency
+    :math:`\\nu` is stored in GHz, so the SED is evaluated at the rest-frame
+    frequency :math:`(1+z)\\nu`.
+
+    The mean emissivity :math:`\\bar{j}_\\nu(z)` and the monopole intensity
+    :math:`I_\\nu` are given, respectively, by
+
+    .. math::
+
+        \\bar{j}_\\nu(z) = \\frac{h^3}{4 \\pi}
+        \\int d\\ln M \\, \\frac{dn}{d\\ln M}(M, z)
+        \\left[L_\\nu^{\\mathrm{cen}}(M, z) + L_\\nu^{\\mathrm{sat}}(M, z)\\right]
+        \\tag{8}
+
+    .. math::
+
+        I_\\nu = \\int dz \\, \\frac{d\\chi}{dz} \\, a(z) \\, \\bar{j}_\\nu(z)
+        \\tag{9}
+
     Attributes
     ----------
     nu : float
-        Observed frequency in GHz.
+        Observed frequency :math:`\nu` in GHz.
     L0 : float
-        Luminosity normalization.
+        Luminosity normalization :math:`L_0`.
     alpha : float
-        Redshift scaling exponent of the dust temperature.
+        Redshift scaling exponent :math:`\alpha` of the dust temperature.
     beta : float
-        Low-frequency spectral slope of the SED.
+        Low-frequency spectral slope :math:`\beta` of the SED.
     gamma : float
-        High-frequency spectral slope of the SED.
+        High-frequency spectral slope :math:`\gamma` of the SED.
     T0 : float
-        Dust temperature at :math:`z = 0` in Kelvin.
+        Dust temperature normalization :math:`T_0` at :math:`z = 0` in Kelvin.
     M_eff : float
-        Halo mass scale that maximizes the log-normal emissivity weighting.
+        Characteristic halo mass :math:`M_{\mathrm{eff}}` of peak emissivity.
     sigma2_LM : float
-        Variance of the log-normal mass weighting.
+        Log-normal variance :math:`\sigma_{LM}^2` entering :math:`\Sigma(M)`.
     delta : float
-        Redshift evolution exponent of the luminosity amplitude.
+        Redshift evolution exponent :math:`\delta` in :math:`\Phi(z)`.
     z_p : float
-        Pivot redshift above which the luminosity evolution saturates.
+        Pivot redshift :math:`z_p` above which :math:`\Phi(z)` saturates.
     M_min : float
-        Minimum subhalo mass used in the satellite luminosity integral.
+        Minimum halo mass :math:`M_{\min}` entering the central and satellite terms.
     """
     def __init__(self, nu, L0=6.4e-8, alpha=0.36, beta=1.75, gamma=1.7,
                  T0=24.4, M_eff=10**12.6, sigma2_LM=0.5, 
@@ -141,7 +231,6 @@ class S12CIBProfile(CIBProfile):
         float or jnp.ndarray
             Redshift evolution factor :math:`\\Phi(z)`.
         """
-        
         delta = self.delta
         z_p = self.z_p
 
@@ -197,48 +286,6 @@ class S12CIBProfile(CIBProfile):
         """
         Compute the Shang et al. galaxy luminosity assigned to a halo.
 
-        The luminosity is modeled as
-
-        .. math::
-
-            L_\\nu^{\\mathrm{gal}}(M, z) = L_0 \\, \\Phi(z) \\, \\Sigma(M)
-            \\, \\Theta\\!\\left((1+z)\\nu, z\\right),
-
-        where
-
-        .. math::
-
-            \\Sigma(M) = \\frac{M}{\\sqrt{2 \\pi \\, \\sigma_{LM}^2}}
-            \\exp\\left[
-            -\\frac{\\left(\\log_{10} M - \\log_{10} M_{\\mathrm{eff}}\\right)^2}
-            {2 \\sigma_{LM}^2}
-            \\right],
-
-        .. math::
-
-            \\Phi(z) =
-            \\begin{cases}
-            (1 + z)^{\\delta}, & z < z_p, \\
-            1, & z \\ge z_p,
-            \\end{cases}
-
-        and
-
-        .. math::
-
-            \\Theta(\\nu, z) =
-            \\begin{cases}
-            \\left(\\nu / \\nu_0\\right)^{-\\gamma}, & \\nu \\ge \\nu_0, \\
-            \\left(\\nu / \\nu_0\\right)^{\\beta}
-            \\dfrac{B_\\nu(\\nu, T_d)}{B_\\nu(\\nu_0, T_d)}, & \\nu < \\nu_0,
-            \\end{cases}
-
-        with :math:`T_d(z) = T_0 (1 + z)^{\\alpha}` and
-        :math:`B_\\nu(\\nu, T)` the Planck blackbody function. In the
-        implementation, :math:`\\nu` is the observed frequency in GHz stored
-        in ``self.nu``, so the SED is evaluated at the rest-frame frequency
-        :math:`(1+z)\\nu`.
-
         Parameters
         ----------
         halo_model : HaloModel
@@ -265,17 +312,6 @@ class S12CIBProfile(CIBProfile):
     def l_sat(self, halo_model, m, z):
         """
         Compute the total satellite CIB luminosity in the Shang et al. model.
-
-        The satellite contribution is evaluated as
-
-        .. math::
-
-            L_\\nu^{\\mathrm{sat}}(M, z) =
-            \\int d\\ln m_s \\, \\frac{dN}{d\\ln m_s}(m_s \\mid M)
-            \\, L_\\nu^{\\mathrm{gal}}(m_s, z),
-
-        with the integral approximated numerically over the subhalo mass grid
-        used in the implementation.
 
         Parameters
         ----------
@@ -315,16 +351,6 @@ class S12CIBProfile(CIBProfile):
         """
         Compute the central-galaxy CIB luminosity in the Shang et al. model.
 
-        The central contribution is implemented as
-
-        .. math::
-
-            L_\\nu^{\\mathrm{cen}}(M, z) = N_{\\mathrm{cen}}(M)
-            \\, L_\\nu^{\\mathrm{gal}}(M, z),
-
-        where :math:`N_{\\mathrm{cen}}(M) = 1` for :math:`M > M_{\\min}` and
-        zero otherwise.
-
         Parameters
         ----------
         halo_model : HaloModel
@@ -349,17 +375,7 @@ class S12CIBProfile(CIBProfile):
      
     def j_bar_nu(self, halo_model, m, z):
         """
-        Compute the mean comoving emissivity in the Shang et al. CIB model.
-
-        The emissivity is computed as
-
-        .. math::
-
-            \\bar{j}_\\nu(z) = \\frac{h^3}{4 \\pi}
-            \\int d\\ln M \\, \\frac{dn}{d\\ln M}(M, z)
-            \\left[L_{\\nu}^{\\mathrm{cen}}(M, z) + L_{\\nu}^{\\mathrm{sat}}(M, z)\\right],
-
-        where the luminosities are evaluated at the physical halo mass.
+        Compute the mean emissivity in the Shang et al. CIB model.
     
         Parameters
         ----------
@@ -373,9 +389,8 @@ class S12CIBProfile(CIBProfile):
         Returns
         -------
         jnp.ndarray
-            Mean comoving emissivity :math:`\\bar{j}_\\nu(z)`.
+            Mean emissivity :math:`\\bar{j}_\\nu(z)`.
         """
-        
         h = halo_model.cosmology.H0 / 100
 
         # Get the luminosities (ensure physical mass if needed)
@@ -403,15 +418,6 @@ class S12CIBProfile(CIBProfile):
         """
         Compute the CIB monopole intensity in the Shang et al. CIB model.
 
-        The specific intensity is evaluated as
-
-        .. math::
-
-            I_\\nu = \\int dz \\, \\frac{d\\chi}{dz} \\, a(z) \\, \\bar{j}_\\nu(z),
-
-        where :math:`a(z) = 1/(1+z)` and
-        :math:`d\\chi / dz = 1 / H(z)` in the units used internally.
-
         Parameters
         ----------
         halo_model : HaloModel
@@ -426,9 +432,7 @@ class S12CIBProfile(CIBProfile):
         float or jnp.ndarray
             Monopole intensity :math:`I_\\nu`.
         """
-       
-    
-        # Get the mean comoving emissivity (Shape: Nz)
+        # Get the mean emissivity (Shape: Nz)
         j_bar = self.j_bar_nu(halo_model, m, z)
         
         # dchi/dz = c / H(z), a(z) = 1/(1+z)
@@ -473,15 +477,6 @@ class S12CIBProfile(CIBProfile):
         """
         Compute the first CIB profile moment in real space.
 
-        Writing :math:`u_m(r, M, z)` for the normalized real-space NFW
-        profile, the implemented first moment is
-
-        .. math::
-
-            u_\\nu(r, M, z) = \\frac{1}{4\\pi}
-            \\left[L_\\nu^{\\mathrm{cen}}(M, z)
-            + L_\\nu^{\\mathrm{sat}}(M, z) \\, u_m(r, M, z)\\right].
-
         Parameters
         ----------
         halo_model : HaloModel
@@ -518,15 +513,6 @@ class S12CIBProfile(CIBProfile):
     def u_k(self, halo_model, k, m, z):
         """
         Compute the first CIB profile moment in Fourier space.
-
-        Writing :math:`u_m(k, M, z)` for the normalized analytic Fourier
-        transform of the NFW profile, the implemented first moment is
-
-        .. math::
-
-            u_\\nu(k, M, z) = \\frac{1}{4\\pi}
-            \\left[L_\\nu^{\\mathrm{cen}}(M, z)
-            + L_\\nu^{\\mathrm{sat}}(M, z) \\, u_m(k, M, z)\\right].
 
         Parameters
         ----------
@@ -567,26 +553,123 @@ class M21CIBProfile(CIBProfile):
     """
     CIB profile from `Maniyar et al. (2021) <https://ui.adsabs.harvard.edu/abs/2021A%26A...645A..40M/abstract>`_.
 
+    In this model, the real-space first CIB moment is written as
+
+    .. math::
+
+        u_\\nu(r, M, z) = \\frac{1}{4\\pi}
+        \\left[L_\\nu^{\\mathrm{cen}}(M, z)
+        + L_\\nu^{\\mathrm{sat}}(M, z) \\, u_m(r, M, z)\\right]
+        \\tag{1}
+
+    where :math:`u_m(r, M, z)` is the normalized real-space NFW matter
+    profile. Central galaxies are assumed to sit
+    at the halo center, while the satellite contribution traces the NFW matter
+    profile in real space.
+
+    The central and satellite luminosities are
+
+    .. math::
+
+        L_\\nu^{\\mathrm{cen}}(M, z) = N_{\\mathrm{cen}}(M)
+        \\, L_\\nu^{\\mathrm{gal}}\\!\\left(M(1-f_{\\mathrm{sub}}), z\\right)
+        \\tag{2}
+
+    .. math::
+
+        L_\\nu^{\\mathrm{sat}}(M, z) =
+        \\int d\\ln m_s \\, \\frac{dN}{d\\ln m_s}(m_s \\mid M)
+        \\, \\min\\!\\left[
+        L_\\nu^{\\mathrm{gal}}(m_s, z),
+        L_\\nu^{\\mathrm{gal}}\\!\\left(M_{\\max}, z\\right)
+        \\frac{m_s}{M_{\\max}}
+        \\right]
+        \\tag{3}
+
+    where :math:`M_{\\max} = M(1-f_{\\mathrm{sub}})` and
+    :math:`N_{\\mathrm{cen}}(M) = 1` for :math:`M(1-f_{\\mathrm{sub}}) > M_{\\min}`
+    and zero otherwise.
+
+    The galaxy luminosity is
+
+    .. math::
+
+        L_\\nu^{\\mathrm{gal}}(M, z) = 4\\pi \\, S_\\nu(z, \\nu)
+        \\, \\mathrm{SFR}(M, z)
+        \\tag{4}
+
+    where
+
+    .. math::
+
+        \\mathrm{SFR}(M, z) = 10^{10} \\, f_b \\, \\dot{M}(M, z)
+        \\, \\mathrm{SFR}_c(M, z)
+        \\tag{5}
+
+    .. math::
+
+        \\mathrm{SFR}_c(M, z) = \\eta_{\\max}
+        \\exp\\left[
+        -\\frac{\\left(\\ln M - \\ln M_{\\mathrm{eff}}\\right)^2}
+        {2 \\, \\sigma_{\\ln M}^2(M, z)}
+        \\right]
+        \\tag{6}
+
+    .. math::
+
+        \\sigma_{\\ln M}^2(M, z) =
+        \\left[
+        \\sigma_{\\ln M}^{\\star}
+        - H\\!\\left(M_{\\mathrm{eff}} - M\\right)
+        \\, \\tau \\, \\max\\left[0, z_c - z\\right]
+        \\right]^2
+        \\tag{7}
+
+    .. math::
+
+        \\dot{M}(M, z) = 46.1 \\, (1 + 1.11 z) \\, E(z)
+        \\left(\\frac{M}{10^{12} M_{\\odot}}\\right)^{1.1}
+        \\tag{8}
+
+    where :math:`f_b = \\Omega_b / \\Omega_{m,0}` and :math:`E(z) = H(z) / H_0`.
+
+    The mean emissivity :math:`\\bar{j}_\\nu(z)` and the monopole intensity
+    :math:`I_\\nu` are given, respectively, by
+
+    .. math::
+
+        \\bar{j}_\\nu(z) = (1+z) \\, \\chi^2(z) \\, \\frac{h^3}{4 \\pi}
+        \\int d\\ln M \\, \\frac{dn}{d\\ln M}(M, z)
+        \\left[L_\\nu^{\\mathrm{cen}}(M, z) + L_\\nu^{\\mathrm{sat}}(M, z)\\right]
+        \\tag{9}
+
+    .. math::
+
+        I_\\nu = \\int dz \\, \\frac{d\\chi}{dz} \\, a(z) \\, \\bar{j}_\\nu(z)
+        \\tag{10}
+
     Attributes
     ----------
     nu : float
-        Observed frequency in GHz.
+        Observed frequency :math:`\nu` in GHz.
     eta_max : float
-        Maximum star-formation efficiency.
+        Maximum star-formation efficiency :math:`\eta_{\max}`.
     z_c : float
-        Redshift pivot controlling the width of the high-mass efficiency branch.
+        Redshift pivot :math:`z_c` controlling the time-dependent width term.
     tau : float
-        Parameter controlling the redshift evolution of the high-mass width.
+        Width-evolution parameter :math:`\tau`.
     f_sub : float
-        Fraction of infrared luminosity assigned to subhalos.
+        Subhalo luminosity fraction :math:`f_{\mathrm{sub}}`.
     M_min : float
-        Minimum halo mass contributing to the emissivity.
+        Minimum halo mass :math:`M_{\min}` contributing to the emissivity.
     M_eff : float
-        Halo mass scale of peak star-formation efficiency.
+        Characteristic mass :math:`M_{\mathrm{eff}}` of peak star-formation efficiency.
     sigma2_LM : float
-        Variance parameter entering the log-normal efficiency model.
+        Variance parameter :math:`\sigma_{LM}^2` entering the efficiency model.
     s_nu : tuple
-        Tabulated Maniyar spectral energy distribution grid stored as :math:`(z, \\nu, S_\\nu)`.
+        Tabulated spectral template :math:`(z, \nu, S_\nu)` used to interpolate
+        :math:`S_\nu(z, \nu)`. If not provided, it is read from the default
+        auxiliary data files.
     """
     def __init__(self, nu, eta_max=0.4028, z_c=1.5, tau=1.204, f_sub=0.134, 
                  M_min=10**11.5, M_eff=10**12.6, sigma2_LM=0.5, s_nu=None):
@@ -669,7 +752,6 @@ class M21CIBProfile(CIBProfile):
             Mass accretion rate :math:`\\dot{M}(M, z)` with shape
             :math:`(N_M, N_z)`.
         """
-
         m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
         c_km_s = Const._c_ / 1e3
         
@@ -696,7 +778,6 @@ class M21CIBProfile(CIBProfile):
         jnp.ndarray
             Star-formation rate with shape :math:`(N_M, N_z)`.
         """
-
         # Gather all relevant parameters 
         
         cparams = halo_model.cosmology._cosmo_params()
@@ -730,50 +811,6 @@ class M21CIBProfile(CIBProfile):
         """
         Compute the Maniyar et al. galaxy luminosity assigned to a halo.
 
-        The luminosity is modeled as
-
-        .. math::
-
-            L_\\nu^{\\mathrm{gal}}(M, z) = 4\\pi \\, S_\\nu(z, \\nu)
-            \\, \\mathrm{SFR}(M, z),
-
-        where :math:`S_\\nu(z, \\nu)` is obtained by interpolation from the
-        tabulated spectral template used in the implementation,
-
-        .. math::
-
-            \\mathrm{SFR}(M, z) = 10^{10} \\, f_b \\, \\dot{M}(M, z)
-            \\, \\mathrm{SFR}_c(M, z),
-
-        with :math:`f_b = \\Omega_b / \\Omega_{m,0}`,
-
-        .. math::
-
-            \\mathrm{SFR}_c(M, z) = \\eta_{\\max}
-            \\exp\\left[
-            -\\frac{\\left(\\ln M - \\ln M_{\\mathrm{eff}}\\right)^2}
-            {2 \\, \\sigma_{\\ln M}^2(M, z)}
-            \\right],
-
-        .. math::
-
-            \\sigma_{\\ln M}^2(M, z) =
-            \\left[
-            \\sigma_{\\ln M}^{\\star}
-            - H\\!\\left(M_{\\mathrm{eff}} - M\\right)
-            \\, \\tau \\, \\max\\left[0, z - z_c\\right]
-            \\right]^2,
-
-        and
-
-        .. math::
-
-            \\dot{M}(M, z) = 46.1 \\, (1 + 1.11 z) \\, E(z)
-            \\left(\\frac{M}{10^{12} M_{\\odot}}\\right)^{1.1},
-
-        where :math:`H(x)` is the Heaviside function and
-        :math:`E(z) = H(z) / H_0`.
-
         Parameters
         ----------
         halo_model : HaloModel
@@ -799,20 +836,6 @@ class M21CIBProfile(CIBProfile):
     def l_sat(self, halo_model, m, z):
         """
         Compute the total satellite CIB luminosity in the Maniyar et al. model.
-
-        The satellite contribution is evaluated as
-
-        .. math::
-
-            L_\\nu^{\\mathrm{sat}}(M, z) =
-            \\int d\\ln m_s \\, \\frac{dN}{d\\ln m_s}(m_s \\mid M)
-            \\, \\min\\!\\left[
-            L_\\nu^{\\mathrm{gal}}(m_s, z),
-            L_\\nu^{\\mathrm{gal}}\\!\\left(M_{\\max}, z\\right)
-            \\frac{m_s}{M_{\\max}}
-            \\right],
-
-        where :math:`M_{\\max} = M (1-f_{\\mathrm{sub}})`.
 
         Parameters
         ----------
@@ -854,16 +877,6 @@ class M21CIBProfile(CIBProfile):
         """
         Compute the central-galaxy CIB luminosity in the Maniyar et al. model.
 
-        The central contribution is implemented as
-
-        .. math::
-
-            L_\\nu^{\\mathrm{cen}}(M, z) = N_{\\mathrm{cen}}(M)
-            \\, L_\\nu^{\\mathrm{gal}}\\!\\left(M(1-f_{\\mathrm{sub}}), z\\right),
-
-        where :math:`N_{\\mathrm{cen}}(M) = 1` for
-        :math:`M(1-f_{\\mathrm{sub}}) > M_{\\min}` and zero otherwise.
-
         Parameters
         ----------
         halo_model : HaloModel
@@ -889,17 +902,7 @@ class M21CIBProfile(CIBProfile):
     
     def j_bar_nu(self, halo_model, m, z):
         """
-        Compute the mean comoving emissivity in the Maniyar et al. CIB model.
-
-        The emissivity is computed as
-
-        .. math::
-
-            \\bar{j}_\\nu(z) = \\frac{h^3}{4 \\pi}
-            \\int d\\ln M \\, \\frac{dn}{d\\ln M}(M, z)
-            \\left[L_{\\nu}^{\\mathrm{cen}}(M, z) + L_{\\nu}^{\\mathrm{sat}}(M, z)\\right],
-
-        where the luminosities are evaluated at the physical halo mass.
+        Compute the mean emissivity in the Maniyar et al. CIB model.
 
         Parameters
         ----------
@@ -913,9 +916,8 @@ class M21CIBProfile(CIBProfile):
         Returns
         -------
         jnp.ndarray
-            Mean comoving emissivity :math:`\\bar{j}_\\nu(z)`.
+            Mean emissivity :math:`\\bar{j}_\\nu(z)`.
         """
-       
         h = halo_model.cosmology.H0 / 100
 
         # Get the luminosities (ensure physical mass if needed)
@@ -944,15 +946,6 @@ class M21CIBProfile(CIBProfile):
         """
         Compute the CIB monopole intensity in the Maniyar et al. CIB model.
 
-        The specific intensity is evaluated as
-
-        .. math::
-
-            I_\\nu = \\int dz \\, \\frac{d\\chi}{dz} \\, a(z) \\, \\bar{j}_\\nu(z),
-
-        where :math:`a(z) = 1/(1+z)` and
-        :math:`d\\chi / dz = 1 / H(z)` in the units used internally.
-
         Parameters
         ----------
         halo_model : HaloModel
@@ -967,8 +960,7 @@ class M21CIBProfile(CIBProfile):
         float or jnp.ndarray
             Monopole intensity :math:`I_\\nu`.
         """
-    
-        # Get the mean comoving emissivity (Shape: Nz)
+        # Get the mean emissivity (Shape: Nz)
         j_bar = self.j_bar_nu(halo_model, m, z)
         
         # dchi/dz = c / H(z), a(z) = 1/(1+z)
@@ -1012,15 +1004,6 @@ class M21CIBProfile(CIBProfile):
         """
         Compute the first CIB profile moment in real space.
 
-        Writing :math:`u_m(r, M, z)` for the normalized real-space NFW
-        profile, the implemented first moment is
-
-        .. math::
-
-            u_\\nu(r, M, z) = \\frac{1}{4\\pi}
-            \\left[L_\\nu^{\\mathrm{cen}}(M, z)
-            + L_\\nu^{\\mathrm{sat}}(M, z) \\, u_m(r, M, z)\\right].
-
         Parameters
         ----------
         halo_model : HaloModel
@@ -1058,15 +1041,6 @@ class M21CIBProfile(CIBProfile):
         """
         Compute the first CIB profile moment in Fourier space.
 
-        Writing :math:`u_m(k, M, z)` for the normalized analytic Fourier
-        transform of the NFW profile, the implemented first moment is
-
-        .. math::
-
-            u_\\nu(k, M, z) = \\frac{1}{4\\pi}
-            \\left[L_\\nu^{\\mathrm{cen}}(M, z)
-            + L_\\nu^{\\mathrm{sat}}(M, z) \\, u_m(k, M, z)\\right].
-
         Parameters
         ----------
         halo_model : HaloModel
@@ -1084,7 +1058,6 @@ class M21CIBProfile(CIBProfile):
             :math:`(k, u_\\nu)` where the profile array has shape
             :math:`(N_k, N_M, N_z)`.
         """
-    
         sat_term, cen_term = self._sat_and_cen_contribution(halo_model, k, m, z)
 
         return k, cen_term + sat_term

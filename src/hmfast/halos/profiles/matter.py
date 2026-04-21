@@ -17,6 +17,38 @@ class MatterProfile(HaloProfile):
 class NFWMatterProfile(MatterProfile):
     """
     Matter density profile from `Navarro, Frenk & White (1997) <https://ui.adsabs.harvard.edu/abs/1997ApJ...490..493N/abstract>`_.
+
+    The real-space mass-weighted matter profile is written as
+
+    .. math::
+
+        u_r(r, M, z) = \\frac{1}{\\bar{\\rho}_{m,0}} \,
+        \\frac{\\rho_s}{(r/r_s) \\left(1+r/r_s\\right)^2}
+        \\tag{1}
+
+    .. math::
+
+        \\rho_s = \\frac{M}{4\\pi r_s^3}
+        \\left[\\ln(1+c) - \\frac{c}{1+c}\\right]^{-1}
+        \\tag{2}
+
+    with :math:`r_s = r_\\Delta / c`.
+
+    The Fourier-space mass-weighted matter profile is written as
+
+    .. math::
+
+        u(k, M, z)
+        = \\frac{M}{\\bar{\\rho}_{m,0}}
+        \\left[\\ln(1+c) - \\frac{c}{1+c}\\right]^{-1}
+        \\Bigg[
+        \\cos(q) \\left(\\mathrm{Ci}[(1+c)q] - \\mathrm{Ci}(q)\\right)
+        + \\sin(q) \\left(\\mathrm{Si}[(1+c)q] - \\mathrm{Si}(q)\\right)
+        - \\frac{\\sin(cq)}{(1+c)q}
+        \\Bigg]
+        \\tag{3}
+
+    with :math:`q = k \\, r_s \\, (1+z)`.
     """
     def __init__(self):
         pass
@@ -25,23 +57,7 @@ class NFWMatterProfile(MatterProfile):
         """
         Compute the real-space mass-weighted NFW matter profile.
 
-        The returned quantity is the real-space counterpart of ``u_k``:
-
-        .. math::
-
-            u_r(r, M, z) = \\frac{\\rho_{\\mathrm{NFW}}(r, M, z)}{\\bar{\\rho}_{m,0}}
-            = \\frac{M}{\\bar{\\rho}_{m,0}} \\, u_r^m(r, M, z),
-
-        where
-
-        .. math::
-
-            u_r^m(r, M, z)
-            = \\frac{1}{4\\pi r_s^3}
-            \\left[\\ln(1+c) - \\frac{c}{1+c}\\right]^{-1}
-            \\frac{1}{x(1+x)^2},
-
-        with :math:`x = r / r_s` and :math:`r_s = r_\\Delta / c`.
+        This evaluates Eqs. (1) and (2).
 
         Parameters
         ----------
@@ -76,15 +92,8 @@ class NFWMatterProfile(MatterProfile):
     def u_k(self, halo_model, k, m, z):
         """
         Compute the mass-weighted NFW matter profile in Fourier space.
-    
-        The returned quantity is
-    
-        .. math::
-    
-            u(k, M, z) = \\frac{M}{\\bar{\\rho}_{m,0}} \\, u^m(k, M, z),
-    
-        where :math:`u^m(k, M, z)` is the normalized analytic Fourier transform of the NFW
-        density profile.
+
+        This evaluates Eq. (3).
     
         Parameters
         ----------
