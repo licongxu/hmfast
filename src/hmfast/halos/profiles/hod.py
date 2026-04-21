@@ -22,6 +22,7 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
     In this model, the real-space galaxy profile is written as
 
     .. math::
+        :label: eq-hod-real-space
 
         u_r(r, m, z) = \\frac{1}{\\bar{n}_g(z)}
         \\left[N_{\\mathrm{cen}}(m) + N_{\\mathrm{sat}}(m) \\, u_{\\mathrm{sat}}(r, m, z)\\right],
@@ -35,12 +36,14 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
     The occupation functions are
 
     .. math::
+        :label: eq-hod-n-cen
 
         N_{\\mathrm{cen}}(m) = \\frac{1}{2} \\left[1 + \\mathrm{erf}\\left(
         \\frac{\\log_{10} m - \\log_{10} M_{\\mathrm{min}}}{\\sigma_{\\log_{10} M}}
         \\right)\\right],
 
     .. math::
+        :label: eq-hod-n-sat
 
         N_{\\mathrm{sat}}(m) = H(m - M_0) \\, N_{\\mathrm{cen}}(m)
         \\, \\left(\\frac{m - M_0}{M_1'}\\right)^{\\alpha_s},
@@ -50,16 +53,22 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
     The mean comoving galaxy number density is
 
     .. math::
+        :label: eq-hod-ng-bar
 
         \\bar{n}_g(z) = \\int d\\ln M \\, \\frac{dn}{d\\ln M}(M, z)
         \\left[N_{\\mathrm{cen}}(M) + N_{\\mathrm{sat}}(M)\\right],
 
+    where :math:`dn / d\\ln M` is the halo model's halo mass function.
+
     and the large-scale galaxy bias is
 
     .. math::
+        :label: eq-hod-galaxy-bias
 
         b_g(z) = \\frac{1}{\\bar{n}_g(z)} \\int d\\ln M \\, \\frac{dn}{d\\ln M}(M, z)
         \\, b^{(1)}_h(M, z) \\left[N_{\\mathrm{cen}}(M) + N_{\\mathrm{sat}}(M)\\right].
+
+    Here :math:`b_h^{(1)}` is the halo model's first-order halo bias.
 
     Attributes
     ----------
@@ -129,7 +138,7 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
         """
         Expected number of central galaxies in a halo of mass ``m``.
 
-        See the class-level HOD definition above for the explicit form of
+        See Eq. :eq:`eq-hod-n-cen` for the explicit form of
         :math:`N_{\\mathrm{cen}}(m)`.
 
         Parameters
@@ -150,7 +159,7 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
         """
         Expected number of satellite galaxies in a halo of mass ``m``.
 
-        See the class-level HOD definition above for the explicit form of
+        See Eq. :eq:`eq-hod-n-sat` for the explicit form of
         :math:`N_{\\mathrm{sat}}(m)`.
 
         Parameters
@@ -170,7 +179,7 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
         """
         Comoving mean galaxy number density at redshift ``z``.
 
-        See the class-level HOD definition above for :math:`\\bar{n}_g(z)`.
+        See Eq. :eq:`eq-hod-ng-bar` for :math:`\\bar{n}_g(z)`.
 
         Parameters
         ----------
@@ -201,7 +210,7 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
         """
         Large-scale galaxy bias at redshift ``z``.
 
-        See the class-level HOD definition above for :math:`b_g(z)`.
+        See Eq. :eq:`eq-hod-galaxy-bias` for :math:`b_g(z)`.
 
         Parameters
         ----------
@@ -253,9 +262,8 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
         """
         Real-space galaxy HOD profile.
 
-        This evaluates the class-level HOD expression for the real-space
-        profile, with :math:`u_{\\mathrm{sat}}` identified with the NFW
-        satellite profile.
+        This evaluates Eq. :eq:`eq-hod-real-space`, with
+        :math:`u_{\\mathrm{sat}}` identified with the NFW satellite profile.
 
         Parameters
         ----------
@@ -290,9 +298,9 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
         """
         Fourier-space galaxy HOD profile.
 
-        This is the Fourier-space analogue of the class-level HOD profile,
+        This is the Fourier-space analogue of Eq. :eq:`eq-hod-real-space`,
         with the satellite term traced by the NFW matter profile in Fourier
-        space.
+        space using the analytic Fourier transform of :math:`u_{\\mathrm{sat}}`.
     
         Parameters
         ----------
