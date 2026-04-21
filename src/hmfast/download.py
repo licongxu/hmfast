@@ -130,9 +130,12 @@ def get_default_data_path():
     """
     Returns the base data path for emulator and auxiliary files.
     Uses the HMFAST_DATA_PATH environment variable if set,
-    otherwise defaults to ~/hmfast_data.
+    otherwise defaults to ~/.cache/hmfast.
     """
-    return os.environ.get("HMFAST_DATA_PATH", os.path.join(os.path.expanduser("~"), "hmfast_data"))
+    if "HMFAST_DATA_PATH" in os.environ:
+        return os.environ["HMFAST_DATA_PATH"]
+
+    return os.path.join(os.path.expanduser("~"), ".cache", "hmfast")
 
 def download_file(url, local_path, skip_existing=True):
     if skip_existing and os.path.exists(local_path):

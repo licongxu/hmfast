@@ -52,8 +52,8 @@ class DensityProfile(HaloProfile):
         # Calculate kSZ Prefactor as (Nm, Nz)
         vrms = jnp.sqrt(halo_model.cosmology.v_rms_squared(z))
         mu_e = 1.14
-        f_free = 1.0
-        prefactor = (4 * jnp.pi * r_delta**3 * f_free / mu_e * (1 + z)[None, :]**3 / chi[None, :]**2 * vrms[None, :])
+       
+        prefactor = (4 * jnp.pi * r_delta**3 / mu_e * (1 + z)[None, :]**3 / chi[None, :]**2 * vrms[None, :])
     
         # Get native Hankel transform outputs, which may not align with the k from this function's input
         k_native, u_k_native = self._u_k_hankel(halo_model, self.x, m, z)   # New way

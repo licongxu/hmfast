@@ -35,7 +35,7 @@ class PressureProfile(HaloProfile):
             and the transformed profile has shape :math:`(N_k, N_M, N_z)`.
         """
         h = halo_model.cosmology.H0 / 100 
-        B = 1.0 #self.B
+        B = self.B
         delta = halo_model.mass_definition.delta
         k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
 

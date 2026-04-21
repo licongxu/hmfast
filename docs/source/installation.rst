@@ -23,7 +23,7 @@ The recommended way to get started is as follows:
    ``hmfast`` relies on pre-trained emulators, with a distinct set for each cosmology.
    To reduce the initial data footprint, only the ΛCDM and EDE-v2 sets are downloaded automatically. 
    
-   By default, they are stored in ``~/hmfast_data``.  
+   By default, they are stored in ``~/.cache/hmfast``.  
 
    **To change the download location**, simply uncomment the first two lines below and set your preferred path.
 
