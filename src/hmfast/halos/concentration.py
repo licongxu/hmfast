@@ -45,6 +45,14 @@ class D08Concentration(Concentration):
     """
     Concentration-mass relation from `Duffy et al. (2008) <https://ui.adsabs.harvard.edu/abs/2008MNRAS.390L..64D/abstract>`_.
 
+    The fitted relation is
+
+    .. math::
+
+        c_\\Delta(M, z) = A \\left(\\frac{M}{M_\\mathrm{pivot}}\\right)^B (1+z)^C
+
+    where :math:`A`, :math:`B`, :math:`C`, and :math:`M_\\mathrm{pivot}` are fit parameters.
+
     Calibrated for 200c, 200m, and virial mass definitions.
     """
     def __init__(self):
@@ -53,14 +61,21 @@ class D08Concentration(Concentration):
 
     def c_delta(self, halo_model, m, z):
         """
-        The relation is:
+        Compute the concentration parameter.
 
-        .. math::
+        Parameters
+        ----------
+        halo_model : HaloModel
+            Halo model providing the cosmology and target mass definition.
+        m : array-like
+            Halo masses in the halo model mass convention.
+        z : array-like
+            Redshifts.
 
-            c_\\Delta(M, z) = A \\left(\\frac{M}{M_\\mathrm{pivot}}\\right)^B (1+z)^C
-
-        where :math:`A`, :math:`B`, :math:`C`, and :math:`M_\\mathrm{pivot}` are fit parameters.
-        Conversion between mass definitions is handled if needed.
+        Returns
+        -------
+        array-like
+            Concentration values with shape ``(len(m), len(z))``.
         """
         
         m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
@@ -106,6 +121,15 @@ class B13Concentration(Concentration):
     """
     Concentration-mass relation from `Bhattacharya et al. (2013) <https://ui.adsabs.harvard.edu/abs/2013ApJ...766...32B/abstract>`_.
 
+    The fitted relation is
+
+    .. math::
+
+        c_\\Delta(M, z) = A D(z)^B \\nu^C
+
+    where :math:`D(z)` is the linear growth factor and :math:`\\nu` is a function
+    of mass and redshift.
+
     Calibrated for 200c, 200m, and virial mass definitions.
     """
     def __init__(self):
@@ -113,14 +137,21 @@ class B13Concentration(Concentration):
 
     def c_delta(self, halo_model, m, z):
         """
-        The relation is:
+        Compute the concentration parameter.
 
-        .. math::
+        Parameters
+        ----------
+        halo_model : HaloModel
+            Halo model providing the cosmology and target mass definition.
+        m : array-like
+            Halo masses in the halo model mass convention.
+        z : array-like
+            Redshifts.
 
-            c_\\Delta(M, z) = A D(z)^B \\nu^C
-
-        where :math:`D(z)` is the linear growth factor and :math:`\\nu` is a function of mass and redshift.
-        Parameters :math:`A`, :math:`B`, :math:`C` are taken from the paper.
+        Returns
+        -------
+        array-like
+            Concentration values with shape ``(len(m), len(z))``.
         """
         m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
         mdef = halo_model.mass_definition
@@ -175,6 +206,14 @@ class SC14Concentration(Concentration):
     """
     Concentration-mass relation from `Sanchez-Conde & Prada (2014) <https://ui.adsabs.harvard.edu/abs/2014MNRAS.442.2271S/abstract>`_.
 
+    The fitted relation is
+
+    .. math::
+
+        c_{200c}(M, z) = \\sum_{i=0}^5 a_i [\\log_{10}(M)]^i \\times (1+z)^{-1}
+
+    where the coefficients :math:`a_i` are from Eq. 1 of the paper.
+
     Calibrated for 200c mass definition.
     """
     def __init__(self):
@@ -182,13 +221,21 @@ class SC14Concentration(Concentration):
 
     def c_delta(self, halo_model, m, z):
         """
-        The relation is:
-    
-        .. math::
-    
-            c_{200c}(M, z) = \\sum_{i=0}^5 a_i [\\log_{10}(M)]^i \\times (1+z)^{-1}
-    
-        where the coefficients :math:`a_i` are from Eq. 1 of the paper. This relation is calibrated for 200c masses.
+        Compute the concentration parameter.
+
+        Parameters
+        ----------
+        halo_model : HaloModel
+            Halo model providing the cosmology and target mass definition.
+        m : array-like
+            Halo masses in the halo model mass convention.
+        z : array-like
+            Redshifts.
+
+        Returns
+        -------
+        array-like
+            Concentration values with shape ``(len(m), len(z))``.
         """
         
         m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
