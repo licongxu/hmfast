@@ -15,7 +15,16 @@ class Concentration(ABC):
     @abstractmethod
     def c_delta(self, halo_model, m, z):
         """
-        Compute the concentration parameter c_delta.
+        Compute the concentration parameter :math:`c_\Delta`.
+
+        Parameters
+        ----------
+        halo_model : HaloModel
+            Halo model providing the cosmology and target mass definition.
+        m : array-like
+            Halo masses in physical :math:`M_\odot`.
+        z : array-like
+            Redshifts.
         """
         pass
 
@@ -36,6 +45,15 @@ class ConstantConcentration(Concentration):
     def c_delta(self, halo_model, m, z):
         """
         Returns a constant value for the concentration parameter, broadcast to the shape of the input masses and redshifts.
+
+        Parameters
+        ----------
+        halo_model : HaloModel
+            Halo model providing the cosmology and target mass definition.
+        m : array-like
+            Halo masses in physical :math:`M_\odot`.
+        z : array-like
+            Redshifts.
         """
         return jnp.broadcast_to(self.c, (len(jnp.atleast_1d(m)), len(jnp.atleast_1d(z))))
 
@@ -68,7 +86,7 @@ class D08Concentration(Concentration):
         halo_model : HaloModel
             Halo model providing the cosmology and target mass definition.
         m : array-like
-            Halo masses in the halo model mass convention.
+            Halo masses in physical :math:`M_\odot`.
         z : array-like
             Redshifts.
 
@@ -79,6 +97,8 @@ class D08Concentration(Concentration):
         """
         
         m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
+        h = halo_model.cosmology.H0 / 100.0
+        m_internal = m * h
         mdef = halo_model.mass_definition
 
         # Parameter Lookup Table
@@ -93,7 +113,7 @@ class D08Concentration(Concentration):
         
         if key in coeffs:
             A, B, C, M_pivot = coeffs[key]
-            return A * (m[:, None] / M_pivot)**B * (1 + z[None, :])**C
+            return A * (m_internal[:, None] / M_pivot)**B * (1 + z[None, :])**C
 
         if not halo_model.convert_masses:
             raise ValueError(f"Mass definition {key} incompatible with the selected concentration-mass relation.")
@@ -101,16 +121,15 @@ class D08Concentration(Concentration):
         # Conversion Logic (Native 200c)
         A, B, C, M_pivot = coeffs[(200, "critical")]
         native_def = MassDefinition(200, "critical")
-        c_seed = A * (m[:, None] / M_pivot)**B * (1 + z[None, :])**C
-        m_200c = convert_m_delta(halo_model.cosmology, m, z, mass_def_old=mdef, mass_def_new=native_def, c_old=c_seed)
+        c_seed = A * (m_internal[:, None] / M_pivot)**B * (1 + z[None, :])**C
+        m_200c = convert_m_delta(halo_model.cosmology, m_internal, z, mass_def_old=mdef, mass_def_new=native_def, c_old=c_seed)
         
         # Compute r_s from native 200c mesh
         c_200c = A * (m_200c / M_pivot)**B * (1 + z[None, :])**C
-        h = halo_model.cosmology.H0 / 100.0
         r_200c = jax.vmap(lambda mc, zi: native_def.r_delta(halo_model.cosmology, mc / h, zi), (1, 0))(m_200c, z).T
         
         # Final Target Radius / r_s
-        r_target = mdef.r_delta(halo_model.cosmology, m / h, z)
+        r_target = mdef.r_delta(halo_model.cosmology, m, z)
         return (r_target * c_200c / r_200c).reshape(len(m), len(z))
 
 
@@ -144,7 +163,7 @@ class B13Concentration(Concentration):
         halo_model : HaloModel
             Halo model providing the cosmology and target mass definition.
         m : array-like
-            Halo masses in the halo model mass convention.
+            Halo masses in physical :math:`M_\odot`.
         z : array-like
             Redshifts.
 
@@ -154,6 +173,8 @@ class B13Concentration(Concentration):
             Concentration values with shape ``(len(m), len(z))``.
         """
         m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
+        h = halo_model.cosmology.H0 / 100.0
+        m_internal = m * h
         mdef = halo_model.mass_definition
         
         # Parameter Lookup Table
@@ -174,7 +195,7 @@ class B13Concentration(Concentration):
         # Direct Match Case
         if key in coeffs:
             A, B, C = coeffs[key]
-            return compute_c(m[:, None], z[None, :], D[None, :], A, B, C)
+            return compute_c(m_internal[:, None], z[None, :], D[None, :], A, B, C)
 
         # Conversion Fallback
         if not halo_model.convert_masses:
@@ -184,19 +205,18 @@ class B13Concentration(Concentration):
         A, B, C = coeffs[(200, "critical")]
         native_def = MassDefinition(200, "critical")
         # c_seed for the solver
-        c_seed = compute_c(m[:, None], z[None, :], D[None, :], A, B, C)
+        c_seed = compute_c(m_internal[:, None], z[None, :], D[None, :], A, B, C)
         
-        m_native = convert_m_delta(halo_model.cosmology, m, z, mass_def_old=mdef, mass_def_new=native_def, c_old=c_seed)
+        m_native = convert_m_delta(halo_model.cosmology, m_internal, z, mass_def_old=mdef, mass_def_new=native_def, c_old=c_seed)
         
         # Re-compute concentration and scale radius at native definition
         c_native = compute_c(m_native, z[None, :], D[None, :], A, B, C)
 
-        h = halo_model.cosmology.H0 / 100.0
         r_native = jax.vmap(lambda mc, zi: native_def.r_delta(halo_model.cosmology, mc / h, zi), in_axes=(1, 0))(m_native, z).T
         r_s = r_native / c_native
 
         # Final Target Radius / r_s
-        r_target = mdef.r_delta(halo_model.cosmology, m / h, z)
+        r_target = mdef.r_delta(halo_model.cosmology, m, z)
         return (r_target / r_s).reshape(len(m), len(z))
 
 
@@ -228,7 +248,7 @@ class SC14Concentration(Concentration):
         halo_model : HaloModel
             Halo model providing the cosmology and target mass definition.
         m : array-like
-            Halo masses in the halo model mass convention.
+            Halo masses in physical :math:`M_\odot`.
         z : array-like
             Redshifts.
 
@@ -239,6 +259,8 @@ class SC14Concentration(Concentration):
         """
         
         m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
+        h = halo_model.cosmology.H0 / 100.0
+        m_internal = m * h
         mdef = halo_model.mass_definition
 
         # 1. Parameter Table (SC14 is only natively defined for 200c)
@@ -258,7 +280,7 @@ class SC14Concentration(Concentration):
 
         # Direct Match Case
         if key in coeffs:
-            return compute_c(m[:, None], z[None, :], coeffs[key])
+            return compute_c(m_internal[:, None], z[None, :], coeffs[key])
 
         # Conversion Fallback
         if not halo_model.convert_masses:
@@ -268,20 +290,19 @@ class SC14Concentration(Concentration):
         native_coeffs = coeffs[(200, "critical")]
         native_def = MassDefinition(200, "critical")
         # c_seed for the solver
-        c_seed = compute_c(m[:, None], z[None, :], native_coeffs)
+        c_seed = compute_c(m_internal[:, None], z[None, :], native_coeffs)
         
-        m_native = convert_m_delta(halo_model.cosmology, m, z, mass_def_old=mdef, mass_def_new=native_def, c_old=c_seed)
+        m_native = convert_m_delta(halo_model.cosmology, m_internal, z, mass_def_old=mdef, mass_def_new=native_def, c_old=c_seed)
         
         # Re-compute concentration and radii at native definition
         c_native = compute_c(m_native, z[None, :], native_coeffs)
 
-        h = halo_model.cosmology.H0 / 100.0
         r_native = jax.vmap(lambda mc, zi: native_def.r_delta(halo_model.cosmology, mc / h, zi), in_axes=(1, 0))(m_native, z).T
         
         r_s = r_native / c_native
 
         # Final Target Radius / r_s
-        r_target = mdef.r_delta(halo_model.cosmology, m / h, z)
+        r_target = mdef.r_delta(halo_model.cosmology, m, z)
         return (r_target / r_s).reshape(len(m), len(z))
 
 

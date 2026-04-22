@@ -282,13 +282,12 @@ class GNFWPressureProfile(PressureProfile):
         P0, c500, alpha, beta, gamma, B = self.P0, self.c500, self.alpha, self.beta, self.gamma, self.B
         x, m, z = jnp.atleast_1d(x), jnp.atleast_1d(m), jnp.atleast_1d(z)
         h = H0 / 100.0
-        m_internal = m * h
     
         # Convert input mass to M500c for normalization, since this profile was calibrated for 500c
         mass_def_old = halo_model.mass_definition
         mass_def_500c = MassDefinition(500, "critical")
-        c_old = halo_model.concentration.c_delta(halo_model, m_internal, z)
-        m500c = convert_m_delta(halo_model.cosmology, m_internal, z, mass_def_old, mass_def_500c, c_old=c_old)
+        c_old = halo_model.concentration.c_delta(halo_model, m, z)
+        m500c = convert_m_delta(halo_model.cosmology, m * h, z, mass_def_old, mass_def_500c, c_old=c_old)
     
         # Compute r_delta (input) and r_500c (for GNFW scaling)
         r_delta = halo_model.mass_definition.r_delta(halo_model.cosmology, m, z)  # (Nm, Nz)
@@ -488,13 +487,12 @@ class B12PressureProfile(PressureProfile):
         h = cparams["h"]
         alpha, gamma = 1.0, -0.3
         x, m, z = jnp.atleast_1d(x), jnp.atleast_1d(m), jnp.atleast_1d(z)
-        m_internal = m * h
     
         # Convert input mass to M200c for normalization
         mass_def_old = halo_model.mass_definition
         mass_def_200c = MassDefinition(200, "critical")
-        c_old = halo_model.concentration.c_delta(halo_model, m_internal, z)
-        m200c = convert_m_delta(halo_model.cosmology, m_internal, z, mass_def_old, mass_def_200c, c_old=c_old)
+        c_old = halo_model.concentration.c_delta(halo_model, m, z)
+        m200c = convert_m_delta(halo_model.cosmology, m * h, z, mass_def_old, mass_def_200c, c_old=c_old)
     
         # Compute r_delta (input) and r_200c (for B12 scaling)
         r_delta = halo_model.mass_definition.r_delta(halo_model.cosmology, m, z)  # (Nm, Nz)

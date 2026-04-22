@@ -81,13 +81,13 @@ class NFWMatterProfile(MatterProfile):
         r = jnp.atleast_1d(r)
         m = jnp.atleast_1d(m)
         z = jnp.atleast_1d(z)
-        m_internal = m * cparams["h"]
+        #m_internal = m * cparams["h"]
 
         rho_mean_0 = cparams["Rho_crit_0"] * cparams["Omega0_m"]
         # Normalized real-space profile (unit mass)
         u_r_norm = self._u_r_matter(halo_model, r, m, z)
         # Mass-weighted profile
-        return (m_internal[:, None] / rho_mean_0)[None, :, :] * u_r_norm
+        return (m[:, None] / 1)[None, :, :] * u_r_norm
 
 
     def u_k(self, halo_model, k, m, z):

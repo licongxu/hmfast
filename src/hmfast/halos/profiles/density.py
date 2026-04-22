@@ -53,15 +53,8 @@ class DensityProfile(HaloProfile):
         # (M_sun / h) (Mpc / h)^-3 convention, so the projected wrapper
         # retains one factor of h to preserve the kSZ normalization while
         # exposing k in Mpc^-1.
-        prefactor = (
-            h
-            * 4
-            * jnp.pi
-            * r_delta**3
-            / mu_e
-            * (1 + z)[None, :]**3
-            / chi[None, :]**2
-            * vrms[None, :]
+        prefactor = (h * 4 * jnp.pi * r_delta**3 / mu_e
+            * (1 + z)[None, :]**3 / chi[None, :]**2 * vrms[None, :]
         )
     
         # Get native Hankel transform outputs, which may not align with the k from this function's input
@@ -457,7 +450,7 @@ class NFWDensityProfile(DensityProfile):
         
         # Get scale radius r_s
         r_delta = halo_model.mass_definition.r_delta(halo_model.cosmology, m, z) * cparams["h"]
-        c_delta = halo_model.concentration.c_delta(halo_model, m_internal, z)
+        c_delta = halo_model.concentration.c_delta(halo_model, m, z)
         r_s = r_delta / c_delta # (Nm, Nz)
         
         # Calculate rho_s
