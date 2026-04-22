@@ -139,7 +139,8 @@ class MassDefinition:
         cosmology : Cosmology
             Cosmology object used to evaluate the reference density.
         m : float or array-like
-            Halo mass enclosed within the overdensity radius.
+            Halo mass enclosed within the overdensity radius, in
+            :math:`M_\\odot`.
         z : float or array-like
             Redshift at which to compute the radius.
 
@@ -147,11 +148,12 @@ class MassDefinition:
         -------
         float or array-like
             Radius :math:`r_\\Delta` within which the mean enclosed density is
-            :math:`\\Delta \\rho_{\\mathrm{ref}}(z)`.
+            :math:`\\Delta \\rho_{\\mathrm{ref}}(z)`, in physical Mpc.
         """
         delta, reference = self.delta, self.reference
+        h = cosmology.H0 / 100.0
 
-        m = jnp.atleast_1d(m)[:, None]
+        m = jnp.atleast_1d(m)[:, None] * h
         z = jnp.atleast_1d(z)[None, :]
 
         rho_ref = cosmology.critical_density(z)
@@ -162,7 +164,7 @@ class MassDefinition:
         if reference == "mean":
             rho_ref *= cosmology.omega_m(z)
 
-        return (3.0 * m / (4.0 * jnp.pi * delta * rho_ref)) ** (1.0 / 3.0)
+        return (3.0 * m / (4.0 * jnp.pi * delta * rho_ref)) ** (1.0 / 3.0) / h
 
 
 jax.tree_util.register_pytree_node(

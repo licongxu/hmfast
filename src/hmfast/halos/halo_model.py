@@ -139,32 +139,6 @@ class HaloModel:
         )
         # Use _tree_unflatten to create the new instance efficiently
         return self._tree_unflatten(new_aux_data, (new_cosmo,))
-       
-    def r_delta(self, m, z, mass_definition=None):
-        """
-        Compute the halo radius :math:`r_\\Delta` associated with a halo mass.
-
-        .. math::
-
-            r_\\Delta = \\left[\\frac{3M}{4\\pi \\Delta \\rho_{\\mathrm{ref}}(z)}\\right]^{1/3}
-
-        Parameters
-        ----------
-        m : float
-            Halo mass enclosed within the overdensity radius.
-        z : float
-            Redshift at which to compute the radius.
-        mass_definition : MassDefinition, optional
-            Mass definition (default: self.mass_definition).
-
-        Returns
-        -------
-        float
-            Radius :math:`r_\\Delta` within which the mean enclosed density is
-            :math:`\\Delta \\rho_{\\mathrm{ref}}(z)`.
-        """
-        mass_definition = self.mass_definition if mass_definition is None else mass_definition
-        return mass_definition.r_delta(self.cosmology, m, z)
 
 
     

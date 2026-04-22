@@ -91,10 +91,11 @@ class D08Concentration(Concentration):
         
         # Compute r_s from native 200c mesh
         c_200c = A * (m_200c / M_pivot)**B * (1 + z[None, :])**C
-        r_200c = jax.vmap(lambda mc, zi: native_def.r_delta(halo_model.cosmology, mc, zi), (1, 0))(m_200c, z).T
+        h = halo_model.cosmology.H0 / 100.0
+        r_200c = jax.vmap(lambda mc, zi: native_def.r_delta(halo_model.cosmology, mc / h, zi), (1, 0))(m_200c, z).T
         
         # Final Target Radius / r_s
-        r_target = mdef.r_delta(halo_model.cosmology, m, z)
+        r_target = mdef.r_delta(halo_model.cosmology, m / h, z)
         return (r_target * c_200c / r_200c).reshape(len(m), len(z))
 
 
@@ -158,12 +159,13 @@ class B13Concentration(Concentration):
         
         # Re-compute concentration and scale radius at native definition
         c_native = compute_c(m_native, z[None, :], D[None, :], A, B, C)
-        
-        r_native = jax.vmap(lambda mc, zi: native_def.r_delta(halo_model.cosmology, mc, zi), in_axes=(1, 0))(m_native, z).T
+
+        h = halo_model.cosmology.H0 / 100.0
+        r_native = jax.vmap(lambda mc, zi: native_def.r_delta(halo_model.cosmology, mc / h, zi), in_axes=(1, 0))(m_native, z).T
         r_s = r_native / c_native
 
         # Final Target Radius / r_s
-        r_target = mdef.r_delta(halo_model.cosmology, m, z)
+        r_target = mdef.r_delta(halo_model.cosmology, m / h, z)
         return (r_target / r_s).reshape(len(m), len(z))
 
 
@@ -225,13 +227,14 @@ class SC14Concentration(Concentration):
         
         # Re-compute concentration and radii at native definition
         c_native = compute_c(m_native, z[None, :], native_coeffs)
-        
-        r_native = jax.vmap(lambda mc, zi: native_def.r_delta(halo_model.cosmology, mc, zi), in_axes=(1, 0))(m_native, z).T
+
+        h = halo_model.cosmology.H0 / 100.0
+        r_native = jax.vmap(lambda mc, zi: native_def.r_delta(halo_model.cosmology, mc / h, zi), in_axes=(1, 0))(m_native, z).T
         
         r_s = r_native / c_native
 
         # Final Target Radius / r_s
-        r_target = mdef.r_delta(halo_model.cosmology, m, z)
+        r_target = mdef.r_delta(halo_model.cosmology, m / h, z)
         return (r_target / r_s).reshape(len(m), len(z))
 
 

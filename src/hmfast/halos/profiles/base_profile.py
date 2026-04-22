@@ -67,9 +67,10 @@ class HaloProfile:
         r = jnp.atleast_1d(r)
         m = jnp.atleast_1d(m)
         z = jnp.atleast_1d(z)
+        h = halo_model.cosmology.H0 / 100.0
 
         c_delta = halo_model.concentration.c_delta(halo_model, m, z)
-        r_delta = halo_model.mass_definition.r_delta(halo_model.cosmology, m, z)
+        r_delta = halo_model.mass_definition.r_delta(halo_model.cosmology, m / h, z) * h
         r_s = r_delta / c_delta
 
         f_nfw = 1.0 / (jnp.log1p(c_delta) - c_delta / (1.0 + c_delta))
@@ -89,10 +90,11 @@ class HaloProfile:
         
         # Ensure all inputs are 1D arrays
         k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
+        h = halo_model.cosmology.H0 / 100.0
         
         # Get c_delta and r_delta
         c_delta = halo_model.concentration.c_delta(halo_model, m, z)
-        r_delta = halo_model.mass_definition.r_delta(halo_model.cosmology, m, z)
+        r_delta = halo_model.mass_definition.r_delta(halo_model.cosmology, m / h, z) * h
         lambda_val = 1.0 
         
         # Compute analytical profile q terms with shape: (N_k, N_m, N_z)

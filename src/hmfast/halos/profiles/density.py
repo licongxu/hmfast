@@ -41,7 +41,7 @@ class DensityProfile(HaloProfile):
     
         # Compute r_delta and ell_delta
         delta = halo_model.mass_definition.delta
-        r_delta = halo_model.mass_definition.r_delta(halo_model.cosmology, m, z)
+        r_delta = halo_model.mass_definition.r_delta(halo_model.cosmology, m/h, z) * h
         d_A_z = jnp.atleast_1d(halo_model.cosmology.angular_diameter_distance(z)) * h
         ell_delta = d_A_z[None, :] / r_delta
         

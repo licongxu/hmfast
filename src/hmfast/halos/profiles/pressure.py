@@ -40,7 +40,7 @@ class PressureProfile(HaloProfile):
         k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
 
         
-        r_delta = halo_model.mass_definition.r_delta(halo_model.cosmology, m, z) / B**(1/3) # (Nm, Nz)
+        r_delta = halo_model.mass_definition.r_delta(halo_model.cosmology, m / h, z) * h / B**(1/3) # (Nm, Nz)
         d_A = jnp.atleast_1d(halo_model.cosmology.angular_diameter_distance(z)) * h
         ell_delta = d_A[None, :] / r_delta  # (Nm, Nz)
         
@@ -292,8 +292,9 @@ class GNFWPressureProfile(PressureProfile):
         m500c = convert_m_delta(halo_model.cosmology, m, z, mass_def_old, mass_def_500c, c_old=c_old)
     
         # Compute r_delta (input) and r_500c (for GNFW scaling)
-        r_delta = halo_model.mass_definition.r_delta(halo_model.cosmology, m, z)  # (Nm, Nz)
-        r_500c = mass_def_500c.r_delta(halo_model.cosmology, m500c, z)  # (Nm, Nz)
+        h = H0 / 100.0
+        r_delta = halo_model.mass_definition.r_delta(halo_model.cosmology, m / h, z)  # (Nm, Nz)
+        r_500c = mass_def_500c.r_delta(halo_model.cosmology, m500c / h, z)  # (Nm, Nz)
     
         # Convert input x = r/r_delta to x_500c = r/r_500c
         x_500c = x[:, None, None] * (r_delta[None, :, :] / r_500c[None, :, :])  # (Nx, Nm, Nz)
@@ -497,8 +498,9 @@ class B12PressureProfile(PressureProfile):
         m200c = convert_m_delta(halo_model.cosmology, m, z, mass_def_old, mass_def_200c, c_old=c_old)
     
         # Compute r_delta (input) and r_200c (for B12 scaling)
-        r_delta = halo_model.mass_definition.r_delta(halo_model.cosmology, m, z)  # (Nm, Nz)
-        r_200c = mass_def_200c.r_delta(halo_model.cosmology, m200c, z)  # (Nm, Nz)
+        h = cparams["h"]
+        r_delta = halo_model.mass_definition.r_delta(halo_model.cosmology, m / h, z)  # (Nm, Nz)
+        r_200c = mass_def_200c.r_delta(halo_model.cosmology, m200c / h, z)  # (Nm, Nz)
     
         # Rescale x: x_200c = x * (r_delta / r_200c)
         x_200c = x[:, None, None] * (r_delta[None, :, :] / r_200c[None, :, :])  # (Nx, Nm, Nz)
@@ -519,6 +521,7 @@ class B12PressureProfile(PressureProfile):
         rho_crit = jnp.atleast_1d(halo_model.cosmology.critical_density(z))
         H = jnp.atleast_1d(halo_model.cosmology.hubble_parameter(z)) * (Const._c_ / 1e3)
         f_b = cparams["Omega_b"] / cparams["Omega0_m"]
+        r_200c = r_200c * h
         # Use M200c and r_200c for normalization
         P_200c = ((m200c_b / r_200c[None, :, :]) * f_b * 2.61051e-18 * (H[None, None, :])**2)
     
