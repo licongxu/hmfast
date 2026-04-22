@@ -200,7 +200,7 @@ class S12CIBProfile(CIBProfile):
         Parameters
         ----------
         m : float or jnp.ndarray
-            Halo mass or masses.
+            Halo mass or masses in physical :math:`M_\\odot`.
 
         Returns
         -------
@@ -290,7 +290,7 @@ class S12CIBProfile(CIBProfile):
         halo_model : HaloModel
             Halo model. Included for interface consistency.
         m : float or jnp.ndarray
-            Halo mass or masses.
+            Halo mass or masses in physical :math:`M_\\odot`.
         z : float or jnp.ndarray
             Redshift(s).
     
@@ -317,7 +317,7 @@ class S12CIBProfile(CIBProfile):
         halo_model : HaloModel
             Halo model providing the subhalo mass function.
         m : float or jnp.ndarray
-            Host halo mass or masses.
+            Host halo mass or masses in physical :math:`M_\\odot`.
         z : float or jnp.ndarray
             Redshift(s).
 
@@ -355,7 +355,7 @@ class S12CIBProfile(CIBProfile):
         halo_model : HaloModel
             Halo model. Included for interface consistency.
         m : float or jnp.ndarray
-            Halo mass or masses.
+            Halo mass or masses in physical :math:`M_\\odot`.
         z : float or jnp.ndarray
             Redshift(s).
 
@@ -381,7 +381,7 @@ class S12CIBProfile(CIBProfile):
         halo_model : HaloModel
             Halo model providing the cosmology and halo mass function.
         m : float or jnp.ndarray
-            Halo mass grid in :math:`M_\\odot / h`.
+            Halo mass grid in physical :math:`M_\\odot`.
         z : float or jnp.ndarray
             Redshift grid.
 
@@ -391,24 +391,24 @@ class S12CIBProfile(CIBProfile):
             Mean emissivity :math:`\\bar{j}_\\nu(z)`.
         """
         h = halo_model.cosmology.H0 / 100
+        m = jnp.atleast_1d(m)
+        m_internal = m * h
 
-        # Get the luminosities (ensure physical mass if needed)
-        m_phys = m / h
-        lc = self.l_cen(halo_model, m_phys, z) # Shape: (Nm, Nz)
-        ls = self.l_sat(halo_model, m_phys, z) # Shape: (Nm, Nz)
+        lc = self.l_cen(halo_model, m, z) # Shape: (Nm, Nz)
+        ls = self.l_sat(halo_model, m, z) # Shape: (Nm, Nz)
         
         # Get the halo mass function dn/dlnm 
-        dndlnm = halo_model.halo_mass_function.halo_mass_function(halo_model, m, z) # Shape: (Nm, Nz)
+        dndlnm = halo_model.halo_mass_function.halo_mass_function(halo_model, m_internal, z) # Shape: (Nm, Nz)
 
         # Correct for Maniyar if needed
         chi = halo_model.cosmology.angular_diameter_distance(z) * (1 + z) 
         
         # Integrate: j_bar = integral [dn/dlnm * (L_c + L_s)] dlnm
         integrand = dndlnm * (lc + ls)
-        j_bar = jnp.trapezoid(integrand, x=jnp.log(m), axis=0)
+        j_bar = jnp.trapezoid(integrand, x=jnp.log(m_internal), axis=0)
 
         # Add the consistency counter-term (correction for unbound mass) if hm_consistency is True
-        j_bar = jax.lax.cond(halo_model.hm_consistency, lambda x: x + halo_model._counter_terms(m, z)[0] * lc[0], lambda x: x, j_bar)
+        j_bar = jax.lax.cond(halo_model.hm_consistency, lambda x: x + halo_model._counter_terms(m_internal, z)[0] * lc[0], lambda x: x, j_bar)
         
         return j_bar * h**3 / (4 * jnp.pi) 
 
@@ -808,7 +808,7 @@ class M21CIBProfile(CIBProfile):
         halo_model : HaloModel
             Halo model. Included for interface consistency.
         m : float or jnp.ndarray
-            Halo mass or masses.
+            Halo mass or masses in physical :math:`M_\\odot`.
         z : float or jnp.ndarray
             Redshift(s).
 
@@ -834,7 +834,7 @@ class M21CIBProfile(CIBProfile):
         halo_model : HaloModel
             Halo model providing the subhalo mass function.
         m : float or jnp.ndarray
-            Host halo mass or masses.
+            Host halo mass or masses in physical :math:`M_\\odot`.
         z : float or jnp.ndarray
             Redshift(s).
 
@@ -874,7 +874,7 @@ class M21CIBProfile(CIBProfile):
         halo_model : HaloModel
             Halo model. Included for interface consistency.
         m : float or jnp.ndarray
-            Halo mass or masses.
+            Halo mass or masses in physical :math:`M_\\odot`.
         z : float or jnp.ndarray
             Redshift(s).
         
@@ -901,7 +901,7 @@ class M21CIBProfile(CIBProfile):
         halo_model : HaloModel
             Halo model providing the cosmology and halo mass function.
         m : float or jnp.ndarray
-            Halo mass grid in :math:`M_\\odot / h`.
+            Halo mass grid in physical :math:`M_\\odot`.
         z : float or jnp.ndarray
             Redshift grid.
 
@@ -911,14 +911,14 @@ class M21CIBProfile(CIBProfile):
             Mean emissivity :math:`\\bar{j}_\\nu(z)`.
         """
         h = halo_model.cosmology.H0 / 100
+        m = jnp.atleast_1d(m)
+        m_internal = m * h
 
-        # Get the luminosities (ensure physical mass if needed)
-        m_phys = m / h
-        lc = self.l_cen(halo_model, m_phys, z) # Shape: (Nm, Nz)
-        ls = self.l_sat(halo_model, m_phys, z) # Shape: (Nm, Nz)
+        lc = self.l_cen(halo_model, m, z) # Shape: (Nm, Nz)
+        ls = self.l_sat(halo_model, m, z) # Shape: (Nm, Nz)
         
         # Get the halo mass function dn/dlnm 
-        dndlnm = halo_model.halo_mass_function.halo_mass_function(halo_model, m, z) # Shape: (Nm, Nz)
+        dndlnm = halo_model.halo_mass_function.halo_mass_function(halo_model, m_internal, z) # Shape: (Nm, Nz)
 
         # Correct for Maniyar if needed
         chi = halo_model.cosmology.angular_diameter_distance(z) * (1 + z) 
@@ -926,10 +926,10 @@ class M21CIBProfile(CIBProfile):
         
         # Integrate: j_bar = integral [dn/dlnm * (L_c + L_s)] dlnm
         integrand = dndlnm * (lc + ls)
-        j_bar = jnp.trapezoid(integrand, x=jnp.log(m), axis=0)
+        j_bar = jnp.trapezoid(integrand, x=jnp.log(m_internal), axis=0)
 
         # Add the consistency counter-term (correction for unbound mass) if hm_consistency is True
-        j_bar = jax.lax.cond(halo_model.hm_consistency, lambda x: x + halo_model._counter_terms(m, z)[0] * lc[0], lambda x: x, j_bar)
+        j_bar = jax.lax.cond(halo_model.hm_consistency, lambda x: x + halo_model._counter_terms(m_internal, z)[0] * lc[0], lambda x: x, j_bar)
         
         return j_bar * h**3 / (4 * jnp.pi) * maniyar_factor
 

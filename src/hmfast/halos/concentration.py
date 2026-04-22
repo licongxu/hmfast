@@ -15,14 +15,14 @@ class Concentration(ABC):
     @abstractmethod
     def c_delta(self, halo_model, m, z):
         """
-        Compute the concentration parameter :math:`c_\Delta`.
+        Compute the concentration parameter :math:`c_\\Delta`.
 
         Parameters
         ----------
         halo_model : HaloModel
             Halo model providing the cosmology and target mass definition.
         m : array-like
-            Halo masses in physical :math:`M_\odot`.
+            Halo masses in physical :math:`M_\\odot`.
         z : array-like
             Redshifts.
         """
@@ -51,7 +51,7 @@ class ConstantConcentration(Concentration):
         halo_model : HaloModel
             Halo model providing the cosmology and target mass definition.
         m : array-like
-            Halo masses in physical :math:`M_\odot`.
+            Halo masses in physical :math:`M_\\odot`.
         z : array-like
             Redshifts.
         """
@@ -86,7 +86,7 @@ class D08Concentration(Concentration):
         halo_model : HaloModel
             Halo model providing the cosmology and target mass definition.
         m : array-like
-            Halo masses in physical :math:`M_\odot`.
+            Halo masses in physical :math:`M_\\odot`.
         z : array-like
             Redshifts.
 
@@ -163,7 +163,7 @@ class B13Concentration(Concentration):
         halo_model : HaloModel
             Halo model providing the cosmology and target mass definition.
         m : array-like
-            Halo masses in physical :math:`M_\odot`.
+            Halo masses in physical :math:`M_\\odot`.
         z : array-like
             Redshifts.
 
@@ -248,7 +248,7 @@ class SC14Concentration(Concentration):
         halo_model : HaloModel
             Halo model providing the cosmology and target mass definition.
         m : array-like
-            Halo masses in physical :math:`M_\odot`.
+            Halo masses in physical :math:`M_\\odot`.
         z : array-like
             Redshifts.
 

@@ -277,7 +277,7 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
         halo_model : HaloModel
             The parent halo model instance.
         r : float or jnp.ndarray
-            Physical radius or radii in the same units as :math:`r_\\Delta`.
+            Radius or radii in Mpc.
         m : float or jnp.ndarray
             Halo mass grid in physical :math:`M_\\odot`.
         z : float or jnp.ndarray
@@ -317,7 +317,7 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
         halo_model : HaloModel
             The parent halo model instance.
         k : array-like
-            Wavenumber grid.
+            Wavenumber grid in Mpc^-1.
         m : array-like
             Halo mass grid in physical :math:`M_\\odot`.
         z : array-like
@@ -325,9 +325,7 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
 
         Returns
         -------
-        k : array-like
-            Wavenumber grid.
-        u_k : array-like
+        jnp.ndarray
             Fourier-space profile.
         """
        

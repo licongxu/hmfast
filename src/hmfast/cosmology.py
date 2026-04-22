@@ -35,11 +35,11 @@ class Cosmology:
     H0 : float
         Hubble constant at :math:`z = 0` in units of km/s/Mpc.
     omega_cdm : float
-        Physical cold dark matter density :math:`\Omega_{\mathrm{cdm}} h^2`.
+        Physical cold dark matter density :math:`\\Omega_{\\mathrm{cdm}} h^2`.
     omega_b : float
-        Physical baryon density :math:`\Omega_b h^2`.
+        Physical baryon density :math:`\\Omega_b h^2`.
     ln1e10A_s : float
-        Logarithmic primordial scalar amplitude :math:`\ln(10^{10} A_s)`.
+        Logarithmic primordial scalar amplitude :math:`\\ln(10^{10} A_s)`.
     n_s : float
         Scalar spectral index of primordial perturbations.
     tau_reio : float
@@ -393,18 +393,17 @@ class Cosmology:
         Returns
         -------
         jnp.ndarray
-            Critical density in :math:`(M_\\odot / h) \\, (\\mathrm{Mpc} / h)^{-3}`
+            Critical density in :math:`M_\\odot \\, \\mathrm{Mpc}^{-3}`
         """
         
         # Get Hubble parameter    
         H_z = self.hubble_parameter(z)
-        h = self.H0/100
         
         # Get critical density rho_crit = 3 H^2 / (8 pi G) * Mpc_over_m * c**2 
         c, G, M_sun, sigma_B, Mpc_over_m = Const._c_, Const._G_, Const._M_sun_, Const._sigma_B_, Const._Mpc_over_m_
         rho_crit_factor = (3.0 / (8.0 * jnp.pi * G * M_sun)) * Mpc_over_m * c**2 
         
-        return rho_crit_factor * (H_z/h)**2 
+        return rho_crit_factor * H_z**2 
         
     @jax.jit
     def omega_m(self, z):
@@ -538,12 +537,11 @@ class Cosmology:
         Returns
         -------
         float or jnp.ndarray
-            :math:`\\frac{dV}{dz\\,d\\Omega}` in :math:`(\\mathrm{Mpc}/h)^3 \\, \\mathrm{sr}^{-1}`
+            :math:`\\frac{dV}{dz\\,d\\Omega}` in :math:`\\mathrm{Mpc}^3 \\, \\mathrm{sr}^{-1}`
         """
-        
-        h = self.H0 / 100
-        dAz = self.angular_diameter_distance(z) * h
-        Hz = self.hubble_parameter(z) / h  # in Mpc^(-1) h
+
+        dAz = self.angular_diameter_distance(z)
+        Hz = self.hubble_parameter(z)
 
         return (1 + z)**2 * dAz**2 / Hz
    

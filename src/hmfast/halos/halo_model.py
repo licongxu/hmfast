@@ -319,7 +319,7 @@ class HaloModel:
         P_1h_grid = jax.vmap(get_pk_slice)(z)
         kernel1 = tracer1.kernel(self.cosmology, z)  
         kernel2 = tracer2.kernel(self.cosmology, z)  
-        comov_vol = self.cosmology.comoving_volume_element(z) 
+        comov_vol = self.cosmology.comoving_volume_element(z) * h**3
 
         # Integrate over redshift
         integrand = P_1h_grid * (comov_vol[:, None] * kernel1[:, None] * kernel2[:, None])
@@ -433,7 +433,7 @@ class HaloModel:
         cl_2h : array-like
             2-halo angular power spectrum, shape (len(l),).
         """
-       
+        h = self.cosmology.H0 / 100
         tracer2 = tracer1 if tracer2 is None else tracer2
 
         # Define the slice function for Limber integration
@@ -450,7 +450,7 @@ class HaloModel:
         kernel1 = tracer1.kernel(self.cosmology, z)
         kernel2 = tracer2.kernel(self.cosmology, z)
         
-        comov_vol = self.cosmology.comoving_volume_element(z)
+        comov_vol = self.cosmology.comoving_volume_element(z) * h**3
     
         # Limber Integral: C_l = int dz P(k,z) * [W1 * W2 * dV/dz]
         integrand = P_2h_grid * (comov_vol[:, None] * kernel1[:, None] * kernel2[:, None])

@@ -71,7 +71,10 @@ class kSZTracer(Tracer):
             W_{\\mathrm{kSZ}}(z) = \\frac{\\sigma_T}{m_p} \\frac{1}{1+z}
 
         where :math:`\\sigma_T` is the Thomson cross-section, :math:`m_p` is
-        the proton mass, and :math:`z` is the redshift.
+        the proton mass, and :math:`z` is the redshift. In the implementation,
+        :math:`\\sigma_T` is stored in m\\ :sup:`2`, :math:`m_p` is stored in kg,
+        and the kernel prefactor is converted to physical
+        :math:`\\mathrm{Mpc}^2 \\, M_\\odot^{-1}`.
 
         Parameters
         ----------
@@ -85,8 +88,8 @@ class kSZTracer(Tracer):
         W_ksz : array_like
             kSZ kernel evaluated at redshift(s) :math:`z`.
         """
-        # sigmaT / m_prot in (Mpc/h)**2/(Msun/h) which is required for kSZ
-        sigma_T_over_m_p = (Const._sigma_T_ / Const._m_p_) / Const._Mpc_over_m_**2 * Const._M_sun_ * cosmology.H0 / 100
+        # sigmaT / m_prot in physical Mpc^2 / Msun.
+        sigma_T_over_m_p = (Const._sigma_T_ / Const._m_p_) / Const._Mpc_over_m_**2 * Const._M_sun_
         return sigma_T_over_m_p / (1.0 + z)
 
 

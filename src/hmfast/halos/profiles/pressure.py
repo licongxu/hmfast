@@ -514,7 +514,6 @@ class B12PressureProfile(PressureProfile):
         p_x = (scaled_x)**gamma * (1 + scaled_x**alpha)**(-beta)
     
         # Thermal Pressure Normalization (P200c)
-        rho_crit = jnp.atleast_1d(halo_model.cosmology.critical_density(z))
         H = jnp.atleast_1d(halo_model.cosmology.hubble_parameter(z)) * (Const._c_ / 1e3)
         f_b = cparams["Omega_b"] / cparams["Omega0_m"]
         r_200c = r_200c * h

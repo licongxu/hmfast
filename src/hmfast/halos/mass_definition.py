@@ -151,9 +151,8 @@ class MassDefinition:
             :math:`\\Delta \\rho_{\\mathrm{ref}}(z)`, in physical Mpc.
         """
         delta, reference = self.delta, self.reference
-        h = cosmology.H0 / 100.0
 
-        m = jnp.atleast_1d(m)[:, None] * h
+        m = jnp.atleast_1d(m)[:, None]
         z = jnp.atleast_1d(z)[None, :]
 
         rho_ref = cosmology.critical_density(z)
@@ -164,7 +163,7 @@ class MassDefinition:
         if reference == "mean":
             rho_ref *= cosmology.omega_m(z)
 
-        return (3.0 * m / (4.0 * jnp.pi * delta * rho_ref)) ** (1.0 / 3.0) / h
+        return (3.0 * m / (4.0 * jnp.pi * delta * rho_ref)) ** (1.0 / 3.0)
 
 
 jax.tree_util.register_pytree_node(

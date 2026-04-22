@@ -34,7 +34,6 @@ class DensityProfile(HaloProfile):
         jnp.ndarray
             Transformed profile with shape :math:`(N_k, N_M, N_z)`.
         """
-        h = halo_model.cosmology.H0 / 100.0
         k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
     
         # Compute r_delta and ell_delta
@@ -49,11 +48,9 @@ class DensityProfile(HaloProfile):
         # Calculate kSZ Prefactor as (Nm, Nz)
         vrms = jnp.sqrt(halo_model.cosmology.v_rms_squared(z))
         mu_e = 1.14
-        # The density profiles below are still normalized in the legacy
-        # (M_sun / h) (Mpc / h)^-3 convention, so the projected wrapper
-        # retains one factor of h to preserve the kSZ normalization while
-        # exposing k in Mpc^-1.
-        prefactor = (h * 4 * jnp.pi * r_delta**3 / mu_e
+        # The real-space density profiles now return physical densities, so
+        # the projected wrapper should not carry an additional h factor.
+        prefactor = (4 * jnp.pi * r_delta**3 / mu_e
             * (1 + z)[None, :]**3 / chi[None, :]**2 * vrms[None, :]
         )
     
@@ -328,7 +325,7 @@ class B16DensityProfile(DensityProfile):
         x, m, z = jnp.atleast_1d(x), jnp.atleast_1d(m),  jnp.atleast_1d(z)  # (Nx,)
         x_b, m_b, z_b = x[:, None, None], m[None, :, None], z[None, None, :]      # (Nx, 1, 1), (1, Nm, 1), (1, 1, Nz)
         
-        # Critical density broadcast to (1, 1, Nz)
+        # Critical density broadcast to (1, 1, Nz) in physical units.
         rho_crit_z = jnp.atleast_1d(halo_model.cosmology.critical_density(z))[None, None, :]
         
         # Mass scaling logic
@@ -343,7 +340,7 @@ class B16DensityProfile(DensityProfile):
         # Profile Shape Function (Nx, Nm, Nz)
         p_x = (x_b / xc)**gamma * (1 + (x_b / xc)**alpha)**(-(beta + gamma) / alpha)
         
-        # Final result: M_sun h^2 / Mpc^3 
+        # Final result: M_sun / Mpc^3.
         rho_gas = rho0 * rho_crit_z * f_b * f_free * p_x 
         
         return rho_gas
