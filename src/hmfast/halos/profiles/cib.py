@@ -390,25 +390,24 @@ class S12CIBProfile(CIBProfile):
         jnp.ndarray
             Mean emissivity :math:`\\bar{j}_\\nu(z)`.
         """
-        h = halo_model.cosmology.H0 / 100
         m = jnp.atleast_1d(m)
-        m_internal = m * h
 
         lc = self.l_cen(halo_model, m, z) # Shape: (Nm, Nz)
         ls = self.l_sat(halo_model, m, z) # Shape: (Nm, Nz)
         
         # Get the halo mass function dn/dlnm 
-        dndlnm = halo_model.halo_mass_function.halo_mass_function(halo_model, m_internal, z) # Shape: (Nm, Nz)
+        dndlnm = halo_model.halo_mass_function.halo_mass_function(halo_model, m, z) # Shape: (Nm, Nz)
 
         # Correct for Maniyar if needed
         chi = halo_model.cosmology.angular_diameter_distance(z) * (1 + z) 
         
         # Integrate: j_bar = integral [dn/dlnm * (L_c + L_s)] dlnm
         integrand = dndlnm * (lc + ls)
-        j_bar = jnp.trapezoid(integrand, x=jnp.log(m_internal), axis=0)
+        j_bar = jnp.trapezoid(integrand, x=jnp.log(m), axis=0)
 
         # Add the consistency counter-term (correction for unbound mass) if hm_consistency is True
-        j_bar = jax.lax.cond(halo_model.hm_consistency, lambda x: x + halo_model._counter_terms(m_internal, z)[0] * lc[0], lambda x: x, j_bar)
+        h = halo_model.cosmology.H0 / 100
+        j_bar = jax.lax.cond(halo_model.hm_consistency, lambda x: x + halo_model._counter_terms(m * h, z)[0] * lc[0], lambda x: x, j_bar)
         
         return j_bar * h**3 / (4 * jnp.pi) 
 
@@ -910,15 +909,13 @@ class M21CIBProfile(CIBProfile):
         jnp.ndarray
             Mean emissivity :math:`\\bar{j}_\\nu(z)`.
         """
-        h = halo_model.cosmology.H0 / 100
         m = jnp.atleast_1d(m)
-        m_internal = m * h
 
         lc = self.l_cen(halo_model, m, z) # Shape: (Nm, Nz)
         ls = self.l_sat(halo_model, m, z) # Shape: (Nm, Nz)
         
         # Get the halo mass function dn/dlnm 
-        dndlnm = halo_model.halo_mass_function.halo_mass_function(halo_model, m_internal, z) # Shape: (Nm, Nz)
+        dndlnm = halo_model.halo_mass_function.halo_mass_function(halo_model, m, z) # Shape: (Nm, Nz)
 
         # Correct for Maniyar if needed
         chi = halo_model.cosmology.angular_diameter_distance(z) * (1 + z) 
@@ -926,10 +923,11 @@ class M21CIBProfile(CIBProfile):
         
         # Integrate: j_bar = integral [dn/dlnm * (L_c + L_s)] dlnm
         integrand = dndlnm * (lc + ls)
-        j_bar = jnp.trapezoid(integrand, x=jnp.log(m_internal), axis=0)
+        j_bar = jnp.trapezoid(integrand, x=jnp.log(m), axis=0)
 
         # Add the consistency counter-term (correction for unbound mass) if hm_consistency is True
-        j_bar = jax.lax.cond(halo_model.hm_consistency, lambda x: x + halo_model._counter_terms(m_internal, z)[0] * lc[0], lambda x: x, j_bar)
+        h = halo_model.cosmology.H0 / 100
+        j_bar = jax.lax.cond(halo_model.hm_consistency, lambda x: x + halo_model._counter_terms(m * h, z)[0] * lc[0], lambda x: x, j_bar)
         
         return j_bar * h**3 / (4 * jnp.pi) * maniyar_factor
 

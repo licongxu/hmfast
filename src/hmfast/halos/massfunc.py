@@ -20,6 +20,9 @@ class HaloMass(ABC):
         """
         Compute the internal interpolation grid for the halo mass function.
 
+        The interpolation mass grid returned here is in physical
+        :math:`M_\\odot`.
+
         Returns
         -------
         ln_x : array_like
@@ -27,7 +30,7 @@ class HaloMass(ABC):
         ln_M : array_like
             :math:`\\ln M` grid.
         dn_dlnM_grid : array_like
-            Halo mass function grid :math:`dn/d\\ln M`.
+            Halo mass function grid :math:`dn/d\\ln M` in comoving ``Mpc^-3``.
         """
         
         z_grid = halo_model.cosmology._z_grid_pk()
@@ -51,7 +54,7 @@ class HaloMass(ABC):
         # Mass grid, shape: (n_R,)
         rho_crit_0 = cparams["Rho_crit_0"]
         Omega0_cb = cparams['Omega0_cb']
-        M_grid = 4.0 * jnp.pi / 3.0 * Omega0_cb * rho_crit_0 * (R_grid ** 3) * h ** 3
+        M_grid = 4.0 * jnp.pi / 3.0 * Omega0_cb * rho_crit_0 * (R_grid ** 3)
     
     
         # Halo mass function grid, shape: (n_z, n_R)
@@ -174,7 +177,7 @@ class T08HaloMass(HaloMass):
 
         In this model,
 
-        .. math::
+                .. math::
 
             f(\\sigma) = 0.5 A \\left[\\left(\\frac{\\sigma}{b}\\right)^{-a} + 1\\right]
             \\exp\\left(-\\frac{c}{\\sigma^2}\\right),
@@ -191,22 +194,26 @@ class T08HaloMass(HaloMass):
             Halo model instance supplying the cosmology and mass definition
             used to evaluate the fitting function.
         m : array-like
-            Halo mass grid.
+            Halo mass grid in physical :math:`M_\\odot`.
         z : array-like
             Redshift grid.
     
         Returns
         -------
         dndlnM : array-like
-            Halo mass function values, shape (len(m), len(z)).
+            Halo mass function values :math:`dn/d\\ln M` in comoving
+            ``Mpc^-3``, shape ``(len(m), len(z))``.
         """
        
         
+        m = jnp.atleast_1d(m)
+        z = jnp.atleast_1d(z)
+
         ln_x_grid, ln_M_grid, dn_dlnM_grid = self._compute_hmf_grid(halo_model)
 
         # Create the interpolator, the meshgrid, and then stack the points
         _hmf_interp = jscipy.interpolate.RegularGridInterpolator((ln_x_grid, ln_M_grid), dn_dlnM_grid)
-        mm, zz = jnp.meshgrid(jnp.atleast_1d(m), jnp.atleast_1d(z), indexing='ij')
+        mm, zz = jnp.meshgrid(m, z, indexing='ij')
         pts = jnp.stack([jnp.log(1. + zz), jnp.log(mm)], axis=-1)
         
         return _hmf_interp(pts)
@@ -286,8 +293,6 @@ class T10HaloMass(HaloMass):
     
             \\frac{dn}{d\\ln M} = f(\\sigma) \\frac{\\rho_{m,0}}{M} \\left| \\frac{d\\ln \\sigma^{-1}}{d\\ln M} \\right|
 
-        In this model,
-
         .. math::
 
             f(\\nu) = 0.5 \\alpha \\left[1 + (\\beta^2 \\nu)^{-\\phi}\\right]
@@ -307,22 +312,26 @@ class T10HaloMass(HaloMass):
             Halo model instance supplying the cosmology and mass definition
             used to evaluate the fitting function. 
         m : array-like
-            Halo mass grid.
+            Halo mass grid in physical :math:`M_\\odot`.
         z : array-like
             Redshift grid.
     
         Returns
         -------
         dndlnM : array-like
-            Halo mass function values, shape (len(m), len(z)).
+            Halo mass function values :math:`dn/d\\ln M` in comoving
+            ``Mpc^-3``, shape ``(len(m), len(z))``.
         """
        
         
+        m = jnp.atleast_1d(m)
+        z = jnp.atleast_1d(z)
+
         ln_x_grid, ln_M_grid, dn_dlnM_grid = self._compute_hmf_grid(halo_model)
 
         # Create the interpolator, the meshgrid, and then stack the points
         _hmf_interp = jscipy.interpolate.RegularGridInterpolator((ln_x_grid, ln_M_grid), dn_dlnM_grid)
-        mm, zz = jnp.meshgrid(jnp.atleast_1d(m), jnp.atleast_1d(z), indexing='ij')
+        mm, zz = jnp.meshgrid(m, z, indexing='ij')
         pts = jnp.stack([jnp.log(1. + zz), jnp.log(mm)], axis=-1)
         
         return _hmf_interp(pts)
@@ -345,14 +354,15 @@ class SubHaloMass(ABC):
         halo_model : HaloModel
             Halo model providing any cosmology- or mass-definition-dependent context.
         m_host : float or array_like
-            Host halo mass [Msun].
+            Host halo mass in physical :math:`M_\\odot`.
         m_sub : float or array_like
-            Subhalo mass [Msun].
+            Subhalo mass in physical :math:`M_\\odot`.
 
         Returns
         -------
         array-like
-            Subhalo abundance :math:`dN/d\\ln \\mu`.
+            Dimensionless subhalo abundance :math:`dN/d\\ln \\mu`, i.e.
+            number of subhalos per host per logarithmic mass ratio.
         """
         pass
 
@@ -380,14 +390,15 @@ class TW10SubHaloMass(SubHaloMass):
         halo_model : HaloModel
             Halo model providing any cosmology- or mass-definition-dependent context.
         m_host : float or array_like
-            Host halo mass [Msun]
+            Host halo mass in physical :math:`M_\\odot`.
         m_sub : float or array_like
-            Subhalo mass [Msun]
+            Subhalo mass in physical :math:`M_\\odot`.
     
         Returns
         -------
         dN_dlnmu : float or array_like
-            Number of subhalos per host per :math:`dN/d\\ln \\mu`.
+                Dimensionless number of subhalos per host per :math:`d\\ln \\mu`.
+                The output is dimensionless.
         """
         mu = m_sub / m_host
         dN_dlnmu = 0.30 * mu ** (-0.7) * jnp.exp(-9.9 * mu ** 2.5)
@@ -429,14 +440,15 @@ class JvdB14SubHaloMass(SubHaloMass):
         halo_model : HaloModel
             Halo model providing any cosmology- or mass-definition-dependent context.
         m_host : float or array_like
-            Host halo mass [Msun]
+            Host halo mass in physical :math:`M_\\odot`.
         m_sub : float or array_like
-            Subhalo mass [Msun]
+            Subhalo mass in physical :math:`M_\\odot`.
     
         Returns
         -------
         dN_dlnmu : float or array_like
-            Number of subhalos per host per :math:`dN/d\\ln \\mu`.
+                Dimensionless number of subhalos per host per
+                :math:`d\\ln \\mu`.
         """
         
         mu = m_sub / m_host

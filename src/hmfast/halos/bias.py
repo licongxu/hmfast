@@ -24,7 +24,7 @@ class HaloBias(ABC):
             Halo-model instance supplying the cosmology, mass definition, and
             any mass-conversion settings needed to evaluate the requested bias.
         m : array-like
-            Halo masses at which to evaluate the bias.
+            Halo masses in physical :math:`M_\\odot` at which to evaluate the bias.
         z : array-like
             Redshifts at which to evaluate the bias.
         order : int, optional
@@ -33,7 +33,7 @@ class HaloBias(ABC):
         Returns
         -------
         array-like
-            Halo bias values with shape :math:`(N_M, N_z)`.
+            Dimensionless halo bias values with shape :math:`(N_M, N_z)`.
         """
         pass
 
@@ -42,6 +42,9 @@ class HaloBias(ABC):
     def _compute_sigma_grid(self, halo_model):
         """
         Compute the interpolation grid for :math:`\\sigma(M, z)`.
+
+        The interpolation mass grid returned here is in physical
+        :math:`M_\\odot`.
 
         Returns
         -------
@@ -74,7 +77,7 @@ class HaloBias(ABC):
         # # Mass grid, shape: (n_R,)
         rho_crit_0 = cparams["Rho_crit_0"]
         Omega0_cb = cparams['Omega0_cb']
-        M_grid = 4.0 * jnp.pi / 3.0 * Omega0_cb * rho_crit_0 * (R_grid ** 3) * h ** 3
+        M_grid = 4.0 * jnp.pi / 3.0 * Omega0_cb * rho_crit_0 * (R_grid ** 3)
     
         # Grids for interpolation
         ln_x = jnp.log(1. + z_grid)
@@ -222,7 +225,7 @@ class T10HaloBias(HaloBias):
             Halo-model instance supplying the cosmology and mass definition
             used to evaluate the bias.
         m : array-like
-            Halo mass grid.
+            Halo mass grid in physical :math:`M_\\odot`.
         z : array-like
             Redshift grid.
         order : int, optional
@@ -231,7 +234,8 @@ class T10HaloBias(HaloBias):
         Returns
         -------
         array-like
-            Halo bias values of the requested order, shape ``(len(m), len(z))``.
+            Dimensionless halo bias values of the requested order, shape
+            ``(len(m), len(z))``.
         """
        
        

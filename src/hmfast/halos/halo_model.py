@@ -165,10 +165,12 @@ class HaloModel:
         m = jnp.atleast_1d(m)
         logm = jnp.log(m)
         cparams = self.cosmology._cosmo_params()
-        rho_mean_0 = cparams["Rho_crit_0"] * cparams["Omega0_cb"]   # Omega0_m without neutrinos
+        h = self.cosmology.H0 / 100.0
+        rho_mean_0 = cparams["Rho_crit_0"] * cparams["Omega0_cb"] / h**2   # internal halo-model normalization
         m_over_rho_mean = (m / rho_mean_0)[:, None]  # (Nm, 1)
-    
-        # Compute dn/dlnM and bias for each z
+
+
+        # Compute dn/dlnM and bias for each z using physical masses.
         dn_dlnm = self.halo_mass_function.halo_mass_function(self, m=m, z=z)  # (Nm, Nz)
         b1 = self.halo_bias.halo_bias(self, m=m, z=z, order=1)      # (Nm, Nz)
         b2 = self.halo_bias.halo_bias(self, m=m, z=z, order=2)      # (Nm, Nz)
@@ -190,7 +192,8 @@ class HaloModel:
     @partial(jax.jit, static_argnums=(1, 2))
     def pk_1h(self, tracer1, tracer2, k, m, z,  k_damp=0.01):
         """
-        Compute the 1-halo contribution to the 3D power spectrum.
+        Compute the 1-halo contribution to the 3D power spectrum in
+        physical units.
 
         .. math::
 
@@ -208,7 +211,7 @@ class HaloModel:
         k : array-like
             Wavenumber grid in Mpc^-1.
         m : array-like
-            Mass grid.
+            Mass grid in physical M_sun.
         z : array-like
             Redshift grid.
         k_damp : float, default 0.01
@@ -217,10 +220,10 @@ class HaloModel:
         Returns
         -------
         pk_1h : array-like
-            1-halo power spectrum, shape (len(k), len(z)).
+            1-halo power spectrum in Mpc^3, with shape
+            ``(len(k), len(z))``.
         """
     
-        h = self.cosmology.H0 / 100
         k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
         
         # Weights and Setup
@@ -239,18 +242,18 @@ class HaloModel:
             # We need the profiles for index 'i' while squaring uk if the user is doing an autocorrelation
             if is_same_tracer:
                 if tracer1.profile.has_central_contribution:
-                    s1, c1 = tracer1.profile._sat_and_cen_contribution(self, k, m/h, z)
+                    s1, c1 = tracer1.profile._sat_and_cen_contribution(self, k, m, z)
                     uk_sq_row = s1[:, i, :] * s1[:, i, :] + 2.0 * s1[:, i, :] * c1[:, i, :]
                 else:
-                    u1 = tracer1.profile.u_k(self, k, m/h, z)
+                    u1 = tracer1.profile.u_k(self, k, m, z)
                     uk_sq_row = u1[:, i, :] ** 2
             elif tracer1.profile.has_central_contribution and tracer2.profile.has_central_contribution:
-                s1, c1 = tracer1.profile._sat_and_cen_contribution(self, k, m/h, z)
-                s2, c2 = tracer2.profile._sat_and_cen_contribution(self, k, m/h, z)
+                s1, c1 = tracer1.profile._sat_and_cen_contribution(self, k, m, z)
+                s2, c2 = tracer2.profile._sat_and_cen_contribution(self, k, m, z)
                 uk_sq_row = s1[:, i, :] * s2[:, i, :] + s1[:, i, :] * c2[:, i, :] + s2[:, i, :] * c1[:, i, :]
             else:
-                u1 = tracer1.profile.u_k(self, k, m/h, z)
-                u2 = tracer2.profile.u_k(self, k, m/h, z)
+                u1 = tracer1.profile.u_k(self, k, m, z)
+                u2 = tracer2.profile.u_k(self, k, m, z)
                 uk_sq_row = u1[:, i, :] * u2[:, i, :]
     
             return uk_sq_row * total_weights[i], uk_sq_row
@@ -280,7 +283,9 @@ class HaloModel:
         :math:`C_\\ell^{1h}`.
 
         The Limber-projected spectrum is obtained by integrating the 1-halo
-        3D power spectrum against the tracer kernels and comoving volume element.
+        3D power spectrum against the tracer kernels and the comoving volume
+        element written in the legacy ``(Mpc/h)^3`` convention used by the
+        current tracer kernels.
 
         Parameters
         ----------
@@ -291,7 +296,7 @@ class HaloModel:
         l : array-like
             Multipole grid.
         m : array-like
-            Mass grid.
+            Mass grid in physical M_sun.
         z : array-like
             Redshift grid.
         k_damp : float, default 0.01
@@ -300,11 +305,8 @@ class HaloModel:
         Returns
         -------
         cl_1h : array-like
-            1-halo angular power spectrum, shape (len(l),).
+            Dimensionless 1-halo angular power spectrum, shape ``(len(l),)``.
         """
-        
-        
-        h = self.cosmology.H0 / 100
 
         tracer2 = tracer1 if tracer2 is None else tracer2
 
@@ -319,6 +321,7 @@ class HaloModel:
         P_1h_grid = jax.vmap(get_pk_slice)(z)
         kernel1 = tracer1.kernel(self.cosmology, z)  
         kernel2 = tracer2.kernel(self.cosmology, z)  
+        h = self.cosmology.H0 / 100.0
         comov_vol = self.cosmology.comoving_volume_element(z) * h**3
 
         # Integrate over redshift
@@ -331,7 +334,8 @@ class HaloModel:
     @partial(jax.jit, static_argnums=(1, 2))
     def pk_2h(self, tracer1, tracer2, k, m, z):
         """
-        Compute the 2-halo contribution to the 3D power spectrum.
+        Compute the 2-halo contribution to the 3D power spectrum in
+        physical units.
 
         .. math::
         
@@ -356,14 +360,15 @@ class HaloModel:
         k : array-like
             Wavenumber grid in Mpc^-1.
         m : array-like
-            Mass grid.
+            Mass grid in physical M_sun.
         z : array-like
             Redshift grid.
 
         Returns
         -------
         pk_2h : array-like
-            2-halo power spectrum, shape (len(k), len(z)).
+            2-halo power spectrum in Mpc^3, with shape
+            ``(len(k), len(z))``.
         """
         
         cparams = self.cosmology._cosmo_params()
@@ -383,7 +388,7 @@ class HaloModel:
         def get_I(tracer):
             # This function processes a single index 'i' of the mass axis
             def process_bin(i):
-                uk_full = tracer.profile.u_k(self, k, m/h, z)
+                uk_full = tracer.profile.u_k(self, k, m, z)
                 uk_slice = uk_full[:, i, :] 
                 return uk_slice * total_weights[i], uk_slice
     
@@ -413,7 +418,9 @@ class HaloModel:
         :math:`C_\\ell^{2h}`.
 
         The Limber-projected spectrum is obtained by integrating the 2-halo
-        3D power spectrum against the tracer kernels and comoving volume element.
+        3D power spectrum against the tracer kernels and the comoving volume
+        element written in the legacy ``(Mpc/h)^3`` convention used by the
+        current tracer kernels.
 
         Parameters
         ----------
@@ -424,16 +431,15 @@ class HaloModel:
         l : array-like
             Multipole grid.
         m : array-like
-            Mass grid.
+            Mass grid in physical M_sun.
         z : array-like
             Redshift grid.
 
         Returns
         -------
         cl_2h : array-like
-            2-halo angular power spectrum, shape (len(l),).
+            Dimensionless 2-halo angular power spectrum, shape ``(len(l),)``.
         """
-        h = self.cosmology.H0 / 100
         tracer2 = tracer1 if tracer2 is None else tracer2
 
         # Define the slice function for Limber integration
@@ -450,6 +456,7 @@ class HaloModel:
         kernel1 = tracer1.kernel(self.cosmology, z)
         kernel2 = tracer2.kernel(self.cosmology, z)
         
+        h = self.cosmology.H0 / 100.0
         comov_vol = self.cosmology.comoving_volume_element(z) * h**3
     
         # Limber Integral: C_l = int dz P(k,z) * [W1 * W2 * dV/dz]

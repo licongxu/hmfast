@@ -306,6 +306,10 @@ class Cosmology:
         """
         Get :math:`\\sigma_8(z)` at redshift :math:`z` from the emulator.
 
+        :math:`\\sigma_8(z)` is the dimensionless root-mean-square linear
+        matter fluctuation amplitude in spheres of radius
+        :math:`8 \\, \\mathrm{Mpc}/h`.
+
         Parameters
         ----------
         z : float or jnp.ndarray
@@ -314,7 +318,7 @@ class Cosmology:
         Returns
         -------
         jnp.ndarray
-            :math:`\\sigma_8` value(s)
+            Dimensionless :math:`\\sigma_8` value(s)
         """
 
 
@@ -347,12 +351,11 @@ class Cosmology:
               massive neutrinos
             - ``Omega0_cb``: Present-day CDM+baryon density parameter
             - ``Rho_crit_0``: Present-day critical density in
-              :math:`(M_\\odot / h) \\, (\\mathrm{Mpc} / h)^{-3}`
+                            :math:`M_\\odot \\, \\mathrm{Mpc}^{-3}`
     
         """
     
         p = self._to_dict()
-
         c, G, M_sun, sigma_B, Mpc_over_m = Const._c_, Const._G_, Const._M_sun_, Const._sigma_B_, Const._Mpc_over_m_
 
         # From user-defined parameters (or defaults if none are defined)
@@ -372,7 +375,7 @@ class Cosmology:
 
         # Critical density
         H0 = p['H0'] / (c / 1e3) # Convert to H0 over c (c being in km/s)
-        p['Rho_crit_0'] = (3.0 / (8.0 * jnp.pi * G * M_sun)) * Mpc_over_m * c**2 * H0**2 / p['h']**2
+        p['Rho_crit_0'] = (3.0 / (8.0 * jnp.pi * G * M_sun)) * Mpc_over_m * c**2 * H0**2
         
         return p
 
@@ -444,7 +447,7 @@ class Cosmology:
         Returns
         -------
         jnp.ndarray
-            Linear growth factor at :math:`z`
+            Dimensionless linear growth factor at :math:`z`
         """
         
         z = jnp.atleast_1d(z)
@@ -473,7 +476,7 @@ class Cosmology:
         Returns
         -------
         jnp.ndarray
-            Linear growth rate at :math:`z`
+            Dimensionless linear growth rate at :math:`z`
         """
         
         z = jnp.atleast_1d(z)
@@ -565,7 +568,8 @@ class Cosmology:
         Returns
         -------
         tuple
-            :math:`(k, P(k))`
+            :math:`(k, P(k))`, with ``k`` in ``h Mpc^-1`` and ``P(k)`` in
+            ``Mpc^3 / h^3``
         """
         params = self._to_dict()
         params["z_pk_save_nonclass"] = jnp.atleast_1d(z)[0]
@@ -666,7 +670,7 @@ class Cosmology:
             Dictionary of derived parameters with the following keys:
     
             - '100*theta_s' : Sound horizon angle (in units of 1/100 radians)
-            - 'sigma8' : RMS matter fluctuation in 8 Mpc/h spheres
+            - 'sigma8' : Dimensionless RMS linear matter fluctuation in 8 Mpc/h spheres
             - 'YHe' : Primordial helium fraction
             - 'z_reio' : Redshift of reionization
             - 'Neff' : Effective number of relativistic species
