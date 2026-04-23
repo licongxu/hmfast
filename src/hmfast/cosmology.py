@@ -452,10 +452,11 @@ class Cosmology:
         
         z = jnp.atleast_1d(z)
     
-        k0 = 1e-2  # reference wavenumber
+        h = self.H0 / 100.0
+        k0 = 1e-2  # legacy reference wavenumber in h Mpc^-1
         z_grid_pk = self._z_grid_pk()
-        pk0_grid = jax.vmap(lambda zp: jnp.interp(k0, *self.pk(zp, linear=True)))(z_grid_pk)
-        D_grid = jnp.sqrt(pk0_grid / jnp.interp(k0, *self.pk(0.0, linear=True)))
+        pk0_grid = jax.vmap(lambda zp: jnp.interp(h * k0, *self.pk(zp, linear=True)))(z_grid_pk)
+        D_grid = jnp.sqrt(pk0_grid / jnp.interp(h * k0, *self.pk(0.0, linear=True)))
     
         return jnp.interp(z, z_grid_pk, D_grid)
 
@@ -506,11 +507,13 @@ class Cosmology:
         """
         
         z = jnp.atleast_1d(z)
+        h = self.H0 / 100.0
         k_grid = jnp.geomspace(1e-5, 1e1, 1000)
         z_grid_pk = self._z_grid_pk()
     
-        # P(k, z) on the pk grid
-        P_grid = jax.vmap(lambda zp: jnp.interp(k_grid, *self.pk(zp, linear=True)))(z_grid_pk)
+        # Reconstruct the legacy linear spectrum values so this derived
+        # quantity remains numerically unchanged.
+        P_grid = jax.vmap(lambda zp: jnp.interp(h * k_grid, *self.pk(zp, linear=True)))(z_grid_pk) * h**3
     
         a_grid = 1.0 / (1.0 + z_grid_pk)
         H_grid = self.hubble_parameter(z_grid_pk)
@@ -568,19 +571,20 @@ class Cosmology:
         Returns
         -------
         tuple
-            :math:`(k, P(k))`, with ``k`` in ``h Mpc^-1`` and ``P(k)`` in
-            ``Mpc^3 / h^3``
+            :math:`(k, P(k))`, with ``k`` in physical ``Mpc^-1`` and
+            ``P(k)`` in physical ``Mpc^3``.
         """
         params = self._to_dict()
         params["z_pk_save_nonclass"] = jnp.atleast_1d(z)[0]
+        h = self.H0 / 100.0
 
         key = "PKL" if linear else "PKNL"
         emu = self._load_emulator(key)
         k_grid, pk_power_fac = self._pk_grid()
         pk_log = emu.predictions(params)
-        pk = 10.0 ** pk_log * pk_power_fac
+        pk = 10.0 ** pk_log * pk_power_fac / h**3
 
-        return k_grid , pk
+        return h * k_grid, pk
 
     # ------------------------------------------------------------------
     # CMB
