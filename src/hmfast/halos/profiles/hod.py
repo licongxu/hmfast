@@ -76,20 +76,23 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
     ----------
     sigma_log10M : float
         Scatter parameter :math:`\\sigma_{\\log_{10} M}` controlling the width
-        of the central-galaxy occupation threshold.
+        of the central-galaxy occupation threshold. Dimensionless.
     alpha_s : float
         Power-law slope :math:`\\alpha_s` of the satellite occupation.
+        Dimensionless.
     M1_prime : float
         Characteristic satellite mass scale :math:`M_1'` entering the
-        normalization of :math:`N_{\\mathrm{sat}}`.
+        normalization of :math:`N_{\\mathrm{sat}}`, in physical
+        :math:`M_{\\odot}`.
     M_min : float
-        Central-occupation threshold mass :math:`M_{\\mathrm{min}}`.
+        Central-occupation threshold mass :math:`M_{\\mathrm{min}}`, in
+        physical :math:`M_{\\odot}`.
     M0 : float
         Satellite cutoff mass :math:`M_0` below which the satellite occupation
-        vanishes.
+        vanishes, in physical :math:`M_{\\odot}`.
     """
 
-    def __init__(self, sigma_log10M=0.68, alpha_s=1.30, M1_prime=10**12.7, M_min=10**11.8, M0=0.0):        
+    def __init__(self, sigma_log10M=0.68, alpha_s=1.30, M1_prime=10**12.87, M_min=10**11.97, M0=0.0):        
         
         self.sigma_log10M, self.alpha_s, self.M1_prime, self.M_min, self.M0  = sigma_log10M, alpha_s, M1_prime, M_min, M0
 
@@ -114,10 +117,17 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
         """
         Return a new profile instance with updated HOD parameters.
 
+        The default mass parameters are the legacy Zheng et al.-style values
+        converted from :math:`M_{\\odot}/h` to physical :math:`M_{\\odot}`
+        assuming :math:`h = 0.68`.
+
         Parameters
         ----------
         sigma_log10M, alpha_s, M1_prime, M_min, M0 : float, optional
-            Replacement values for the corresponding class attributes. Any argument left as ``None`` keeps its current value.
+            Replacement values for the corresponding class attributes. The mass
+            parameters ``M1_prime``, ``M_min``, and ``M0`` are specified in
+            physical :math:`M_{\\odot}`. Any argument left as ``None`` keeps its
+            current value.
 
         Returns
         -------
@@ -139,7 +149,7 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
 
     # --- Physics Implementations ---
 
-    def n_cen(self, m):
+    def n_cen(self, halo_model, m):
         """
         Expected number of central galaxies in a halo of mass ``m``.
 
@@ -148,8 +158,10 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
 
         Parameters
         ----------
+        halo_model : HaloModel
+            The parent halo model instance.
         m : array-like
-            Halo mass.
+            Halo mass in physical :math:`M_{\\odot}`.
     
         Returns
         -------
@@ -160,7 +172,7 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
         x = (jnp.log10(m) - jnp.log10(self.M_min)) / self.sigma_log10M
         return 0.5 * (1.0 + erf(x))
 
-    def n_sat(self, m):
+    def n_sat(self, halo_model, m):
         """
         Expected number of satellite galaxies in a halo of mass ``m``.
 
@@ -169,8 +181,10 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
 
         Parameters
         ----------
+        halo_model : HaloModel
+            The parent halo model instance.
         m : array-like
-            Halo mass.
+            Halo mass in physical :math:`M_{\\odot}`.
     
         Returns
         -------
@@ -178,7 +192,7 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
             Expected number of satellite galaxies per halo.
         """
         pow_term = jnp.maximum((m - self.M0) / self.M1_prime, 0.0)**self.alpha_s
-        return self.n_cen(m) * pow_term
+        return self.n_cen(halo_model, m) * pow_term
 
     def ng_bar(self, halo_model, m, z):
         """
@@ -191,25 +205,25 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
         halo_model : HaloModel
             The parent halo model instance.
         m : array-like
-            Halo mass grid.
+            Halo mass grid in physical :math:`M_{\\odot}`.
         z : array-like
             Redshift grid.
     
         Returns
         -------
         ng : array-like
-            Mean galaxy number density as a function of redshift.
+            Mean galaxy number density as a function of redshift in comoving
+            :math:`\\mathrm{Mpc}^{-3}`.
         """
-        h = halo_model.cosmology.H0 / 100.0
         logm = jnp.log(m)
         z = jnp.atleast_1d(z)
 
-        Ntot = self.n_cen(m) + self.n_sat(m)
-        dndlnm = halo_model.halo_mass_function.halo_mass_function(halo_model, m / h, z)
+        Ntot = self.n_cen(halo_model, m) + self.n_sat(halo_model, m)
+        dndlnm = halo_model.halo_mass_function.halo_mass_function(halo_model, m, z)
         ng_val = jnp.trapezoid(dndlnm * Ntot[:, None], x=logm, axis=0)
 
         # HM Consistency check
-        return jax.lax.cond(halo_model.hm_consistency, lambda x: x + halo_model._counter_terms(m / h, z)[0] * Ntot[0], lambda x: x, ng_val)
+        return jax.lax.cond(halo_model.hm_consistency, lambda x: x + halo_model._counter_terms(m, z)[0] * Ntot[0], lambda x: x, ng_val)
 
     def galaxy_bias(self, halo_model, m, z):
         """
@@ -222,7 +236,7 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
         halo_model : HaloModel
             The parent halo model instance.
         m : array-like
-            Halo mass grid.
+            Halo mass grid in physical :math:`M_{\\odot}`.
         z : array-like
             Redshift grid.
     
@@ -230,18 +244,18 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
         -------
         bias : array-like
             Large-scale galaxy bias as a function of redshift.
+            Dimensionless.
         """
-        h = halo_model.cosmology.H0 / 100.0
         logm = jnp.log(m)
         z = jnp.atleast_1d(z)
 
-        Ntot = self.n_cen(m) + self.n_sat(m)
-        dndlnm = halo_model.halo_mass_function.halo_mass_function(halo_model, m / h, z)
-        bh = halo_model.halo_bias.halo_bias(halo_model, m / h, z, order=1)
+        Ntot = self.n_cen(halo_model, m) + self.n_sat(halo_model, m)
+        dndlnm = halo_model.halo_mass_function.halo_mass_function(halo_model, m, z)
+        bh = halo_model.halo_bias.halo_bias(halo_model, m, z, order=1)
         ng = self.ng_bar(halo_model, m, z)
 
         bg_num = jnp.trapezoid(dndlnm * bh * Ntot[:, None], x=logm, axis=0)
-        bg_num = jax.lax.cond(halo_model.hm_consistency, lambda x: x + halo_model._counter_terms(m / h, z)[1] * Ntot[0], lambda x: x, bg_num)
+        bg_num = jax.lax.cond(halo_model.hm_consistency, lambda x: x + halo_model._counter_terms(m, z)[1] * Ntot[0], lambda x: x, bg_num)
         return bg_num / ng
 
 
@@ -251,11 +265,10 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
         """
 
         h = halo_model.cosmology.H0 / 100.0
-        m_internal = m * h
 
-        Ns = self.n_sat(m_internal)
-        Nc = self.n_cen(m_internal)
-        ng = self.ng_bar(halo_model, m_internal, z) * h**3
+        Ns = self.n_sat(halo_model, m)
+        Nc = self.n_cen(halo_model, m)
+        ng = self.ng_bar(halo_model, m, z) * h**3
 
         _, u_m = self._u_k_matter(halo_model, k, m, z)  
 
@@ -279,7 +292,7 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
         r : float or jnp.ndarray
             Radius or radii in Mpc.
         m : float or jnp.ndarray
-            Halo mass grid in physical :math:`M_\\odot`.
+            Halo mass grid in physical :math:`M_{\\odot}`.
         z : float or jnp.ndarray
             Redshift grid.
 
@@ -293,11 +306,10 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
         z = jnp.atleast_1d(z)
 
         h = halo_model.cosmology.H0 / 100.0
-        m_internal = m * h
 
-        Ns = self.n_sat(m_internal)
-        Nc = self.n_cen(m_internal)
-        ng = self.ng_bar(halo_model, m_internal, z) * h**3
+        Ns = self.n_sat(halo_model, m)
+        Nc = self.n_cen(halo_model, m)
+        ng = self.ng_bar(halo_model, m, z) * h**3
 
         u_m = self._u_r_matter(halo_model, r, m, z)
 
@@ -319,7 +331,7 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
         k : array-like
             Wavenumber grid in Mpc^-1.
         m : array-like
-            Halo mass grid in physical :math:`M_\\odot`.
+            Halo mass grid in physical :math:`M_{\\odot}`.
         z : array-like
             Redshift grid.
 
@@ -330,11 +342,10 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
         """
        
         h = halo_model.cosmology.H0 / 100.0
-        m_internal = m * h
 
-        Ns = self.n_sat(m_internal)
-        Nc = self.n_cen(m_internal)
-        ng = self.ng_bar(halo_model, m_internal, z) * h**3
+        Ns = self.n_sat(halo_model, m)
+        Nc = self.n_cen(halo_model, m)
+        ng = self.ng_bar(halo_model, m, z) * h**3
 
         _, u_m = self._u_k_matter(halo_model, k, m, z)
     
