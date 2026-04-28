@@ -14,116 +14,6 @@ from hmfast.halos.profiles import HaloProfile, HankelTransform
 class DensityProfile(HaloProfile):
     pass
 
-    def _r_from_x(self, halo_model, x, m, z):
-        """
-        Convert the profile's internal dimensionless radial grid to comoving Mpc.
-        """
-        raise NotImplementedError
-    
-    def u_k(self, halo_model, k, m, z):
-        """
-        Compute the projected Fourier-space density profile for halo-model calculations.
-
-        Parameters
-        ----------
-        halo_model : HaloModel
-            Halo model providing the cosmology and halo-radius relation.
-        k : float or jnp.ndarray
-            Comoving wavenumber(s) in Mpc^-1.
-        m : float or jnp.ndarray
-            Halo mass or masses in physical :math:`M_\\odot`.
-        z : float or jnp.ndarray
-            Redshift(s).
-
-        Returns
-        -------
-        jnp.ndarray
-            Transformed profile with shape :math:`(N_k, N_M, N_z)`.
-        """
-        k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
-    
-        # Compute r_delta and ell_delta
-        r_delta = halo_model.mass_definition.r_delta(halo_model.cosmology, m, z)
-        d_A_z = jnp.atleast_1d(halo_model.cosmology.angular_diameter_distance(z))
-        ell_delta = d_A_z[None, :] / r_delta
-        
-        # chi: (Nz,) -> Target ell grid: (Nk, Nz)
-        chi = d_A_z * (1 + z)
-        ell_target = k[:, None] * chi[None, :] - 0.5 
-    
-        # Calculate kSZ Prefactor as (Nm, Nz)
-        vrms = jnp.sqrt(halo_model.cosmology.v_rms_squared(z))
-        mu_e = 1.14
-        # The real-space density profiles now return physical densities, so
-        # the projected wrapper should not carry an additional h factor.
-        prefactor = (4 * jnp.pi * r_delta**3 / mu_e
-            * (1 + z)[None, :]**3 / chi[None, :]**2 * vrms[None, :]
-        )
-    
-        # Get native Hankel transform outputs, which may not align with the k from this function's input
-        k_native, u_k_native = self._u_k_hankel(halo_model, self.x, m, z)   # New way
-        
-        # Calculate native u_ell and the native ell grid
-        u_ell_native = u_k_native * jnp.sqrt(jnp.pi / (2 * k_native[:, None, None]))
-        ell_native = k_native[:, None, None] * ell_delta[None, :, :]
-        
-        # Apply prefactor
-        u_ell_base = prefactor[None, :, :] * u_ell_native
-        u_ell_val = u_ell_base
-    
-        # 5. Vectorized Interpolation (Double vmap)
-        def interp_single_column(target_x, native_x, native_y):
-            return jnp.interp(target_x, native_x, native_y)
-    
-        # Map over Redshift (Nz) then Mass (Nm)
-        vmapped_interp = jax.vmap(
-            jax.vmap(interp_single_column, in_axes=(None, 1, 1), out_axes=1),
-            in_axes=(1, 2, 2), out_axes=2
-        )
-        
-        u_ell_interp = vmapped_interp(ell_target, ell_native, u_ell_val)
-        
-        return u_ell_interp
-
-
-        
-    def _u_k_hankel(self, halo_model, x, m, z):
-        """
-        Hankel-transform a 3D halo/tracer profile to u_ell for halo model use.
-    
-        Parameters
-        ----------
-        x : arrat like
-            Dimensionless radial grid used to tabulate the profile.
-        z : float or array_like
-            Redshift(s).
-        m : float or array_like
-            Halo mass(es).
-        k : array_like, optional
-            k values over which the hankel transform will be evaluated. 
-            If None, the transform's natural k grid will be output.
-            If not None, the transform will be inteprolated to match this k
-       
-
-        Returns ell, u_ell_m
-    
-        """
-        W_x = jnp.where((x >= x[0]) & (x <= x[-1]), 1.0, 0.0)
-
-        def single_m_z(m_val, z_val):
-            r = self._r_from_x(halo_model, x, m_val, z_val)
-            profile = jnp.squeeze(self.u_r(halo_model, r, m_val, z_val))
-            return profile * x**0.5 * W_x  # shape (Nx,)
-
-        hankel_integrand = jax.vmap(jax.vmap(single_m_z, in_axes=(None, 0)), in_axes=(0, None) )(m, z)
-            
-        # We need u_k_native to have shape (Nx, Nm, Nz)
-        k_native, u_k_native = self._hankel.transform(hankel_integrand)
-        u_k_native = jnp.swapaxes(u_k_native, 2, 0)
-        u_k_native = jnp.swapaxes(u_k_native, 2, 1)
- 
-        return k_native, u_k_native
-
 
 
 class B16DensityProfile(DensityProfile):
@@ -169,9 +59,7 @@ class B16DensityProfile(DensityProfile):
         {(k r_\\Delta) x}
         \\tag{3}
 
-    where :math:`x = r / [(1+z) r_\\Delta]` and :math:`\\mu_e = 1.14`, while
-    :math:`f_{\\mathrm{free}} = 1` is included in the real-space density profile
-    of Eq. (1) rather than as an additional Fourier-space prefactor, and
+    where :math:`x = r / [(1+z) r_\\Delta]`, :math:`\\mu_e = 1.14`, and
     :math:`\\chi(z) = (1+z) d_A(z)` is the comoving distance.
 
     Attributes
@@ -179,11 +67,11 @@ class B16DensityProfile(DensityProfile):
     x : jnp.ndarray
         Dimensionless radial grid :math:`x = r / [(1+z) r_\\Delta]` used to tabulate the profile and define the Hankel transform.
     A_rho0 : float
-        Amplitude :math:`A_C` of the density normalization scaling.
+        Amplitude :math:`A_C` controlling the normalization of the density profile.
     A_alpha : float
-        Amplitude :math:`A_\\alpha` of the transition-slope scaling.
+        Amplitude :math:`A_\\alpha` controlling the transition width.
     A_beta : float
-        Amplitude :math:`A_\\beta` of the outer-slope scaling.
+        Amplitude :math:`A_\\beta` controlling the outer slope.
     alpha_m_rho0 : float
         Mass-scaling exponent :math:`\\alpha_m^C`.
     alpha_m_alpha : float
@@ -245,6 +133,7 @@ class B16DensityProfile(DensityProfile):
         obj._hankel = hankel
         return obj
 
+
     def update(self, A_rho0=None, A_alpha=None, A_beta=None,
                alpha_m_rho0=None, alpha_m_alpha=None, alpha_m_beta=None,
                alpha_z_rho0=None, alpha_z_alpha=None, alpha_z_beta=None):
@@ -297,15 +186,6 @@ class B16DensityProfile(DensityProfile):
             raise ValueError(f"Model {model_key} not recognized. Choose 'agn' or 'shock'.")
         return presets[key]
 
-    def _r_from_x(self, halo_model, x, m, z):
-        r_200c = halo_model.mass_definition.r_delta(
-            halo_model.cosmology,
-            jnp.atleast_1d(m),
-            jnp.atleast_1d(z),
-        )
-        return x * jnp.squeeze(r_200c) * (1.0 + jnp.squeeze(jnp.atleast_1d(z)))
-        
-
     def u_r(self, halo_model, r, m, z):
         """
         Compute the electron-density profile.
@@ -324,7 +204,7 @@ class B16DensityProfile(DensityProfile):
         Returns
         -------
         jnp.ndarray
-            Electron-density profile with shape :math:`(N_x, N_M, N_z)`.
+            Electron-density profile with shape :math:`(N_r, N_M, N_z)`.
         """
         cparams = halo_model.cosmology._cosmo_params()
         f_b = cparams["Omega_b"] / cparams["Omega0_m"]
@@ -360,6 +240,59 @@ class B16DensityProfile(DensityProfile):
         rho_gas = rho0 * rho_crit_z * f_b * f_free * p_x 
         
         return rho_gas
+
+
+    def u_k(self, halo_model, k, m, z):
+        """
+        Compute the projected Fourier-space density profile for halo-model calculations.
+
+        Parameters
+        ----------
+        halo_model : HaloModel
+            Halo model providing the cosmology and halo-radius relation.
+        k : float or jnp.ndarray
+            Comoving wavenumber(s) in Mpc^-1.
+        m : float or jnp.ndarray
+            Halo mass or masses in physical :math:`M_\\odot`.
+        z : float or jnp.ndarray
+            Redshift(s).
+
+        Returns
+        -------
+        jnp.ndarray
+            Transformed profile with shape :math:`(N_k, N_M, N_z)`.
+        """
+        k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
+        r_delta = halo_model.mass_definition.r_delta(halo_model.cosmology, m, z)
+        d_A_z = jnp.atleast_1d(halo_model.cosmology.angular_diameter_distance(z))
+        ell_delta = d_A_z[None, :] / r_delta
+
+        chi = d_A_z * (1 + z)
+        ell_target = k[:, None] * chi[None, :] - 0.5
+
+        vrms = jnp.sqrt(halo_model.cosmology.v_rms_squared(z))
+        mu_e = 1.14
+        prefactor = (
+            4 * jnp.pi * r_delta**3 / mu_e
+            * (1 + z)[None, :]**3 / chi[None, :]**2 * vrms[None, :]
+        )
+
+        r = self.x[:, None, None] * r_delta[None, :, :] * (1.0 + z[None, None, :])
+        k_native, u_k_native = self._u_k_hankel(halo_model, self.x, r, m, z)
+
+        u_ell_native = u_k_native * jnp.sqrt(jnp.pi / (2 * k_native[:, None, None]))
+        ell_native = k_native[:, None, None] * ell_delta[None, :, :]
+        u_ell_val = prefactor[None, :, :] * u_ell_native
+
+        def interp_single_column(target_x, native_x, native_y):
+            return jnp.interp(target_x, native_x, native_y)
+
+        vmapped_interp = jax.vmap(
+            jax.vmap(interp_single_column, in_axes=(None, 1, 1), out_axes=1),
+            in_axes=(1, 2, 2), out_axes=2
+        )
+
+        return vmapped_interp(ell_target, ell_native, u_ell_val)
 
 jax.tree_util.register_pytree_node(
     B16DensityProfile,
@@ -403,11 +336,11 @@ class NFWDensityProfile(DensityProfile):
     .. math::
 
         u_k(k, M, z) =
-        4 \\pi \\, r_\\Delta^3 \\, \\frac{f_{\\mathrm{free}}}{\\mu_e}
+        4 \\pi \\, r_s^3 \\, \\frac{f_{\\mathrm{free}}}{\\mu_e}
         \\, \\frac{(1+z)^3}{\\chi^2(z)} \\, v_{\\mathrm{rms}}(z)
         \\int dx \\, x^2 \\, \\rho(x, M, z)
-        \\, \\frac{\\sin\\!\\left[(k r_\\Delta) x\\right]}
-        {(k r_\\Delta) x}
+        \\, \\frac{\\sin\\!\\left[(k r_s) x\\right]}
+        {(k r_s) x}
         \\tag{4}
 
     where :math:`x = r / [(1+z) r_s]`, :math:`\\mu_e = 1.14`,
@@ -434,18 +367,6 @@ class NFWDensityProfile(DensityProfile):
         """
         self._x = value
         self._hankel = HankelTransform(self._x, nu=0.5)
-        
-
-    def _r_from_x(self, halo_model, x, m, z):
-        cparams = halo_model.cosmology._cosmo_params()
-        r_delta = halo_model.mass_definition.r_delta(
-            halo_model.cosmology,
-            jnp.atleast_1d(m),
-            jnp.atleast_1d(z),
-        ) * cparams["h"]
-        c_delta = halo_model.concentration.c_delta(halo_model, jnp.atleast_1d(m), jnp.atleast_1d(z))
-        r_s = jnp.squeeze(r_delta / c_delta)
-        return x * r_s * (1.0 + jnp.squeeze(jnp.atleast_1d(z))) / cparams["h"]
 
     def u_r(self, halo_model, r, m, z):
         """
@@ -487,6 +408,63 @@ class NFWDensityProfile(DensityProfile):
         rho_gas = f_b * rho_s[None, :, :] / (x_s * (1 + x_s)**2)
         
         return rho_gas
+        
+
+    def u_k(self, halo_model, k, m, z):
+        """
+        Compute the projected Fourier-space density profile for halo-model calculations.
+
+        Parameters
+        ----------
+        halo_model : HaloModel
+            Halo model providing the cosmology, halo radius, and concentration model.
+        k : float or jnp.ndarray
+            Comoving wavenumber(s) in Mpc^-1.
+        m : float or jnp.ndarray
+            Halo mass or masses in physical :math:`M_\\odot`.
+        z : float or jnp.ndarray
+            Redshift(s).
+
+        Returns
+        -------
+        jnp.ndarray
+            Transformed profile with shape :math:`(N_k, N_M, N_z)`.
+        """
+        k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
+        r_delta = halo_model.mass_definition.r_delta(halo_model.cosmology, m, z)
+        c_delta = halo_model.concentration.c_delta(halo_model, m, z)
+        r_s = r_delta / c_delta
+        d_A_z = jnp.atleast_1d(halo_model.cosmology.angular_diameter_distance(z))
+        ell_s = d_A_z[None, :] / r_s
+
+        chi = d_A_z * (1 + z)
+        ell_target = k[:, None] * chi[None, :] - 0.5
+
+        vrms = jnp.sqrt(halo_model.cosmology.v_rms_squared(z))
+        mu_e = 1.14
+        prefactor = (
+            4 * jnp.pi * r_s**3 / mu_e
+            * (1 + z)[None, :]**3 / chi[None, :]**2 * vrms[None, :]
+        )
+
+        r = self.x[:, None, None] * r_s[None, :, :] * (1.0 + z[None, None, :])
+        k_native, u_k_native = self._u_k_hankel(halo_model, self.x, r, m, z)
+
+        u_ell_native = u_k_native * jnp.sqrt(jnp.pi / (2 * k_native[:, None, None]))
+        ell_native = k_native[:, None, None] * ell_s[None, :, :]
+        u_ell_val = prefactor[None, :, :] * u_ell_native
+
+        def interp_single_column(target_x, native_x, native_y):
+            return jnp.interp(target_x, native_x, native_y)
+
+        vmapped_interp = jax.vmap(
+            jax.vmap(interp_single_column, in_axes=(None, 1, 1), out_axes=1),
+            in_axes=(1, 2, 2), out_axes=2
+        )
+
+        return vmapped_interp(ell_target, ell_native, u_ell_val)
+
+    
 
 
 
@@ -535,14 +513,14 @@ class BCMDensityProfile(DensityProfile):
     .. math::
 
         u_k(k, M, z) =
-        4 \\pi \\, r_\\Delta^3 \\, \\frac{f_{\\mathrm{free}}}{\\mu_e}
+        4 \\pi \\, r_{\\mathrm{vir}}^3 \\, \\frac{f_{\\mathrm{free}}}{\\mu_e}
         \\, \\frac{(1+z)^3}{\\chi^2(z)} \\, v_{\\mathrm{rms}}(z)
         \\int dx \\, x^2 \\, \\rho(x, M, z)
-        \\, \\frac{\\sin\\!\\left[(k r_\\Delta) x\\right]}
-        {(k r_\\Delta) x}
+        \\, \\frac{\\sin\\!\\left[(k r_{\\mathrm{vir}}) x\\right]}
+        {(k r_{\\mathrm{vir}}) x}
         \\tag{5}
 
-    where :math:`x = r / [(1+z) r_\\Delta]`, :math:`\\mu_e = 1.14`,
+    where :math:`x = r / [(1+z) r_{\\mathrm{vir}}]`, :math:`\\mu_e = 1.14`,
     :math:`f_{\\mathrm{free}} = 1`, and
     :math:`\\chi(z) = (1+z) d_A(z)` is the comoving distance.
 
@@ -640,15 +618,6 @@ class BCMDensityProfile(DensityProfile):
         
         return self._tree_unflatten(treedef, new_leaves)
 
-
-    def _r_from_x(self, halo_model, x, m, z):
-        r_vir = MassDefinition("vir", "critical").r_delta(
-            halo_model.cosmology,
-            jnp.atleast_1d(m),
-            jnp.atleast_1d(z),
-        )
-        return x * jnp.squeeze(r_vir) * (1.0 + jnp.squeeze(jnp.atleast_1d(z)))
-
     def u_r(self, halo_model, r, m, z):
         """
         Compute the gas-density profile.
@@ -705,6 +674,64 @@ class BCMDensityProfile(DensityProfile):
     
         
         return num / (denom1 * denom2) 
+
+
+    
+    def u_k(self, halo_model, k, m, z):
+        """
+        Compute the projected Fourier-space gas-density profile for halo-model calculations.
+
+        Parameters
+        ----------
+        halo_model : HaloModel
+            Halo model providing the cosmology and virial radius.
+        k : float or jnp.ndarray
+            Comoving wavenumber(s) in Mpc^-1.
+        m : float or jnp.ndarray
+            Halo mass or masses in physical :math:`M_\\odot`.
+        z : float or jnp.ndarray
+            Redshift(s).
+
+        Returns
+        -------
+        jnp.ndarray
+            Transformed profile with shape :math:`(N_k, N_M, N_z)`.
+        """
+        k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
+        r_vir = MassDefinition("vir", "critical").r_delta(
+            halo_model.cosmology,
+            m,
+            z,
+        )
+        d_A_z = jnp.atleast_1d(halo_model.cosmology.angular_diameter_distance(z))
+        ell_vir = d_A_z[None, :] / r_vir
+
+        chi = d_A_z * (1 + z)
+        ell_target = k[:, None] * chi[None, :] - 0.5
+
+        vrms = jnp.sqrt(halo_model.cosmology.v_rms_squared(z))
+        mu_e = 1.14
+        prefactor = (
+            4 * jnp.pi * r_vir**3 / mu_e
+            * (1 + z)[None, :]**3 / chi[None, :]**2 * vrms[None, :]
+        )
+
+        r = self.x[:, None, None] * r_vir[None, :, :] * (1.0 + z[None, None, :])
+        k_native, u_k_native = self._u_k_hankel(halo_model, self.x, r, m, z)
+
+        u_ell_native = u_k_native * jnp.sqrt(jnp.pi / (2 * k_native[:, None, None]))
+        ell_native = k_native[:, None, None] * ell_vir[None, :, :]
+        u_ell_val = prefactor[None, :, :] * u_ell_native
+
+        def interp_single_column(target_x, native_x, native_y):
+            return jnp.interp(target_x, native_x, native_y)
+
+        vmapped_interp = jax.vmap(
+            jax.vmap(interp_single_column, in_axes=(None, 1, 1), out_axes=1),
+            in_axes=(1, 2, 2), out_axes=2
+        )
+
+        return vmapped_interp(ell_target, ell_native, u_ell_val)
 
 jax.tree_util.register_pytree_node(
     BCMDensityProfile,

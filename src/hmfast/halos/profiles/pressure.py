@@ -33,11 +33,12 @@ class PressureProfile(HaloProfile):
         jnp.ndarray
             Transformed profile with shape :math:`(N_k, N_M, N_z)`.
         """
-        B = self.B
         k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
+        B = getattr(self, "B", 1.0)
 
-        
-        r_delta = halo_model.mass_definition.r_delta(halo_model.cosmology, m, z) / B**(1/3) # (Nm, Nz)
+        r_delta_native = halo_model.mass_definition.r_delta(halo_model.cosmology, m, z)
+        r_delta = r_delta_native / B**(1 / 3)
+        r = self.x[:, None, None] * r_delta_native[None, :, :] * (1.0 + z[None, None, :])
         d_A = jnp.atleast_1d(halo_model.cosmology.angular_diameter_distance(z))
         ell_delta = d_A[None, :] / r_delta  # (Nm, Nz)
         
@@ -49,7 +50,7 @@ class PressureProfile(HaloProfile):
         ell_target = k[:, None] * chi[None, :] - 0.5 
         
         # Get native Hankel transform outputs, which may not align with the k from this function's input
-        k_native, u_k_native = self._u_k_hankel(halo_model, self.x, m, z)  
+        k_native, u_k_native = self._u_k_hankel(halo_model, self.x, r, m, z)
         
         # Calculate native u_ell and the native ell grid
         u_ell_native = u_k_native * jnp.sqrt(jnp.pi / (2 * k_native[:, None, None])) 
@@ -74,55 +75,6 @@ class PressureProfile(HaloProfile):
         return u_ell_interp
 
 
-        
-    def _u_k_hankel(self, halo_model, x, m, z):
-        """
-        Hankel-transform a 3D halo/tracer profile to u_ell for halo model use.
-    
-        Parameters
-        ----------
-        x : arrat like
-            Radius r scaled by the scale radius x = r / r_s
-        z : float or array_like
-            Redshift(s).
-        m : float or array_like
-            Halo mass(es).
-        k : array_like, optional
-            k values over which the hankel transform will be evaluated. 
-            If None, the transform's natural k grid will be output.
-            If not None, the transform will be inteprolated to match this k
-       
-
-        Returns ell, u_ell_m
-    
-        """
-
-       
-        cparams = halo_model.cosmology._cosmo_params()
-        h = cparams['h']
-       
-        W_x = jnp.where((x >= x[0]) & (x <= x[-1]), 1.0, 0.0)
-
-        def single_m_z(m_val, z_val):
-            r_delta = halo_model.mass_definition.r_delta(
-                halo_model.cosmology,
-                jnp.atleast_1d(m_val),
-                jnp.atleast_1d(z_val),
-            )
-            r = x * jnp.squeeze(r_delta) * (1.0 + jnp.squeeze(jnp.atleast_1d(z_val)))
-            pressure_profile = jnp.squeeze(self.u_r(halo_model, r, m_val, z_val))
-            return pressure_profile * x**0.5 * W_x  # shape (Nx,)
-
-        hankel_integrand = jax.vmap(jax.vmap(single_m_z, in_axes=(None, 0)), in_axes=(0, None) )(m, z)
-            
-        # We need u_k_native to have shape (Nx, Nm, Nz)
-        k_native, u_k_native = self._hankel.transform(hankel_integrand)
-        u_k_native = jnp.swapaxes(u_k_native, 2, 0)
-        u_k_native = jnp.swapaxes(u_k_native, 2, 1)
- 
-        return k_native, u_k_native
-
-
 
 
 
@@ -142,7 +94,8 @@ class GNFWPressureProfile(PressureProfile):
         \\left[1 + \\left(c_{500} x_{500c}\\right)^\\alpha\\right]^{(\\gamma-\\beta)/\\alpha}
         \\tag{1}
 
-    where :math:`x_{500c} = r / [(1+z) r_{500c}]` and
+    where :math:`x_{500c} = r / r_{500c}` and :math:`r_{500c}` has the same
+    units as :math:`r`, and
 
     .. math::
 
@@ -164,7 +117,7 @@ class GNFWPressureProfile(PressureProfile):
 
         u_\\ell(\\ell, M, z) =
         \\frac{4 \\pi (1+z) r_\\Delta}{\\ell_\\Delta^2}
-        \\int dx \\, x^2 \\, P_e\\!\\left((1+z) r_\\Delta x, M, z\\right)
+        \\int dx \\, x^2 \\, P_e(x, M, z)
         \\, \\frac{\\sin\\!\\left[(\\ell / \\ell_\\Delta) x\\right]}
         {(\\ell / \\ell_\\Delta) x}
         \\tag{3}
@@ -175,7 +128,7 @@ class GNFWPressureProfile(PressureProfile):
     Attributes
     ----------
     x : jnp.ndarray
-        Dimensionless radial grid :math:`x = r / [(1+z) r_\\Delta]` used to tabulate the profile and define the Hankel transform.
+        Dimensionless radial grid :math:`x = r / r_\\Delta` used to tabulate the profile and define the Hankel transform, with :math:`r_\\Delta` expressed in the same units as :math:`r`.
     P0 : float
         Dimensionless gNFW normalization :math:`P_0`.
     c500 : float
@@ -337,7 +290,8 @@ class B12PressureProfile(PressureProfile):
         \\left[1 + \\left(\\frac{x_{200c}}{x_c}\\right)^\\alpha\\right]^{-\\beta}
         \\tag{1}
 
-    where :math:`x_{200c} = r / [(1+z) r_{200c}]`.
+    where :math:`x_{200c} = r / r_{200c}` and :math:`r_{200c}` has the same
+    units as :math:`r`.
     In this implementation, :math:`\\alpha = 1` and :math:`\\gamma = -0.3`,
     and the remaining profile parameters follow the Battaglia scaling
 
@@ -358,7 +312,7 @@ class B12PressureProfile(PressureProfile):
 
         u_\\ell(\\ell, M, z) =
         \\frac{4 \\pi (1+z) r_\\Delta}{\\ell_\\Delta^2}
-        \\int dx \\, x^2 \\, P_e\\!\\left((1+z) r_\\Delta x, M, z\\right)
+        \\int dx \\, x^2 \\, P_e(x, M, z)
         \\, \\frac{\\sin\\!\\left[(\\ell / \\ell_\\Delta) x\\right]}
         {(\\ell / \\ell_\\Delta) x}
         \\tag{3}
@@ -369,7 +323,7 @@ class B12PressureProfile(PressureProfile):
     Attributes
     ----------
     x : jnp.ndarray
-        Dimensionless radial grid :math:`x = r / [(1+z) r_\\Delta]` used to tabulate the profile and define the Hankel transform.
+        Dimensionless radial grid :math:`x = r / r_\\Delta` used to tabulate the profile and define the Hankel transform, with :math:`r_\\Delta` expressed in the same units as :math:`r`.
     A_P0 : float
         Amplitude :math:`A_{P_0}` of the pressure normalization scaling.
     A_xc : float
@@ -415,7 +369,7 @@ class B12PressureProfile(PressureProfile):
         leaves = (
             self.A_P0, self.A_xc, self.A_beta,
             self.alpha_m_P0, self.alpha_m_xc, self.alpha_m_beta,
-            self.alpha_z_P0, self.alpha_z_xc, self.alpha_z_beta, 
+            self.alpha_z_P0, self.alpha_z_xc, self.alpha_z_beta,
         )
         aux_data = (self._x, self._hankel)
         return (leaves, aux_data)
@@ -424,12 +378,11 @@ class B12PressureProfile(PressureProfile):
     def _tree_unflatten(cls, aux_data, leaves):
         x, hankel = aux_data
         obj = cls.__new__(cls)
-        
+
         (obj.A_P0, obj.A_xc, obj.A_beta,
          obj.alpha_m_P0, obj.alpha_m_xc, obj.alpha_m_beta,
-         obj.alpha_z_P0, obj.alpha_z_xc, obj.alpha_z_beta, 
-         ) = leaves
-        
+         obj.alpha_z_P0, obj.alpha_z_xc, obj.alpha_z_beta) = leaves
+
         obj._x = x
         obj._hankel = hankel
         return obj

@@ -41,6 +41,51 @@ class HaloProfile:
         return False
 
 
+    def _u_k_hankel(self, halo_model, x, r, m, z):
+        """
+        Hankel-transform a real-space profile sampled on a dimensionless grid.
+
+        Parameters
+        ----------
+        halo_model : HaloModel
+            Halo model passed through to ``u_r``.
+        x : array_like
+            Dimensionless transform grid.
+        r : jnp.ndarray
+            Comoving radius grid with shape :math:`(N_x, N_M, N_z)`.
+        m : float or array_like
+            Halo mass(es).
+        z : float or array_like
+            Redshift(s).
+
+        Returns
+        -------
+        tuple[jnp.ndarray, jnp.ndarray]
+            Native Hankel wavenumbers and transformed profile values with shape
+            :math:`(N_k, N_M, N_z)`.
+        """
+        x = jnp.atleast_1d(x)
+        r = jnp.asarray(r)
+        m = jnp.atleast_1d(m)
+        z = jnp.atleast_1d(z)
+        W_x = jnp.where((x >= x[0]) & (x <= x[-1]), 1.0, 0.0)
+
+        def single_m_z(r_vals, m_val, z_val):
+            profile = jnp.squeeze(self.u_r(halo_model, r_vals, m_val, z_val))
+            return profile * x**0.5 * W_x
+
+        hankel_integrand = jax.vmap(
+            jax.vmap(single_m_z, in_axes=(1, None, 0), out_axes=0),
+            in_axes=(1, 0, None), out_axes=0,
+        )(r, m, z)
+
+        k_native, u_k_native = self._hankel.transform(hankel_integrand)
+        u_k_native = jnp.swapaxes(u_k_native, 2, 0)
+        u_k_native = jnp.swapaxes(u_k_native, 2, 1)
+
+        return k_native, u_k_native
+
+
     def _u_r_nfw(self, halo_model, r, m, z):
         """
         Calculate the normalized real-space NFW matter profile.
