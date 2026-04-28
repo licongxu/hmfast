@@ -122,11 +122,11 @@ class D08Concentration(Concentration):
         A, B, C, M_pivot = coeffs[(200, "critical")]
         native_def = MassDefinition(200, "critical")
         c_seed = A * (m_internal[:, None] / M_pivot)**B * (1 + z[None, :])**C
-        m_200c = convert_m_delta(halo_model.cosmology, m_internal, z, mass_def_old=mdef, mass_def_new=native_def, c_old=c_seed)
+        m_200c = convert_m_delta(halo_model.cosmology, m, z, mass_def_old=mdef, mass_def_new=native_def, c_old=c_seed)
         
         # Compute r_s from native 200c mesh
-        c_200c = A * (m_200c / M_pivot)**B * (1 + z[None, :])**C
-        r_200c = jax.vmap(lambda mc, zi: native_def.r_delta(halo_model.cosmology, mc / h, zi), (1, 0))(m_200c, z).T
+        c_200c = A * ((m_200c * h) / M_pivot)**B * (1 + z[None, :])**C
+        r_200c = jax.vmap(lambda mc, zi: native_def.r_delta(halo_model.cosmology, mc, zi), (1, 0))(m_200c, z).T
         
         # Final Target Radius / r_s
         r_target = mdef.r_delta(halo_model.cosmology, m, z)
@@ -207,12 +207,12 @@ class B13Concentration(Concentration):
         # c_seed for the solver
         c_seed = compute_c(m_internal[:, None], z[None, :], D[None, :], A, B, C)
         
-        m_native = convert_m_delta(halo_model.cosmology, m_internal, z, mass_def_old=mdef, mass_def_new=native_def, c_old=c_seed)
+        m_native = convert_m_delta(halo_model.cosmology, m, z, mass_def_old=mdef, mass_def_new=native_def, c_old=c_seed)
         
         # Re-compute concentration and scale radius at native definition
-        c_native = compute_c(m_native, z[None, :], D[None, :], A, B, C)
+        c_native = compute_c(m_native * h, z[None, :], D[None, :], A, B, C)
 
-        r_native = jax.vmap(lambda mc, zi: native_def.r_delta(halo_model.cosmology, mc / h, zi), in_axes=(1, 0))(m_native, z).T
+        r_native = jax.vmap(lambda mc, zi: native_def.r_delta(halo_model.cosmology, mc, zi), in_axes=(1, 0))(m_native, z).T
         r_s = r_native / c_native
 
         # Final Target Radius / r_s
@@ -292,12 +292,12 @@ class SC14Concentration(Concentration):
         # c_seed for the solver
         c_seed = compute_c(m_internal[:, None], z[None, :], native_coeffs)
         
-        m_native = convert_m_delta(halo_model.cosmology, m_internal, z, mass_def_old=mdef, mass_def_new=native_def, c_old=c_seed)
+        m_native = convert_m_delta(halo_model.cosmology, m, z, mass_def_old=mdef, mass_def_new=native_def, c_old=c_seed)
         
         # Re-compute concentration and radii at native definition
-        c_native = compute_c(m_native, z[None, :], native_coeffs)
+        c_native = compute_c(m_native * h, z[None, :], native_coeffs)
 
-        r_native = jax.vmap(lambda mc, zi: native_def.r_delta(halo_model.cosmology, mc / h, zi), in_axes=(1, 0))(m_native, z).T
+        r_native = jax.vmap(lambda mc, zi: native_def.r_delta(halo_model.cosmology, mc, zi), in_axes=(1, 0))(m_native, z).T
         
         r_s = r_native / c_native
 

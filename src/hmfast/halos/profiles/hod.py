@@ -215,8 +215,8 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
             Mean galaxy number density as a function of redshift in comoving
             :math:`\\mathrm{Mpc}^{-3}`.
         """
+        m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
         logm = jnp.log(m)
-        z = jnp.atleast_1d(z)
 
         Ntot = self.n_cen(halo_model, m) + self.n_sat(halo_model, m)
         dndlnm = halo_model.halo_mass_function.halo_mass_function(halo_model, m, z)
@@ -246,8 +246,8 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
             Large-scale galaxy bias as a function of redshift.
             Dimensionless.
         """
+        m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
         logm = jnp.log(m)
-        z = jnp.atleast_1d(z)
 
         Ntot = self.n_cen(halo_model, m) + self.n_sat(halo_model, m)
         dndlnm = halo_model.halo_mass_function.halo_mass_function(halo_model, m, z)
@@ -263,6 +263,8 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
         """ 
         Compute the satellite and central pieces of the galaxy HOD tracer.
         """
+
+        k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
 
         h = halo_model.cosmology.H0 / 100 
         Ns = self.n_sat(halo_model, m)
@@ -300,9 +302,7 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
         jnp.ndarray
             Real-space profile with shape :math:`(N_r, N_M, N_z)`.
         """
-        r = jnp.atleast_1d(r)
-        m = jnp.atleast_1d(m)
-        z = jnp.atleast_1d(z)
+        r, m, z = jnp.atleast_1d(r), jnp.atleast_1d(m), jnp.atleast_1d(z)
 
         h = halo_model.cosmology.H0 / 100 
         Ns = self.n_sat(halo_model, m)
@@ -338,6 +338,8 @@ class StandardGalaxyHODProfile(GalaxyHODProfile):
         jnp.ndarray
             Fourier-space profile.
         """
+
+        k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
        
         h = halo_model.cosmology.H0 / 100 
         Ns = self.n_sat(halo_model, m)

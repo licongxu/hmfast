@@ -327,6 +327,8 @@ class S12CIBProfile(CIBProfile):
             Satellite luminosity :math:`L_\\nu^{\\mathrm{sat}}(M, z)` with shape
             :math:`(N_M, N_z)`.
         """
+        m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
+
         def integrate_single_halo(m_single):
             ms_min = self.M_min
             ms_max = m_single
@@ -365,6 +367,8 @@ class S12CIBProfile(CIBProfile):
             Central luminosity :math:`L_\\nu^{\\mathrm{cen}}(M, z)` with shape
             :math:`(N_M, N_z)`.
         """
+        m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
+
         # Shang: Central mass is the full halo mass
         n_cen = jnp.where(m > self.M_min, 1.0, 0.0)
         l_gal = self.l_gal(halo_model, m, z)
@@ -390,7 +394,7 @@ class S12CIBProfile(CIBProfile):
         jnp.ndarray
             Mean emissivity :math:`\\bar{j}_\\nu(z)`.
         """
-        m = jnp.atleast_1d(m)
+        m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
 
         lc = self.l_cen(halo_model, m, z) # Shape: (Nm, Nz)
         ls = self.l_sat(halo_model, m, z) # Shape: (Nm, Nz)
@@ -430,6 +434,8 @@ class S12CIBProfile(CIBProfile):
         float or jnp.ndarray
             Monopole intensity :math:`I_\\nu`.
         """
+        m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
+
         # Get the mean emissivity (Shape: Nz)
         j_bar = self.j_bar_nu(halo_model, m, z)
         
@@ -445,6 +451,8 @@ class S12CIBProfile(CIBProfile):
 
 
     def _sat_and_cen_contribution(self, halo_model, k, m, z):
+
+        k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
 
         
         cparams = halo_model.cosmology._cosmo_params()
@@ -488,9 +496,7 @@ class S12CIBProfile(CIBProfile):
         jnp.ndarray
             Real-space profile array with shape :math:`(N_r, N_M, N_z)`.
         """
-        r = jnp.atleast_1d(r)
-        m = jnp.atleast_1d(m)
-        z = jnp.atleast_1d(z)
+        r, m, z = jnp.atleast_1d(r), jnp.atleast_1d(m), jnp.atleast_1d(z)
 
         ls = self.l_sat(halo_model, m, z)
         lc = self.l_cen(halo_model, m, z)
@@ -523,6 +529,8 @@ class S12CIBProfile(CIBProfile):
             Fourier-space profile with shape :math:`(N_k, N_M, N_z)`.
         """
         # Get the individual components (scaled correctly by h_factors and 4pi)
+
+        k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
         
         sat_term, cen_term = self._sat_and_cen_contribution(halo_model, k, m, z)
 
@@ -819,6 +827,8 @@ class M21CIBProfile(CIBProfile):
             Galaxy luminosity :math:`L_\\nu^{\\mathrm{gal}}(M, z)` with shape
             :math:`(N_M, N_z)`.
         """
+        m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
+
         # Convert the Maniyar flux-per-SFR template into the same
         # luminosity-like units used by the Shang model.
         chi = halo_model.cosmology.angular_diameter_distance(z) * (1 + z)
@@ -847,6 +857,8 @@ class M21CIBProfile(CIBProfile):
             Satellite luminosity :math:`L_\\nu^{\\mathrm{sat}}(M, z)` with shape
             :math:`(N_M, N_z)`.
         """
+        m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
+
         def integrate_single_halo(m_single):
             ms_min = self.M_min
             # Host efficiency scaling uses mass corrected by fsub
@@ -887,6 +899,8 @@ class M21CIBProfile(CIBProfile):
             Central luminosity :math:`L_\\nu^{\\mathrm{cen}}(M, z)` with shape
             :math:`(N_M, N_z)`.
         """
+        m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
+
         # Maniyar: Central mass is reduced by the subhalo fraction
         m_eff = m * (1 - self.f_sub)
         n_cen = jnp.where(m_eff > self.M_min, 1.0, 0.0)
@@ -913,7 +927,7 @@ class M21CIBProfile(CIBProfile):
         jnp.ndarray
             Mean emissivity :math:`\\bar{j}_\\nu(z)`.
         """
-        m = jnp.atleast_1d(m)
+        m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
 
         lc = self.l_cen(halo_model, m, z) # Shape: (Nm, Nz)
         ls = self.l_sat(halo_model, m, z) # Shape: (Nm, Nz)
@@ -950,6 +964,8 @@ class M21CIBProfile(CIBProfile):
         float or jnp.ndarray
             Monopole intensity :math:`I_\\nu`.
         """
+        m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
+
         # Get the mean emissivity (Shape: Nz)
         j_bar = self.j_bar_nu(halo_model, m, z)
         
@@ -965,6 +981,8 @@ class M21CIBProfile(CIBProfile):
 
     
     def _sat_and_cen_contribution(self, halo_model, k, m, z):
+
+        k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
 
         cparams = halo_model.cosmology._cosmo_params()
        
@@ -1006,9 +1024,7 @@ class M21CIBProfile(CIBProfile):
         jnp.ndarray
             Real-space profile array with shape :math:`(N_r, N_M, N_z)`.
         """
-        r = jnp.atleast_1d(r)
-        m = jnp.atleast_1d(m)
-        z = jnp.atleast_1d(z)
+        r, m, z = jnp.atleast_1d(r), jnp.atleast_1d(m), jnp.atleast_1d(z)
 
         ls = self.l_sat(halo_model, m, z)
         lc = self.l_cen(halo_model, m, z)
@@ -1040,6 +1056,9 @@ class M21CIBProfile(CIBProfile):
         jnp.ndarray
             Fourier-space profile with shape :math:`(N_k, N_M, N_z)`.
         """
+
+        k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
+
         sat_term, cen_term = self._sat_and_cen_contribution(halo_model, k, m, z)
 
         return cen_term + sat_term

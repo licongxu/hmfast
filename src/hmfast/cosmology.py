@@ -181,8 +181,18 @@ class Cosmology:
             subdir, loader_cls = key_map[key]
         except KeyError:
             raise KeyError(f"Unknown key: {key}")
-    
-        self._emu[key] = loader_cls(os.path.join(self._base_path(), subdir, f"{key}_{_COSMO_MODELS[self.cosmo_model]['suffix']}"))
+
+        emulator_path = os.path.join(
+            self._base_path(),
+            subdir,
+            f"{key}_{_COSMO_MODELS[self.cosmo_model]['suffix']}",
+        )
+
+        try:
+            self._emu[key] = loader_cls(emulator_path)
+        except (IOError, OSError) as exc:
+            raise FileNotFoundError("Failed to load hmfast emulator. Please ensure that the emulators corresponding to the requested cosmological model have been downloaded. See the documentation for more details.") 
+
         return self._emu[key]
 
 
@@ -254,7 +264,6 @@ class Cosmology:
     # Cosmology
     # ------------------------------------------------------------------
 
-    @jax.jit
     def hubble_parameter(self, z):
         """
         Get Hubble parameter :math:`H(z)` at redshift :math:`z` from the emulator.
@@ -275,7 +284,6 @@ class Cosmology:
         preds = 10.0 ** emu.predictions(params)
         return self._interp_z(z, self._z_grid_bg(), preds)
 
-    @jax.jit
     def angular_diameter_distance(self, z):
         """
         Get angular diameter distance :math:`D_A(z)` at redshift :math:`z` from the emulator.
@@ -301,7 +309,6 @@ class Cosmology:
 
         return self._interp_z(z, self._z_grid_bg(), preds)
 
-    @jax.jit
     def sigma8(self, z):
         """
         Get :math:`\\sigma_8(z)` at redshift :math:`z` from the emulator.
@@ -434,7 +441,7 @@ class Cosmology:
         
         return Omega_m_z
 
-    @jax.jit
+    #@jax.jit
     def growth_factor(self, z):
         """
         Linear growth factor :math:`D(z)`, normalized to :math:`D(0)=1`.
@@ -489,8 +496,7 @@ class Cosmology:
         
         return jnp.interp(z, z_grid_pk, f_grid)
 
-
-    @jax.jit
+    #@jax.jit
     def v_rms_squared(self, z):
         """
         Compute :math:`v_\\mathrm{rms}^2(z)` from the linear growth factor and matter power spectrum.
@@ -524,7 +530,6 @@ class Cosmology:
         vrms2_grid = jax.scipy.integrate.trapezoid(integrand, x=jnp.log(k_grid), axis=1)
     
         return jnp.interp(z, z_grid_pk, vrms2_grid)
-
 
     @jax.jit
     def comoving_volume_element(self, z):
@@ -590,7 +595,7 @@ class Cosmology:
     # CMB
     # ------------------------------------------------------------------
 
-    #@partial(jax.jit, static_argnums=(1,))
+    @jax.jit
     def cl_tt(self):
         """
         Get CMB temperature power spectrum :math:`C_\\ell^{TT}` from the emulator.
@@ -605,7 +610,7 @@ class Cosmology:
         ell = jnp.arange(2, len(preds) + 2)
         return ell, preds
 
-    #@partial(jax.jit, static_argnums=(1,))
+    @jax.jit
     def cl_ee(self):
         """
         Get CMB :math:`E`-mode polarization power spectrum :math:`C_\\ell^{EE}` from the emulator.
@@ -620,7 +625,7 @@ class Cosmology:
         ell = jnp.arange(2, len(preds) + 2)
         return ell, preds
 
-    #@partial(jax.jit, static_argnums=(1,))
+    @jax.jit
     def cl_te(self):
         """
         Get CMB temperature-:math:`E`-mode cross power spectrum :math:`C_\\ell^{TE}` from the emulator.
@@ -635,7 +640,7 @@ class Cosmology:
         ell = jnp.arange(2, len(preds) + 2)
         return ell, preds
 
-    #@partial(jax.jit, static_argnums=(1,))
+    @jax.jit
     def cl_pp(self):
         """
         Get CMB lensing potential power spectrum :math:`C_\\ell^{\\phi\\phi}` from the emulator.

@@ -246,9 +246,9 @@ class GNFWPressureProfile(PressureProfile):
         mass_def_old = halo_model.mass_definition
         mass_def_500c = MassDefinition(500, "critical")
         c_old = halo_model.concentration.c_delta(halo_model, m, z)
-        m500c = convert_m_delta(halo_model.cosmology, m * h, z, mass_def_old, mass_def_500c, c_old=c_old)
+        m500c = convert_m_delta(halo_model.cosmology, m, z, mass_def_old, mass_def_500c, c_old=c_old)
     
-        r_500c = mass_def_500c.r_delta(halo_model.cosmology, m500c / h, z)  # (Nm, Nz)
+        r_500c = mass_def_500c.r_delta(halo_model.cosmology, m500c, z)  # (Nm, Nz)
     
         # Convert the comoving radius to the calibrated physical 500c coordinate.
         x_500c = r[:, None, None] / ((1.0 + z[None, None, :]) * r_500c[None, :, :])  # (Nr, Nm, Nz)
@@ -258,7 +258,7 @@ class GNFWPressureProfile(PressureProfile):
         c_km_s = Const._c_ / 1e3
         H = halo_model.cosmology.hubble_parameter(z) * c_km_s  # (Nz,)
         H = jnp.atleast_1d(H)[None, None, :]  # (1, 1, Nz)
-        m500c_tilde = (m500c / B)[None, :, None]  # (1, Nm, 1)
+        m500c_tilde = (m500c * h / B)[None, :, None]  # (1, Nm, 1)
         P_500c = (1.65 * (h / 0.7) ** 2 * (H / H0) ** (8 / 3) * (m500c_tilde / (0.7 * 3e14)) ** (2 / 3 + 0.12) * (0.7 / h) ** 1.5)  # (1, Nm, Nz)
     
         # GNFW profile
@@ -449,15 +449,15 @@ class B12PressureProfile(PressureProfile):
         mass_def_old = halo_model.mass_definition
         mass_def_200c = MassDefinition(200, "critical")
         c_old = halo_model.concentration.c_delta(halo_model, m, z)
-        m200c = convert_m_delta(halo_model.cosmology, m * h, z, mass_def_old, mass_def_200c, c_old=c_old)
+        m200c = convert_m_delta(halo_model.cosmology, m, z, mass_def_old, mass_def_200c, c_old=c_old)
     
-        r_200c = mass_def_200c.r_delta(halo_model.cosmology, m200c / h, z)  # (Nm, Nz)
+        r_200c = mass_def_200c.r_delta(halo_model.cosmology, m200c, z)  # (Nm, Nz)
     
         # Convert the comoving radius to the calibrated physical 200c coordinate.
         x_200c = r[:, None, None] / ((1.0 + z[None, None, :]) * r_200c[None, :, :])  # (Nr, Nm, Nz)
         m200c_b = m200c[None, :, None]
         z_b = z[None, None, :]
-        mass_ratio = (m200c_b / h) / 1e14
+        mass_ratio = m200c_b / 1e14
     
         # Compute shape parameters using M200c
         P0 = self.A_P0 * mass_ratio**self.alpha_m_P0 * (1 + z_b)**self.alpha_z_P0

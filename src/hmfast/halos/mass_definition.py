@@ -187,7 +187,8 @@ def convert_m_delta(cosmology, m, z, mass_def_old, mass_def_new, c_old, max_iter
         Cosmology object used to evaluate :math:`\\Omega_m(z)` for reference-density
         conversions and virial overdensities.
     m : array-like
-        Halo mass in the original definition, :math:`M_{\\Delta}`.
+        Halo mass in the original definition, :math:`M_{\\Delta}`, in
+        physical :math:`M_\\odot`.
     z : array-like
         Redshift(s).
     mass_def_old : MassDefinition
@@ -195,7 +196,8 @@ def convert_m_delta(cosmology, m, z, mass_def_old, mass_def_new, c_old, max_iter
     mass_def_new : MassDefinition
         Target mass definition specifying :math:`\\Delta'` and its reference density.
     c_old : array-like
-        Halo concentration :math:`c_{\\Delta}` in the original definition.
+        Halo concentration :math:`c_{\\Delta}` in the original definition,
+        evaluated for the input halo masses in physical :math:`M_\\odot`.
     max_iter : int, optional
         Maximum number of root-finder iterations.
 
@@ -203,7 +205,7 @@ def convert_m_delta(cosmology, m, z, mass_def_old, mass_def_new, c_old, max_iter
     -------
     array-like
         Halo mass in the target definition, :math:`M_{\\Delta'}`, with shape
-        :math:`(N_M, N_z)`.
+        :math:`(N_M, N_z)`, in physical :math:`M_\\odot`.
     """
     m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
     c_old = jnp.atleast_2d(c_old)
