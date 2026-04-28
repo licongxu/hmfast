@@ -11,13 +11,13 @@ jax.config.update("jax_enable_x64", True)
 
 
 _COSMO_MODELS = {
-    0: {"suffix": "v1", "subdir": "lcdm"},
-    1: {"suffix": "mnu_v1", "subdir": "mnu"},
-    2: {"suffix": "neff_v1", "subdir": "neff"},
-    3: {"suffix": "w_v1", "subdir": "wcdm"},
-    4: {"suffix": "v1", "subdir": "ede"},
-    5: {"suffix": "v1", "subdir": "mnu-3states"},
-    6: {"suffix": "v2", "subdir": "ede"},
+    "lcdm:v1": {"suffix": "v1", "subdir": "lcdm"},
+    "mnu:v1": {"suffix": "mnu_v1", "subdir": "mnu"},
+    "neff:v1": {"suffix": "neff_v1", "subdir": "neff"},
+    "wcdm:v1": {"suffix": "w_v1", "subdir": "wcdm"},
+    "ede:v1": {"suffix": "v1", "subdir": "ede"},
+    "mnu-3states:v1": {"suffix": "v1", "subdir": "mnu-3states"},
+    "ede:v2": {"suffix": "v2", "subdir": "ede"},
 }
 
 
@@ -30,8 +30,10 @@ class Cosmology:
 
     Attributes
     ----------
-    cosmo_model : int
-        Integer identifier selecting the cosmological model and corresponding emulator set.
+    emulator_set : str
+        Emulator-set identifier selecting the corresponding emulator set.
+        Allowed values are ``"lcdm:v1"``, ``"mnu:v1"``, ``"neff:v1"``,
+        ``"wcdm:v1"``, ``"ede:v1"``, ``"mnu-3states:v1"``, and ``"ede:v2"``.
     H0 : float
         Hubble constant at :math:`z = 0` in units of km/s/Mpc.
     omega_cdm : float
@@ -49,7 +51,9 @@ class Cosmology:
     N_ur : float
         Effective number of ultra-relativistic species, used if a model with additional radiation degrees of freedom is selected.
     w0_fld : float
-        Present-day dark energy equation-of-state parameter, used if a :math:`w`CDM cosmological model is selected.
+        Present-day dark energy equation-of-state parameter :math:`w_0`,
+        used if a cosmological model with dark energy equation-of-state
+        parameter :math:`w_0` is selected.
     fEDE : float
         Maximum fractional contribution of early dark energy, used if an early dark energy cosmological model is selected.
     log10z_c : float
@@ -63,7 +67,7 @@ class Cosmology:
     deg_ncdm : float
         Degeneracy factor for the non-cold dark matter species, used if a massive-neutrino cosmological model is selected.
     """
-    def __init__(self, cosmo_model=0, 
+    def __init__(self, emulator_set="lcdm:v1", 
                  H0=68.0, omega_cdm=0.12, omega_b=0.02246576, ln1e10A_s=3.035173309489548, n_s=0.965, tau_reio=0.0544,      # LCDM
                  m_ncdm=0.06, N_ur=3.046, w0_fld=-0.95,                                                                     # wCDM, Neff, MNU
                  fEDE=0.1, log10z_c=3.5, thetai_scf=jnp.pi/2, r=0.01,                                                       # EDE
@@ -71,7 +75,12 @@ class Cosmology:
         ):
         
         # Static Metadata
-        self.cosmo_model = cosmo_model
+        if emulator_set not in _COSMO_MODELS:
+            allowed_models = ", ".join(f'"{model}"' for model in _COSMO_MODELS)
+            raise ValueError(
+                f"Unknown emulator_set {emulator_set!r}. Allowed values are: {allowed_models}."
+            )
+        self.emulator_set = emulator_set
         self._emu = {}  # This will be treated as static
 
         # Cosmological params (leaves) to be changed without recompiling jit
@@ -94,17 +103,17 @@ class Cosmology:
             self.T_cmb, self.deg_ncdm
         )
         # 2. Aux data: Static metadata (Model ID and the Cache dictionary)
-        aux_data = (self.cosmo_model, self._emu)
+        aux_data = (self.emulator_set, self._emu)
         return (children, aux_data)
     
     @classmethod
     def _tree_unflatten(cls, aux_data, children):
         # Reconstruct using the static metadata
-        cosmo_model, _emu = aux_data
+        emulator_set, _emu = aux_data
         
         # We bypass __init__ to avoid re-triggering the Loader logic
         obj = cls.__new__(cls)
-        obj.cosmo_model = cosmo_model
+        obj.emulator_set = emulator_set
         obj._emu = _emu 
         
         # Assign the 15 parameter children to the object
@@ -156,7 +165,7 @@ class Cosmology:
     # ------------------------------------------------------------------
 
     def _base_path(self):
-        return os.path.join(get_default_data_path(),_COSMO_MODELS[self.cosmo_model]["subdir"])
+        return os.path.join(get_default_data_path(),_COSMO_MODELS[self.emulator_set]["subdir"])
                          
 
     def _load_emulator(self, key: str):
@@ -181,18 +190,8 @@ class Cosmology:
             subdir, loader_cls = key_map[key]
         except KeyError:
             raise KeyError(f"Unknown key: {key}")
-
-        emulator_path = os.path.join(
-            self._base_path(),
-            subdir,
-            f"{key}_{_COSMO_MODELS[self.cosmo_model]['suffix']}",
-        )
-
-        try:
-            self._emu[key] = loader_cls(emulator_path)
-        except (IOError, OSError) as exc:
-            raise FileNotFoundError("Failed to load hmfast emulator. Please ensure that the emulators corresponding to the requested cosmological model have been downloaded. See the documentation for more details.") 
-
+    
+        self._emu[key] = loader_cls(os.path.join(self._base_path(), subdir, f"{key}_{_COSMO_MODELS[self.emulator_set]['suffix']}"))
         return self._emu[key]
 
 
@@ -228,11 +227,11 @@ class Cosmology:
         return jnp.linspace(0.0, 20.0, 5000, dtype=jnp.float64) 
 
     def _z_grid_pk(self):
-        z_max = jnp.where(self.cosmo_model == 6, 20.0, 5.0)
+        z_max = jnp.where(self.emulator_set == "ede:v2", 20.0, 5.0)
         return jnp.linspace(0.0, z_max, 100, dtype=jnp.float64)     # z grid for Pk(z)
 
     def _pk_grid(self):
-        is_ede_v2 = (self.cosmo_model == 6)
+        is_ede_v2 = (self.emulator_set == "ede:v2")
         k_min = 5e-4 if is_ede_v2 else 1e-4
         k_max = 10.0 if is_ede_v2 else 50.0
 
@@ -303,7 +302,7 @@ class Cosmology:
         emu = self._load_emulator("DAZ")
         preds = emu.predictions(params)
 
-        if self.cosmo_model == 6:
+        if self.emulator_set == "ede:v2":
             preds = 10.0 ** preds
             preds = jnp.insert(preds, 0, 0.0)
 
@@ -576,8 +575,9 @@ class Cosmology:
         Returns
         -------
         tuple
-            :math:`(k, P(k))`, with ``k`` in physical ``Mpc^-1`` and
-            ``P(k)`` in physical ``Mpc^3``.
+            :math:`(k, P(k))`, with :math:`k` in physical
+            :math:`\\mathrm{Mpc}^{-1}` and :math:`P(k)` in physical
+            :math:`\\mathrm{Mpc}^3`.
         """
         params = self._to_dict()
         params["z_pk_save_nonclass"] = jnp.atleast_1d(z)[0]
@@ -657,7 +657,7 @@ class Cosmology:
         return ell, preds / (2 * jnp.pi)
 
     # def cl_bb(self):
-    #     if self.cosmo_model != 6: 
+    #     if self.emulator_set != "ede:v2": 
     #         raise ValueError("This function is only implemented for EDE-v2 emulators.")
     #     params = self._to_dict()
     #     preds = self._load_emulator("BB").ten_to_predictions(params)

@@ -47,7 +47,7 @@ class HaloModel:
     """
 
     def __init__(self, 
-                 cosmology=Cosmology(cosmo_model=0), 
+                 cosmology=Cosmology(emulator_set="lcdm:v1"), 
                  mass_definition=MassDefinition(delta=200, reference="critical"), 
                  halo_mass_function=T08HaloMass(), 
                  halo_bias=T10HaloBias(), 

@@ -39,7 +39,7 @@ HOD profiles
    :toctree: generated
    :nosignatures:
 
-   hmfast.halos.profiles.StandardGalaxyHODProfile
+   hmfast.halos.profiles.Z07GalaxyHODProfile
 
 CIB profiles
 ------------
