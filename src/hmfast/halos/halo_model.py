@@ -149,7 +149,7 @@ class HaloModel:
         Parameters
         ----------
         m : array-like
-            Halo mass grid in physical ``M_sun``.
+            Halo mass grid in physical :math:`M_\\odot`.
         z : array-like
             Redshift(s).
 
@@ -211,19 +211,20 @@ class HaloModel:
         tracer2 : Tracer or None
             Second tracer object (if None, uses tracer1).
         k : array-like
-            Wavenumber grid in Mpc^-1.
-        m : array-like
-            Mass grid in physical M_sun.
+            Wavenumber grid in :math:`\\mathrm{Mpc}^{-1}`.
+        m : array
+            Mass array in physical :math:`M_\\odot`. This must be an array because it
+            defines the integration grid over halo mass.
         z : array-like
             Redshift grid.
         k_damp : float, default 0.01
-            Damping wavenumber in Mpc^-1 for the low-k suppression factor.
+            Damping wavenumber in :math:`\\mathrm{Mpc}^{-1}` for the low-k suppression factor.
 
         Returns
         -------
-        pk_1h : array-like
-            1-halo power spectrum in Mpc^3, with shape
-            ``(len(k), len(z))``.
+        pk_1h : array
+            1-halo power spectrum in :math:`\\mathrm{Mpc}^3`, with shape
+            :math:`(N_k, N_z)`.
         """
     
         k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
@@ -286,7 +287,7 @@ class HaloModel:
 
         The Limber-projected spectrum is obtained by integrating the 1-halo
         3D power spectrum against the tracer kernels and the comoving volume
-        element written in the legacy ``(Mpc/h)^3`` convention used by the
+        element written in the legacy :math:`(\\mathrm{Mpc}/h)^3` convention used by the
         current tracer kernels.
 
         Parameters
@@ -297,17 +298,20 @@ class HaloModel:
             Second tracer object (if None, uses tracer1).
         l : array-like
             Multipole grid.
-        m : array-like
-            Mass grid in physical M_sun.
-        z : array-like
-            Redshift grid.
+        m : array
+            Mass array in physical :math:`M_\\odot`. This must be an array because it
+            defines the integration grid over halo mass.
+        z : array
+            Redshift array. This must be an array because it defines the
+            integration grid over redshift.
         k_damp : float, default 0.01
-            Damping wavenumber in Mpc^-1 passed through to :meth:`pk_1h`.
+            Damping wavenumber in :math:`\\mathrm{Mpc}^{-1}` passed through to :meth:`pk_1h`.
 
         Returns
         -------
-        cl_1h : array-like
-            Dimensionless 1-halo angular power spectrum, shape ``(len(l),)``.
+        cl_1h : array
+            Dimensionless 1-halo angular power spectrum with shape
+            :math:`(N_\\ell,)`.
         """
 
         tracer2 = tracer1 if tracer2 is None else tracer2
@@ -360,17 +364,18 @@ class HaloModel:
         tracer2 : Tracer or None
             Second tracer object (if None, uses tracer1).
         k : array-like
-            Wavenumber grid in Mpc^-1.
-        m : array-like
-            Mass grid in physical M_sun.
+            Wavenumber grid in :math:`\\mathrm{Mpc}^{-1}`.
+        m : array
+            Mass array in physical :math:`M_\\odot`. This must be an array because it
+            defines the integration grid over halo mass.
         z : array-like
             Redshift grid.
 
         Returns
         -------
-        pk_2h : array-like
-            2-halo power spectrum in Mpc^3, with shape
-            ``(len(k), len(z))``.
+        pk_2h : array
+            2-halo power spectrum in :math:`\\mathrm{Mpc}^3`, with shape
+            :math:`(N_k, N_z)`.
         """
         
         cparams = self.cosmology._cosmo_params()
@@ -423,7 +428,7 @@ class HaloModel:
 
         The Limber-projected spectrum is obtained by integrating the 2-halo
         3D power spectrum against the tracer kernels and the comoving volume
-        element written in the legacy ``(Mpc/h)^3`` convention used by the
+        element written in the legacy :math:`(\\mathrm{Mpc}/h)^3` convention used by the
         current tracer kernels.
 
         Parameters
@@ -434,15 +439,18 @@ class HaloModel:
             Second tracer object (if None, uses tracer1).
         l : array-like
             Multipole grid.
-        m : array-like
-            Mass grid in physical M_sun.
-        z : array-like
-            Redshift grid.
+        m : array
+            Mass array in physical :math:`M_\\odot`. This must be an array because it
+            defines the integration grid over halo mass.
+        z : array
+            Redshift array. This must be an array because it defines the
+            integration grid over redshift.
 
         Returns
         -------
-        cl_2h : array-like
-            Dimensionless 2-halo angular power spectrum, shape ``(len(l),)``.
+        cl_2h : array
+            Dimensionless 2-halo angular power spectrum with shape
+            :math:`(N_\\ell,)`.
         """
         tracer2 = tracer1 if tracer2 is None else tracer2
 

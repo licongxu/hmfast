@@ -33,7 +33,7 @@ class HaloBias(ABC):
         Returns
         -------
         array-like
-            Dimensionless halo bias values with shape :math:`(N_M, N_z)`.
+            Dimensionless halo bias values with shape :math:`(N_m, N_z)`.
         """
         pass
 
@@ -235,7 +235,7 @@ class T10HaloBias(HaloBias):
         -------
         array-like
             Dimensionless halo bias values of the requested order, shape
-            ``(len(m), len(z))``.
+            :math:`(N_m, N_z)`.
         """
        
        

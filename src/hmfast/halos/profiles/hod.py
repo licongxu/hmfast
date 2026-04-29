@@ -3,7 +3,7 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 import mcfit
-import functools
+from functools import partial
 from jax.scipy.special import erf
 
 from hmfast.download import get_default_data_path
@@ -149,6 +149,7 @@ class Z07GalaxyHODProfile(GalaxyHODProfile):
 
     # --- Physics Implementations ---
 
+    @partial(jax.jit, static_argnums=(0,))
     def n_cen(self, halo_model, m):
         """
         Expected number of central galaxies in a halo of mass ``m``.
@@ -172,6 +173,7 @@ class Z07GalaxyHODProfile(GalaxyHODProfile):
         x = (jnp.log10(m) - jnp.log10(self.M_min)) / self.sigma_log10M
         return 0.5 * (1.0 + erf(x))
 
+    @partial(jax.jit, static_argnums=(0,))
     def n_sat(self, halo_model, m):
         """
         Expected number of satellite galaxies in a halo of mass ``m``.
@@ -194,6 +196,7 @@ class Z07GalaxyHODProfile(GalaxyHODProfile):
         pow_term = jnp.maximum((m - self.M0) / self.M1_prime, 0.0)**self.alpha_s
         return self.n_cen(halo_model, m) * pow_term
 
+    @partial(jax.jit, static_argnums=(0,))
     def ng_bar(self, halo_model, m, z):
         """
         Comoving mean galaxy number density at redshift ``z``.
@@ -225,6 +228,7 @@ class Z07GalaxyHODProfile(GalaxyHODProfile):
         # HM Consistency check
         return jax.lax.cond(halo_model.hm_consistency, lambda x: x + halo_model._counter_terms(m, z)[0] * Ntot[0], lambda x: x, ng_val)
 
+    @partial(jax.jit, static_argnums=(0,))
     def galaxy_bias(self, halo_model, m, z):
         """
         Large-scale galaxy bias at redshift ``z``.
@@ -279,6 +283,7 @@ class Z07GalaxyHODProfile(GalaxyHODProfile):
         return sat_term, cen_term
 
 
+    @partial(jax.jit, static_argnums=(0,))
     def u_r(self, halo_model, r, m, z):
         """
         Real-space galaxy HOD profile.
@@ -291,7 +296,7 @@ class Z07GalaxyHODProfile(GalaxyHODProfile):
         halo_model : HaloModel
             The parent halo model instance.
         r : float or jnp.ndarray
-            Radius or radii in Mpc.
+            Radius or radii in :math:`\\mathrm{Mpc}`.
         m : float or jnp.ndarray
             Halo mass grid in physical :math:`M_{\\odot}`.
         z : float or jnp.ndarray
@@ -300,7 +305,7 @@ class Z07GalaxyHODProfile(GalaxyHODProfile):
         Returns
         -------
         jnp.ndarray
-            Real-space profile with shape :math:`(N_r, N_M, N_z)`.
+            Real-space profile with shape :math:`(N_r, N_m, N_z)`.
         """
         r, m, z = jnp.atleast_1d(r), jnp.atleast_1d(m), jnp.atleast_1d(z)
 
@@ -314,6 +319,7 @@ class Z07GalaxyHODProfile(GalaxyHODProfile):
         return (1 / ng[None, None, :]) * (Nc[None, :, None] + Ns[None, :, None] * u_m)
 
 
+    @partial(jax.jit, static_argnums=(0,))
     def u_k(self, halo_model, k, m, z):
         """
         Fourier-space galaxy HOD profile.
@@ -327,7 +333,7 @@ class Z07GalaxyHODProfile(GalaxyHODProfile):
         halo_model : HaloModel
             The parent halo model instance.
         k : array-like
-            Wavenumber grid in Mpc^-1.
+            Wavenumber grid in :math:`\\mathrm{Mpc}^{-1}`.
         m : array-like
             Halo mass grid in physical :math:`M_{\\odot}`.
         z : array-like

@@ -3,7 +3,7 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 import mcfit
-import functools
+from functools import partial
 
 from hmfast.download import get_default_data_path
 from hmfast.utils import Const
@@ -13,6 +13,7 @@ from hmfast.halos.profiles import HaloProfile, HankelTransform
 
 
 class PressureProfile(HaloProfile):
+    @partial(jax.jit, static_argnums=(0,))
     def u_k(self, halo_model, k, m, z):
         """
         Compute the projected Fourier-space pressure profile for halo-model calculations.
@@ -22,7 +23,7 @@ class PressureProfile(HaloProfile):
         halo_model : HaloModel
             Halo model providing the cosmology and halo-radius relation.
         k : float or jnp.ndarray
-            Comoving wavenumber(s) in Mpc^-1.
+            Comoving wavenumber(s) in :math:`\\mathrm{Mpc}^{-1}`.
         m : float or jnp.ndarray
             Halo mass or masses in physical :math:`M_\\odot`.
         z : float or jnp.ndarray
@@ -31,7 +32,7 @@ class PressureProfile(HaloProfile):
         Returns
         -------
         jnp.ndarray
-            Transformed profile with shape :math:`(N_k, N_M, N_z)`.
+            Transformed profile with shape :math:`(N_k, N_m, N_z)`.
         """
         k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
         B = getattr(self, "B", 1.0)
@@ -216,6 +217,7 @@ class GNFWPressureProfile(PressureProfile):
 
         return self._tree_unflatten(treedef, new_leaves)
 
+    @partial(jax.jit, static_argnums=(0,))
     def u_r(self, halo_model, r, m, z):
         """
         Compute the electron-pressure profile.
@@ -226,7 +228,7 @@ class GNFWPressureProfile(PressureProfile):
             Halo model providing the cosmology, mass-definition conversion, and halo
             radius.
         r : float or jnp.ndarray
-            Comoving radius or radii in Mpc.
+            Comoving radius or radii in :math:`\\mathrm{Mpc}`.
         m : float or jnp.ndarray
             Halo mass or masses in physical :math:`M_\\odot`.
         z : float or jnp.ndarray
@@ -235,7 +237,7 @@ class GNFWPressureProfile(PressureProfile):
         Returns
         -------
         jnp.ndarray
-            Electron pressure profile with shape :math:`(N_r, N_M, N_z)`.
+            Electron pressure profile with shape :math:`(N_r, N_m, N_z)`.
         """
         H0 = halo_model.cosmology.H0
         P0, c500, alpha, beta, gamma, B = self.P0, self.c500, self.alpha, self.beta, self.gamma, self.B
@@ -418,6 +420,7 @@ class B12PressureProfile(PressureProfile):
         
         return self._tree_unflatten(treedef, new_leaves)
 
+    @partial(jax.jit, static_argnums=(0,))
     def u_r(self, halo_model, r, m, z):
         """
         Compute the electron-pressure profile.
@@ -428,7 +431,7 @@ class B12PressureProfile(PressureProfile):
             Halo model providing the cosmology, mass-definition conversion, and halo
             radius.
         r : float or jnp.ndarray
-            Comoving radius or radii in Mpc.
+            Comoving radius or radii in :math:`\\mathrm{Mpc}`.
         m : float or jnp.ndarray
             Halo mass or masses in physical :math:`M_\\odot`.
         z : float or jnp.ndarray
@@ -437,7 +440,7 @@ class B12PressureProfile(PressureProfile):
         Returns
         -------
         jnp.ndarray
-            Electron pressure profile with shape :math:`(N_r, N_M, N_z)`.
+            Electron pressure profile with shape :math:`(N_r, N_m, N_z)`.
         """
         cparams = halo_model.cosmology._cosmo_params()
         h = cparams["h"]

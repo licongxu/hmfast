@@ -52,7 +52,7 @@ class HaloProfile:
         x : array_like
             Dimensionless transform grid.
         r : jnp.ndarray
-            Comoving radius grid with shape :math:`(N_x, N_M, N_z)`.
+            Comoving radius grid with shape :math:`(N_x, N_m, N_z)`.
         m : float or array_like
             Halo mass(es).
         z : float or array_like
@@ -62,7 +62,7 @@ class HaloProfile:
         -------
         tuple[jnp.ndarray, jnp.ndarray]
             Native Hankel wavenumbers and transformed profile values with shape
-            :math:`(N_k, N_M, N_z)`.
+            :math:`(N_k, N_m, N_z)`.
         """
         x = jnp.atleast_1d(x)
         r = jnp.asarray(r)
@@ -98,7 +98,7 @@ class HaloProfile:
         halo_model : HaloModel
             Halo model providing the concentration relation and mass definition.
         r : float or jnp.ndarray
-            Comoving radius or radii in Mpc.
+            Comoving radius or radii in :math:`\\mathrm{Mpc}`.
         m : float or jnp.ndarray
             Halo mass(es) in physical :math:`M_\\odot`.
         z : float or jnp.ndarray
@@ -107,7 +107,7 @@ class HaloProfile:
         Returns
         -------
         jnp.ndarray
-            Normalized real-space profile with shape :math:`(N_r, N_M, N_z)`.
+            Normalized real-space profile with shape :math:`(N_r, N_m, N_z)`.
         """
         r = jnp.atleast_1d(r)
         m = jnp.atleast_1d(m)
@@ -126,10 +126,13 @@ class HaloProfile:
     
     def _u_k_nfw(self, halo_model, k, m, z):
         """
-        Calculate :math:`u^m(k, M, z)` for wavenumbers in Mpc^-1
+        Calculate :math:`u^m(k, M, z)` for wavenumbers in :math:`\\mathrm{Mpc}^{-1}`
         supporting independent dimensions for ``k``, ``m``, and ``z``.
-        
-        Returns u_k_m with shape (N_k, N_m, N_z).
+
+        Returns
+        -------
+        jnp.ndarray
+            Fourier-space matter profile with shape :math:`(N_k, N_m, N_z)`.
         """
        
         

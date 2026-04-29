@@ -2,6 +2,7 @@ import os
 import numpy as np
 import jax
 import jax.numpy as jnp
+from functools import partial
 from jax.tree_util import register_pytree_node_class
 
 from hmfast.download import get_default_data_path
@@ -53,6 +54,7 @@ class NFWMatterProfile(MatterProfile):
     def __init__(self):
         pass
 
+    @partial(jax.jit, static_argnums=(0,))
     def u_r(self, halo_model, r, m, z):
         """
         Compute the real-space mass-weighted NFW matter profile.
@@ -65,7 +67,7 @@ class NFWMatterProfile(MatterProfile):
             Halo model providing the cosmology, concentration relation, and halo
             radius.
         r : float or jnp.ndarray
-            Radius or radii in Mpc.
+            Radius or radii in :math:`\\mathrm{Mpc}`.
         m : float or jnp.ndarray
             Halo mass(es) in physical :math:`M_\\odot`.
         z : float or jnp.ndarray
@@ -74,7 +76,7 @@ class NFWMatterProfile(MatterProfile):
         Returns
         -------
         jnp.ndarray
-            Real-space profile with shape :math:`(N_r, N_M, N_z)`.
+            Real-space profile with shape :math:`(N_r, N_m, N_z)`.
         """
         cparams = halo_model.cosmology._cosmo_params()
 
@@ -90,6 +92,7 @@ class NFWMatterProfile(MatterProfile):
         return (m[:, None] / rho_mean_0)[None, :, :] * u_r_norm
 
 
+    @partial(jax.jit, static_argnums=(0,))
     def u_k(self, halo_model, k, m, z):
         """
         Compute the mass-weighted NFW matter profile in Fourier space.
@@ -102,7 +105,7 @@ class NFWMatterProfile(MatterProfile):
             Halo model providing the cosmology, concentration relation, and halo
             radius.
         k : float or jnp.ndarray
-            Comoving wavenumber(s) in Mpc^-1.
+            Comoving wavenumber(s) in :math:`\\mathrm{Mpc}^{-1}`.
         m : float or jnp.ndarray
             Halo mass(es) in physical :math:`M_\\odot`.
         z : float or jnp.ndarray
@@ -111,7 +114,7 @@ class NFWMatterProfile(MatterProfile):
         Returns
         -------
         jnp.ndarray
-            Fourier-space profile with shape :math:`(N_k, N_M, N_z)`.
+            Fourier-space profile with shape :math:`(N_k, N_m, N_z)`.
         """
 
         

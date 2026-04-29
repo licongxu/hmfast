@@ -35,7 +35,8 @@ class Cosmology:
         Allowed values are ``"lcdm:v1"``, ``"mnu:v1"``, ``"neff:v1"``,
         ``"wcdm:v1"``, ``"ede:v1"``, ``"mnu-3states:v1"``, and ``"ede:v2"``.
     H0 : float
-        Hubble constant at :math:`z = 0` in units of km/s/Mpc.
+        Hubble constant at :math:`z = 0` in units of
+        :math:`\\mathrm{km} \\, \\mathrm{s}^{-1} \\, \\mathrm{Mpc}^{-1}`.
     omega_cdm : float
         Physical cold dark matter density :math:`\\Omega_{\\mathrm{cdm}} h^2`.
     omega_b : float
@@ -295,7 +296,7 @@ class Cosmology:
         Returns
         -------
         jnp.ndarray
-            Angular diameter distance(s) in Mpc
+            Angular diameter distance(s) in :math:`\\mathrm{Mpc}`.
         """
         
         params = self._to_dict()

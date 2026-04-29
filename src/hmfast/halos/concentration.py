@@ -13,6 +13,7 @@ class Concentration(ABC):
     All subclasses must implement the c_delta method.
     """
     @abstractmethod
+    @partial(jax.jit, static_argnums=(0,))
     def c_delta(self, halo_model, m, z):
         """
         Compute the concentration parameter :math:`c_\\Delta`.
@@ -42,6 +43,7 @@ class ConstantConcentration(Concentration):
         self.c = c
         pass
 
+    @partial(jax.jit, static_argnums=(0,))
     def c_delta(self, halo_model, m, z):
         """
         Returns a constant value for the concentration parameter, broadcast to the shape of the input masses and redshifts.
@@ -77,6 +79,7 @@ class D08Concentration(Concentration):
         pass
 
 
+    @partial(jax.jit, static_argnums=(0,))
     def c_delta(self, halo_model, m, z):
         """
         Compute the concentration parameter.
@@ -93,7 +96,7 @@ class D08Concentration(Concentration):
         Returns
         -------
         array-like
-            Concentration values with shape ``(len(m), len(z))``.
+            Concentration values with shape :math:`(N_m, N_z)`.
         """
         
         m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
@@ -154,6 +157,7 @@ class B13Concentration(Concentration):
     def __init__(self):
         pass
 
+    @partial(jax.jit, static_argnums=(0,))
     def c_delta(self, halo_model, m, z):
         """
         Compute the concentration parameter.
@@ -170,7 +174,7 @@ class B13Concentration(Concentration):
         Returns
         -------
         array-like
-            Concentration values with shape ``(len(m), len(z))``.
+            Concentration values with shape :math:`(N_m, N_z)`.
         """
         m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
         h = halo_model.cosmology.H0 / 100.0
@@ -239,6 +243,7 @@ class SC14Concentration(Concentration):
     def __init__(self):
         pass
 
+    @partial(jax.jit, static_argnums=(0,))
     def c_delta(self, halo_model, m, z):
         """
         Compute the concentration parameter.
@@ -255,7 +260,7 @@ class SC14Concentration(Concentration):
         Returns
         -------
         array-like
-            Concentration values with shape ``(len(m), len(z))``.
+            Concentration values with shape :math:`(N_m, N_z)`.
         """
         
         m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)

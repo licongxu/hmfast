@@ -126,6 +126,7 @@ class MassDefinition:
 
         raise ValueError("from_ref and to_ref must be 'critical' or 'mean'")
 
+    @partial(jax.jit, static_argnums=(0,))
     def r_delta(self, cosmology, m, z):
         """
         Compute the halo radius :math:`r_\\Delta` associated with a halo mass.
@@ -148,7 +149,7 @@ class MassDefinition:
         -------
         float or array-like
             Radius :math:`r_\\Delta` within which the mean enclosed density is
-            :math:`\\Delta \\rho_{\\mathrm{ref}}(z)`, in physical Mpc.
+            :math:`\\Delta \\rho_{\\mathrm{ref}}(z)`, in physical :math:`\\mathrm{Mpc}`.
         """
         delta, reference = self.delta, self.reference
 
@@ -205,7 +206,7 @@ def convert_m_delta(cosmology, m, z, mass_def_old, mass_def_new, c_old, max_iter
     -------
     array-like
         Halo mass in the target definition, :math:`M_{\\Delta'}`, with shape
-        :math:`(N_M, N_z)`, in physical :math:`M_\\odot`.
+        :math:`(N_m, N_z)`, in physical :math:`M_\\odot`.
     """
     m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
     c_old = jnp.atleast_2d(c_old)

@@ -3,7 +3,7 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 import mcfit
-import functools
+from functools import partial
 
 from hmfast.download import get_default_data_path
 from hmfast.utils import lambertw, Const
@@ -185,6 +185,7 @@ class B16DensityProfile(DensityProfile):
             raise ValueError(f"Model {model_key} not recognized. Choose 'agn' or 'shock'.")
         return presets[key]
 
+    @partial(jax.jit, static_argnums=(0,))
     def u_r(self, halo_model, r, m, z):
         """
         Compute the electron-density profile.
@@ -194,7 +195,7 @@ class B16DensityProfile(DensityProfile):
         halo_model : HaloModel
             Halo model providing the cosmology.
         r : float or jnp.ndarray
-            Comoving radius or radii in Mpc.
+            Comoving radius or radii in :math:`\\mathrm{Mpc}`.
         m : float or jnp.ndarray
             Halo mass or masses in physical :math:`M_\\odot`.
         z : float or jnp.ndarray
@@ -203,7 +204,7 @@ class B16DensityProfile(DensityProfile):
         Returns
         -------
         jnp.ndarray
-            Electron-density profile with shape :math:`(N_r, N_M, N_z)`.
+            Electron-density profile with shape :math:`(N_r, N_m, N_z)`.
         """
         cparams = halo_model.cosmology._cosmo_params()
         f_b = cparams["Omega_b"] / cparams["Omega0_m"]
@@ -235,12 +236,13 @@ class B16DensityProfile(DensityProfile):
         # Profile Shape Function (Nx, Nm, Nz)
         p_x = (x_200c / xc)**gamma * (1 + (x_200c / xc)**alpha)**(-(beta + gamma) / alpha)
         
-        # Final result: M_sun / Mpc^3.
+        # Final result: M_odot / Mpc^3.
         rho_gas = rho0 * rho_crit_z * f_b * f_free * p_x 
         
         return rho_gas
 
 
+    @partial(jax.jit, static_argnums=(0,))
     def u_k(self, halo_model, k, m, z):
         """
         Compute the projected Fourier-space density profile for halo-model calculations.
@@ -250,7 +252,7 @@ class B16DensityProfile(DensityProfile):
         halo_model : HaloModel
             Halo model providing the cosmology and halo-radius relation.
         k : float or jnp.ndarray
-            Comoving wavenumber(s) in Mpc^-1.
+            Comoving wavenumber(s) in :math:`\\mathrm{Mpc}^{-1}`.
         m : float or jnp.ndarray
             Halo mass or masses in physical :math:`M_\\odot`.
         z : float or jnp.ndarray
@@ -259,7 +261,7 @@ class B16DensityProfile(DensityProfile):
         Returns
         -------
         jnp.ndarray
-            Transformed profile with shape :math:`(N_k, N_M, N_z)`.
+            Transformed profile with shape :math:`(N_k, N_m, N_z)`.
         """
         k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
         r_delta = halo_model.mass_definition.r_delta(halo_model.cosmology, m, z)
@@ -369,6 +371,7 @@ class NFWDensityProfile(DensityProfile):
         self._x = value
         self._hankel = HankelTransform(self._x, nu=0.5)
 
+    @partial(jax.jit, static_argnums=(0,))
     def u_r(self, halo_model, r, m, z):
         """
         Compute the electron-density profile.
@@ -378,7 +381,7 @@ class NFWDensityProfile(DensityProfile):
         halo_model : HaloModel
             Halo model providing the cosmology, halo radius, and concentration model.
         r : float or jnp.ndarray
-            Comoving radius or radii in Mpc.
+            Comoving radius or radii in :math:`\\mathrm{Mpc}`.
         m : float or jnp.ndarray
             Halo mass or masses in physical :math:`M_\\odot`.
         z : float or jnp.ndarray
@@ -387,7 +390,7 @@ class NFWDensityProfile(DensityProfile):
         Returns
         -------
         jnp.ndarray
-            Electron-density profile with shape :math:`(N_r, N_M, N_z)`.
+            Electron-density profile with shape :math:`(N_r, N_m, N_z)`.
         """
         cparams = halo_model.cosmology._cosmo_params()
         r, m, z = jnp.atleast_1d(r), jnp.atleast_1d(m), jnp.atleast_1d(z)
@@ -411,6 +414,7 @@ class NFWDensityProfile(DensityProfile):
         return rho_gas
         
 
+    @partial(jax.jit, static_argnums=(0,))
     def u_k(self, halo_model, k, m, z):
         """
         Compute the projected Fourier-space density profile for halo-model calculations.
@@ -420,7 +424,7 @@ class NFWDensityProfile(DensityProfile):
         halo_model : HaloModel
             Halo model providing the cosmology, halo radius, and concentration model.
         k : float or jnp.ndarray
-            Comoving wavenumber(s) in Mpc^-1.
+            Comoving wavenumber(s) in :math:`\\mathrm{Mpc}^{-1}`.
         m : float or jnp.ndarray
             Halo mass or masses in physical :math:`M_\\odot`.
         z : float or jnp.ndarray
@@ -429,7 +433,7 @@ class NFWDensityProfile(DensityProfile):
         Returns
         -------
         jnp.ndarray
-            Transformed profile with shape :math:`(N_k, N_M, N_z)`.
+            Transformed profile with shape :math:`(N_k, N_m, N_z)`.
         """
         k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
         r_delta = halo_model.mass_definition.r_delta(halo_model.cosmology, m, z)
@@ -621,6 +625,7 @@ class BCMDensityProfile(DensityProfile):
         
         return self._tree_unflatten(treedef, new_leaves)
 
+    @partial(jax.jit, static_argnums=(0,))
     def u_r(self, halo_model, r, m, z):
         """
         Compute the gas-density profile.
@@ -630,7 +635,7 @@ class BCMDensityProfile(DensityProfile):
         halo_model : HaloModel
             Halo model providing the cosmology and virial radius.
         r : float or jnp.ndarray
-            Comoving radius or radii in Mpc.
+            Comoving radius or radii in :math:`\\mathrm{Mpc}`.
         m : float or jnp.ndarray
             Halo mass or masses in physical :math:`M_\\odot`.
         z : float or jnp.ndarray
@@ -639,7 +644,7 @@ class BCMDensityProfile(DensityProfile):
         Returns
         -------
         jnp.ndarray
-            Gas-density profile with shape :math:`(N_r, N_M, N_z)`.
+            Gas-density profile with shape :math:`(N_r, N_m, N_z)`.
         """
        
         cparams = halo_model.cosmology._cosmo_params()
@@ -680,6 +685,7 @@ class BCMDensityProfile(DensityProfile):
 
 
     
+    @partial(jax.jit, static_argnums=(0,))
     def u_k(self, halo_model, k, m, z):
         """
         Compute the projected Fourier-space gas-density profile for halo-model calculations.
@@ -689,7 +695,7 @@ class BCMDensityProfile(DensityProfile):
         halo_model : HaloModel
             Halo model providing the cosmology and virial radius.
         k : float or jnp.ndarray
-            Comoving wavenumber(s) in Mpc^-1.
+            Comoving wavenumber(s) in :math:`\\mathrm{Mpc}^{-1}`.
         m : float or jnp.ndarray
             Halo mass or masses in physical :math:`M_\\odot`.
         z : float or jnp.ndarray
@@ -698,7 +704,7 @@ class BCMDensityProfile(DensityProfile):
         Returns
         -------
         jnp.ndarray
-            Transformed profile with shape :math:`(N_k, N_M, N_z)`.
+            Transformed profile with shape :math:`(N_k, N_m, N_z)`.
         """
         k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
         r_vir = MassDefinition("vir", "critical").r_delta(

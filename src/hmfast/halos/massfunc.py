@@ -30,7 +30,8 @@ class HaloMass(ABC):
         ln_M : array_like
             :math:`\\ln M` grid.
         dn_dlnM_grid : array_like
-            Halo mass function grid :math:`dn/d\\ln M` in comoving ``Mpc^-3``.
+            Halo mass function grid :math:`dn/d\\ln M` in comoving
+            :math:`\\mathrm{Mpc}^{-3}`.
         """
         
         z_grid = halo_model.cosmology._z_grid_pk()
@@ -104,8 +105,8 @@ class T08HaloMass(HaloMass):
 
     Calibrated for spherical-overdensity halo masses. 
     In this implementation, the fitting coefficients are interpolated over the
-    tabulated overdensity grid :math:`\\Delta_\\mathrm{m} = 200, 300, 400,
-    600, 800, 1200, 1600, 2400, 3200`.
+    tabulated overdensity grid spanning :math:`\\Delta_\\mathrm{m} = 200`
+    to :math:`3200`.
     """
 
     def __init__(self):
@@ -177,13 +178,14 @@ class T08HaloMass(HaloMass):
 
         In this model,
 
-                .. math::
+        .. math::
 
             f(\\sigma) = 0.5 A \\left[\\left(\\frac{\\sigma}{b}\\right)^{-a} + 1\\right]
             \\exp\\left(-\\frac{c}{\\sigma^2}\\right),
     
         where :math:`f(\\sigma)` is the Tinker et al. (2008) fitting function,
-        calibrated over a tabulated set of spherical-overdensity definitions,
+        calibrated over a tabulated overdensity grid spanning
+        :math:`\\Delta_\\mathrm{m} = 200` to :math:`3200`,
         :math:`A`, :math:`a`, :math:`b`, and :math:`c` are redshift-dependent
         fitting parameters, and :math:`\\sigma(M)` is the variance of the
         density field smoothed on the mass scale :math:`M`.
@@ -202,7 +204,7 @@ class T08HaloMass(HaloMass):
         -------
         dndlnM : array-like
             Halo mass function values :math:`dn/d\\ln M` in comoving
-            ``Mpc^-3``, shape ``(len(m), len(z))``.
+            :math:`\\mathrm{Mpc}^{-3}`, with shape :math:`(N_m, N_z)`.
         """
        
         
@@ -320,7 +322,7 @@ class T10HaloMass(HaloMass):
         -------
         dndlnM : array-like
             Halo mass function values :math:`dn/d\\ln M` in comoving
-            ``Mpc^-3``, shape ``(len(m), len(z))``.
+            :math:`\\mathrm{Mpc}^{-3}`, with shape :math:`(N_m, N_z)`.
         """
        
         
@@ -345,6 +347,7 @@ class SubHaloMass(ABC):
     Abstract base class for subhalo mass function models.
     """
     @abstractmethod
+    @partial(jax.jit, static_argnums=(0,))
     def dndlnmu(self, halo_model, m_host, m_sub):
         """
         Compute the subhalo abundance per logarithmic mass ratio.
@@ -375,6 +378,7 @@ class TW10SubHaloMass(SubHaloMass):
     def __init__(self):
         pass
     
+    @partial(jax.jit, static_argnums=(0,))
     def dndlnmu(self, halo_model, m_host, m_sub):
         """
         Compute the Tinker and Wetzel (2010) subhalo mass function.
@@ -421,6 +425,7 @@ class JvdB14SubHaloMass(SubHaloMass):
         self.beta = 5.67
         self.zeta = 1.19
 
+    @partial(jax.jit, static_argnums=(0,))
     def dndlnmu(self, halo_model, m_host, m_sub):
         """
         Compute the Jiang and van den Bosch (2014) subhalo mass function.

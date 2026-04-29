@@ -4,7 +4,7 @@ import jax
 import jax.numpy as jnp
 import jax.scipy as jscipy
 import mcfit
-import functools
+from functools import partial
 
 from hmfast.download import get_default_data_path
 from hmfast.utils import lambertw, Const
@@ -211,7 +211,6 @@ class S12CIBProfile(CIBProfile):
        
         # Log-normal in mass
         log10_m = jnp.log10(m)
-        log10_M_eff = jnp.log10(M_eff_cib)
         Sigma_M = m / jnp.sqrt(2 * jnp.pi * sigma2_LM)  *  jnp.exp( -(log10_m - log10_M_eff)**2 / (2 * sigma2_LM) )
         return Sigma_M
 
@@ -234,7 +233,6 @@ class S12CIBProfile(CIBProfile):
         z_p = self.z_p
 
         Phi_z = jnp.where(z < z_p, (1 + z) ** delta, 1.0)
-
         return Phi_z
 
 
@@ -256,7 +254,6 @@ class S12CIBProfile(CIBProfile):
         T0, alpha, beta, gamma = self.T0, self.alpha, self.beta, self.gamma
     
         h = Const._h_P_  # Planck [J s]
-        k_B = Const._k_B_ #1.380649e-23  # Boltzmann [J/K]
         c = Const._c_  #2.99792458e8    # speed of light [m/s]
     
         T_d_z = T0 * (1 + z) ** alpha
@@ -281,6 +278,7 @@ class S12CIBProfile(CIBProfile):
         return Theta
 
 
+    @partial(jax.jit, static_argnums=(0,))
     def l_gal(self, halo_model, m, z):
         """
         Compute the galaxy luminosity assigned to a halo.
@@ -298,7 +296,7 @@ class S12CIBProfile(CIBProfile):
         -------
         jnp.ndarray
             Galaxy luminosity :math:`L_\\nu^{\\mathrm{gal}}(M, z)` with shape
-            :math:`(N_M, N_z)`.
+            :math:`(N_m, N_z)`.
         """
         # Shang model logic: L0 * Phi(z) * Sigma(m) * Theta(nu_eff)
         phi_z = jnp.atleast_1d(self._phi(z))[None, :]
@@ -308,6 +306,7 @@ class S12CIBProfile(CIBProfile):
 
 
 
+    @partial(jax.jit, static_argnums=(0,))
     def l_sat(self, halo_model, m, z):
         """
         Compute the total satellite CIB luminosity.
@@ -325,7 +324,7 @@ class S12CIBProfile(CIBProfile):
         -------
         jnp.ndarray
             Satellite luminosity :math:`L_\\nu^{\\mathrm{sat}}(M, z)` with shape
-            :math:`(N_M, N_z)`.
+            :math:`(N_m, N_z)`.
         """
         m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
 
@@ -348,6 +347,7 @@ class S12CIBProfile(CIBProfile):
 
 
      
+    @partial(jax.jit, static_argnums=(0,))
     def l_cen(self, halo_model, m, z):
         """
         Compute the central-galaxy CIB luminosity.
@@ -365,7 +365,7 @@ class S12CIBProfile(CIBProfile):
         -------
         jnp.ndarray
             Central luminosity :math:`L_\\nu^{\\mathrm{cen}}(M, z)` with shape
-            :math:`(N_M, N_z)`.
+            :math:`(N_m, N_z)`.
         """
         m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
 
@@ -376,7 +376,8 @@ class S12CIBProfile(CIBProfile):
 
 
      
-    def j_bar_nu(self, halo_model, m, z):
+    @partial(jax.jit, static_argnums=(0,))
+    def mean_emissivity(self, halo_model, m, z):
         """
         Compute the mean emissivity.
     
@@ -392,7 +393,8 @@ class S12CIBProfile(CIBProfile):
         Returns
         -------
         jnp.ndarray
-            Mean emissivity :math:`\\bar{j}_\\nu(z)`.
+            Mean emissivity :math:`\\bar{j}_\\nu(z)` with shape
+            :math:`(N_z,)`.
         """
         m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
 
@@ -416,6 +418,7 @@ class S12CIBProfile(CIBProfile):
         return j_bar * h**3 / (4 * jnp.pi) 
 
 
+    @partial(jax.jit, static_argnums=(0,))
     def monopole(self, halo_model, m, z):
         """
         Compute the CIB monopole intensity.
@@ -432,12 +435,13 @@ class S12CIBProfile(CIBProfile):
         Returns
         -------
         float or jnp.ndarray
-            Monopole intensity :math:`I_\\nu`.
+            Monopole intensity :math:`I_\\nu` as a scalar with shape
+            :math:`()`.
         """
         m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
 
         # Get the mean emissivity (Shape: Nz)
-        j_bar = self.j_bar_nu(halo_model, m, z)
+        j_bar = self.mean_emissivity(halo_model, m, z)
         
         # dchi/dz = c / H(z), a(z) = 1/(1+z)
         dchi_dz = (Const._c_ / 1e3) / halo_model.cosmology.hubble_parameter(z)
@@ -476,6 +480,7 @@ class S12CIBProfile(CIBProfile):
         return sat_term, cen_term
 
 
+    @partial(jax.jit, static_argnums=(0,))
     def u_r(self, halo_model, r, m, z):
         """
         Compute the CIB profile in real space.
@@ -485,7 +490,7 @@ class S12CIBProfile(CIBProfile):
         halo_model : HaloModel
             Halo model providing the matter profile and CIB luminosities.
         r : float or jnp.ndarray
-            Radius or radii in Mpc.
+            Radius or radii in :math:`\\mathrm{Mpc}`.
         m : float or jnp.ndarray
             Halo mass or masses in physical :math:`M_\\odot`.
         z : float or jnp.ndarray
@@ -494,7 +499,7 @@ class S12CIBProfile(CIBProfile):
         Returns
         -------
         jnp.ndarray
-            Real-space profile array with shape :math:`(N_r, N_M, N_z)`.
+            Real-space profile array with shape :math:`(N_r, N_m, N_z)`.
         """
         r, m, z = jnp.atleast_1d(r), jnp.atleast_1d(m), jnp.atleast_1d(z)
 
@@ -508,6 +513,7 @@ class S12CIBProfile(CIBProfile):
         return cen_term + sat_term
 
 
+    @partial(jax.jit, static_argnums=(0,))
     def u_k(self, halo_model, k, m, z):
         """
         Compute the CIB profile in Fourier space.
@@ -517,7 +523,7 @@ class S12CIBProfile(CIBProfile):
         halo_model : HaloModel
             Halo model providing the matter profile and CIB luminosities.
         k : float or jnp.ndarray
-            Comoving wavenumber(s) in Mpc^-1.
+            Comoving wavenumber(s) in :math:`\\mathrm{Mpc}^{-1}`.
         m : float or jnp.ndarray
             Halo mass or masses in physical :math:`M_\\odot`.
         z : float or jnp.ndarray
@@ -526,7 +532,7 @@ class S12CIBProfile(CIBProfile):
         Returns
         -------
         jnp.ndarray
-            Fourier-space profile with shape :math:`(N_k, N_M, N_z)`.
+            Fourier-space profile with shape :math:`(N_k, N_m, N_z)`.
         """
         # Get the individual components (scaled correctly by h_factors and 4pi)
 
@@ -751,7 +757,7 @@ class M21CIBProfile(CIBProfile):
         -------
         jnp.ndarray
             Mass accretion rate :math:`\\dot{M}(M, z)` with shape
-            :math:`(N_M, N_z)`.
+            :math:`(N_m, N_z)`.
         """
         m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
         E_z = jnp.atleast_1d(halo_model.cosmology.hubble_parameter(z)) / halo_model.cosmology.H0
@@ -775,7 +781,7 @@ class M21CIBProfile(CIBProfile):
         Returns
         -------
         jnp.ndarray
-            Star-formation rate with shape :math:`(N_M, N_z)`.
+            Star-formation rate with shape :math:`(N_m, N_z)`.
         """
         # Gather all relevant parameters 
         
@@ -806,6 +812,7 @@ class M21CIBProfile(CIBProfile):
 
         
 
+    @partial(jax.jit, static_argnums=(0,))
     def l_gal(self, halo_model, m, z):
         """
         Compute the galaxy luminosity assigned to a halo.
@@ -823,7 +830,7 @@ class M21CIBProfile(CIBProfile):
         -------
         jnp.ndarray
             Galaxy luminosity :math:`L_\\nu^{\\mathrm{gal}}(M, z)` with shape
-            :math:`(N_M, N_z)`.
+            :math:`(N_m, N_z)`.
         """
         m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
 
@@ -836,6 +843,7 @@ class M21CIBProfile(CIBProfile):
 
 
 
+    @partial(jax.jit, static_argnums=(0,))
     def l_sat(self, halo_model, m, z):
         """
         Compute the total satellite CIB luminosity.
@@ -853,7 +861,7 @@ class M21CIBProfile(CIBProfile):
         -------
         jnp.ndarray
             Satellite luminosity :math:`L_\\nu^{\\mathrm{sat}}(M, z)` with shape
-            :math:`(N_M, N_z)`.
+            :math:`(N_m, N_z)`.
         """
         m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
 
@@ -878,6 +886,7 @@ class M21CIBProfile(CIBProfile):
         return jax.vmap(integrate_single_halo)(m)
 
 
+    @partial(jax.jit, static_argnums=(0,))
     def l_cen(self, halo_model, m, z):
         """
         Compute the central-galaxy CIB luminosity.
@@ -895,7 +904,7 @@ class M21CIBProfile(CIBProfile):
         -------
         jnp.ndarray
             Central luminosity :math:`L_\\nu^{\\mathrm{cen}}(M, z)` with shape
-            :math:`(N_M, N_z)`.
+            :math:`(N_m, N_z)`.
         """
         m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
 
@@ -907,7 +916,8 @@ class M21CIBProfile(CIBProfile):
 
     
     
-    def j_bar_nu(self, halo_model, m, z):
+    @partial(jax.jit, static_argnums=(0,))
+    def mean_emissivity(self, halo_model, m, z):
         """
         Compute the mean emissivity.
 
@@ -923,7 +933,8 @@ class M21CIBProfile(CIBProfile):
         Returns
         -------
         jnp.ndarray
-            Mean emissivity :math:`\\bar{j}_\\nu(z)`.
+            Mean emissivity :math:`\\bar{j}_\\nu(z)` with shape
+            :math:`(N_z,)`.
         """
         m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
 
@@ -944,6 +955,7 @@ class M21CIBProfile(CIBProfile):
         return j_bar * h**3 / (4 * jnp.pi)
 
 
+    @partial(jax.jit, static_argnums=(0,))
     def monopole(self, halo_model, m, z):
         """
         Compute the CIB monopole intensity.
@@ -960,12 +972,13 @@ class M21CIBProfile(CIBProfile):
         Returns
         -------
         float or jnp.ndarray
-            Monopole intensity :math:`I_\\nu`.
+            Monopole intensity :math:`I_\\nu` as a scalar with shape
+            :math:`()`.
         """
         m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
 
         # Get the mean emissivity (Shape: Nz)
-        j_bar = self.j_bar_nu(halo_model, m, z)
+        j_bar = self.mean_emissivity(halo_model, m, z)
         
         # dchi/dz = c / H(z), a(z) = 1/(1+z)
         dchi_dz = (Const._c_ / 1e3) / halo_model.cosmology.hubble_parameter(z)
@@ -1002,6 +1015,7 @@ class M21CIBProfile(CIBProfile):
         return sat_term, cen_term
 
 
+    @partial(jax.jit, static_argnums=(0,))
     def u_r(self, halo_model, r, m, z):
         """
         Compute the CIB profile in real space.
@@ -1011,7 +1025,7 @@ class M21CIBProfile(CIBProfile):
         halo_model : HaloModel
             Halo model providing the matter profile and CIB luminosities.
         r : float or jnp.ndarray
-            Radius or radii in Mpc.
+            Radius or radii in :math:`\\mathrm{Mpc}`.
         m : float or jnp.ndarray
             Halo mass or masses in physical :math:`M_\\odot`.
         z : float or jnp.ndarray
@@ -1020,7 +1034,7 @@ class M21CIBProfile(CIBProfile):
         Returns
         -------
         jnp.ndarray
-            Real-space profile array with shape :math:`(N_r, N_M, N_z)`.
+            Real-space profile array with shape :math:`(N_r, N_m, N_z)`.
         """
         r, m, z = jnp.atleast_1d(r), jnp.atleast_1d(m), jnp.atleast_1d(z)
 
@@ -1034,6 +1048,7 @@ class M21CIBProfile(CIBProfile):
         return cen_term + sat_term
 
 
+    @partial(jax.jit, static_argnums=(0,))
     def u_k(self, halo_model, k, m, z):
         """
         Compute the CIB profile in Fourier space.
@@ -1043,7 +1058,7 @@ class M21CIBProfile(CIBProfile):
         halo_model : HaloModel
             Halo model providing the matter profile and CIB luminosities.
         k : float or jnp.ndarray
-            Comoving wavenumber(s) in Mpc^-1.
+            Comoving wavenumber(s) in :math:`\\mathrm{Mpc}^{-1}`.
         m : float or jnp.ndarray
             Halo mass or masses in physical :math:`M_\\odot`.
         z : float or jnp.ndarray
@@ -1052,7 +1067,7 @@ class M21CIBProfile(CIBProfile):
         Returns
         -------
         jnp.ndarray
-            Fourier-space profile with shape :math:`(N_k, N_M, N_z)`.
+            Fourier-space profile with shape :math:`(N_k, N_m, N_z)`.
         """
 
         k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
