@@ -275,12 +275,12 @@ class Cosmology:
         Returns
         -------
         jnp.ndarray
-            Hubble parameter(s) in :math:`\\mathrm{Mpc}^{-1}`
+            Hubble parameter(s) in :math:`\\mathrm{km} \\, \\mathrm{s}^{-1} \\, \\mathrm{Mpc}^{-1}`
         """
         
         params = self._to_dict()
         emu = self._load_emulator("HZ")
-        preds = 10.0 ** emu.predictions(params)
+        preds = 10.0 ** emu.predictions(params) * (Const._c_ / 1e3)
         return self._interp_z(z, self._z_grid_bg(), preds)
 
     def angular_diameter_distance(self, z):
@@ -408,9 +408,9 @@ class Cosmology:
         # Get Hubble parameter    
         H_z = self.hubble_parameter(z)
         
-        # Get critical density rho_crit = 3 H^2 / (8 pi G) * Mpc_over_m * c**2 
-        c, G, M_sun, sigma_B, Mpc_over_m = Const._c_, Const._G_, Const._M_sun_, Const._sigma_B_, Const._Mpc_over_m_
-        rho_crit_factor = (3.0 / (8.0 * jnp.pi * G * M_sun)) * Mpc_over_m * c**2 
+        # Convert H(z) from km/s/Mpc to s^-1 inside the prefactor.
+        G, M_sun, Mpc_over_m = Const._G_, Const._M_sun_, Const._Mpc_over_m_
+        rho_crit_factor = (3.0 / (8.0 * jnp.pi * G * M_sun)) * (1e6 * Mpc_over_m)
         
         return rho_crit_factor * H_z**2 
         
@@ -496,9 +496,15 @@ class Cosmology:
         return jnp.interp(z, z_grid_pk, f_grid)
 
     #@jax.jit
-    def v_rms_squared(self, z):
+    def velocity_dispersion(self, z):
         """
-        Compute :math:`v_\\mathrm{rms}^2(z)` from the linear growth factor and matter power spectrum.
+        Compute the dimensionless velocity dispersion
+
+        .. math::
+
+            \\frac{1}{3} \\frac{v_\\mathrm{rms}^2}{c^2}
+
+        from the linear growth factor and matter power spectrum.
 
         Parameters
         ----------
@@ -508,11 +514,13 @@ class Cosmology:
         Returns
         -------
         jnp.ndarray
-            :math:`v_\\mathrm{rms}^2` at :math:`z`
+            Dimensionless velocity dispersion at :math:`z`, equal to
+            :math:`\\frac{1}{3} \\frac{v_\\mathrm{rms}^2}{c^2}`.
         """
         
         z = jnp.atleast_1d(z)
         h = self.H0 / 100.0
+        c_km_s = Const._c_ / 1e3
         k_grid = jnp.geomspace(1e-5, 1e1, 1000)
         z_grid_pk = self._z_grid_pk()
     
@@ -524,11 +532,11 @@ class Cosmology:
         H_grid = self.hubble_parameter(z_grid_pk)
         f_grid = self.growth_rate(z_grid_pk)
     
-        W_grid = f_grid * a_grid * H_grid
+        W_grid = f_grid * a_grid * H_grid / c_km_s
         integrand = (W_grid[:, None]**2 / 3) * P_grid * k_grid / (2 * jnp.pi**2)
-        vrms2_grid = jax.scipy.integrate.trapezoid(integrand, x=jnp.log(k_grid), axis=1)
+        velocity_dispersion_grid = jax.scipy.integrate.trapezoid(integrand, x=jnp.log(k_grid), axis=1)
     
-        return jnp.interp(z, z_grid_pk, vrms2_grid)
+        return jnp.interp(z, z_grid_pk, velocity_dispersion_grid)
 
     @jax.jit
     def comoving_volume_element(self, z):
@@ -537,7 +545,7 @@ class Cosmology:
     
         .. math::
     
-            \\frac{dV}{dz\\,d\\Omega} = \\frac{(1+z)^2\\, D_A(z)^2}{H(z)}
+            \\frac{dV}{dz\\,d\\Omega} = \\frac{(1+z)^2\\, D_A(z)^2 \\, c}{H(z)}
     
         Parameters
         ----------
@@ -553,7 +561,7 @@ class Cosmology:
         dAz = self.angular_diameter_distance(z)
         Hz = self.hubble_parameter(z)
 
-        return (1 + z)**2 * dAz**2 / Hz
+        return (1 + z)**2 * dAz**2 * (Const._c_ / 1e3) / Hz
    
 
     # ------------------------------------------------------------------

@@ -255,8 +255,7 @@ class GNFWPressureProfile(PressureProfile):
     
         # Compute normalization P_500c (with hydrostatic bias)
         h = H0 / 100.0
-        c_km_s = Const._c_ / 1e3
-        H = halo_model.cosmology.hubble_parameter(z) * c_km_s  # (Nz,)
+        H = halo_model.cosmology.hubble_parameter(z)  # (Nz,)
         H = jnp.atleast_1d(H)[None, None, :]  # (1, 1, Nz)
         m500c_tilde = (m500c * h / B)[None, :, None]  # (1, Nm, 1)
         P_500c = (1.65 * (h / 0.7) ** 2 * (H / H0) ** (8 / 3) * (m500c_tilde / (0.7 * 3e14)) ** (2 / 3 + 0.12) * (0.7 / h) ** 1.5)  # (1, Nm, Nz)
@@ -469,7 +468,7 @@ class B12PressureProfile(PressureProfile):
         p_x = (scaled_x)**gamma * (1 + scaled_x**alpha)**(-beta)
     
         # Thermal Pressure Normalization (P200c)
-        H = jnp.atleast_1d(halo_model.cosmology.hubble_parameter(z)) * (Const._c_ / 1e3)
+        H = jnp.atleast_1d(halo_model.cosmology.hubble_parameter(z))
         f_b = cparams["Omega_b"] / cparams["Omega0_m"]
         r_200c = r_200c * h
         # Use M200c and r_200c for normalization

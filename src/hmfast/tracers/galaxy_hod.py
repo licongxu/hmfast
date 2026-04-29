@@ -5,6 +5,7 @@ import jax.numpy as jnp
 from hmfast.tracers.base_tracer import Tracer
 from hmfast.halos.profiles import GalaxyHODProfile, Z07GalaxyHODProfile
 from hmfast.download import get_default_data_path
+from hmfast.utils import Const
 
 # Ensure high precision for cosmological integrations
 jax.config.update("jax_enable_x64", True)
@@ -108,7 +109,7 @@ class GalaxyHODTracer(Tracer):
         z_g, phi_prime_g = self.dndz
     
         phi_prime_g_at_z = jnp.interp(z, z_g, phi_prime_g, left=0.0, right=0.0)
-        H_grid = cosmology.hubble_parameter(z)
+        H_grid = cosmology.hubble_parameter(z) / (Const._c_ / 1e3)
         chi_grid = cosmology.angular_diameter_distance(z) * (1.0 + z)
 
         return H_grid * (phi_prime_g_at_z / chi_grid**2)

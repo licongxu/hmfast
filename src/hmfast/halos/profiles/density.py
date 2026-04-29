@@ -269,11 +269,11 @@ class B16DensityProfile(DensityProfile):
         chi = d_A_z * (1 + z)
         ell_target = k[:, None] * chi[None, :] - 0.5
 
-        vrms = jnp.sqrt(halo_model.cosmology.v_rms_squared(z))
+        velocity_dispersion = jnp.sqrt(halo_model.cosmology.velocity_dispersion(z))
         mu_e = 1.14
         prefactor = (
             4 * jnp.pi * r_delta**3 / mu_e
-            * (1 + z)[None, :]**3 / chi[None, :]**2 * vrms[None, :]
+            * (1 + z)[None, :]**3 / chi[None, :]**2 * velocity_dispersion[None, :]
         )
 
         r = self.x[:, None, None] * r_delta[None, :, :] * (1.0 + z[None, None, :])
@@ -441,11 +441,11 @@ class NFWDensityProfile(DensityProfile):
         chi = d_A_z * (1 + z)
         ell_target = k[:, None] * chi[None, :] - 0.5
 
-        vrms = jnp.sqrt(halo_model.cosmology.v_rms_squared(z))
+        velocity_dispersion = jnp.sqrt(halo_model.cosmology.velocity_dispersion(z))
         mu_e = 1.14
         prefactor = (
             4 * jnp.pi * r_s**3 / mu_e
-            * (1 + z)[None, :]**3 / chi[None, :]**2 * vrms[None, :]
+            * (1 + z)[None, :]**3 / chi[None, :]**2 * velocity_dispersion[None, :]
         )
 
         r = self.x[:, None, None] * r_s[None, :, :] * (1.0 + z[None, None, :])
@@ -712,11 +712,11 @@ class BCMDensityProfile(DensityProfile):
         chi = d_A_z * (1 + z)
         ell_target = k[:, None] * chi[None, :] - 0.5
 
-        vrms = jnp.sqrt(halo_model.cosmology.v_rms_squared(z))
+        velocity_dispersion = jnp.sqrt(halo_model.cosmology.velocity_dispersion(z))
         mu_e = 1.14
         prefactor = (
             4 * jnp.pi * r_vir**3 / mu_e
-            * (1 + z)[None, :]**3 / chi[None, :]**2 * vrms[None, :]
+            * (1 + z)[None, :]**3 / chi[None, :]**2 * velocity_dispersion[None, :]
         )
 
         r = self.x[:, None, None] * r_vir[None, :, :] * (1.0 + z[None, None, :])

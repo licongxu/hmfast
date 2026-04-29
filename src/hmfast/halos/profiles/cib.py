@@ -440,7 +440,7 @@ class S12CIBProfile(CIBProfile):
         j_bar = self.j_bar_nu(halo_model, m, z)
         
         # dchi/dz = c / H(z), a(z) = 1/(1+z)
-        dchi_dz = 1.0 / halo_model.cosmology.hubble_parameter(z)
+        dchi_dz = (Const._c_ / 1e3) / halo_model.cosmology.hubble_parameter(z)
         a = 1.0 / (1.0 + z)
         
         # Final Integral over redshift
@@ -754,9 +754,7 @@ class M21CIBProfile(CIBProfile):
             :math:`(N_M, N_z)`.
         """
         m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
-        c_km_s = Const._c_ / 1e3
-        
-        E_z = jnp.atleast_1d(halo_model.cosmology.hubble_parameter(z)) * c_km_s / halo_model.cosmology.H0
+        E_z = jnp.atleast_1d(halo_model.cosmology.hubble_parameter(z)) / halo_model.cosmology.H0
         
         return 46.1 * (1.0 + 1.11 * z[None, :]) * E_z[None, :] * (m[:, None] / 1e12) ** 1.1
 
@@ -970,7 +968,7 @@ class M21CIBProfile(CIBProfile):
         j_bar = self.j_bar_nu(halo_model, m, z)
         
         # dchi/dz = c / H(z), a(z) = 1/(1+z)
-        dchi_dz = 1.0 / halo_model.cosmology.hubble_parameter(z)
+        dchi_dz = (Const._c_ / 1e3) / halo_model.cosmology.hubble_parameter(z)
         a = 1.0 / (1.0 + z)
         
         # Final Integral over redshift
