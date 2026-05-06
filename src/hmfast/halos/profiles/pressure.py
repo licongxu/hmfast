@@ -3,8 +3,6 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 import mcfit
-from functools import partial
-
 from hmfast.download import get_default_data_path
 from hmfast.utils import Const
 from hmfast.halos.mass_definition import MassDefinition, convert_m_delta
@@ -13,7 +11,7 @@ from hmfast.halos.profiles import HaloProfile, HankelTransform
 
 
 class PressureProfile(HaloProfile):
-    @partial(jax.jit, static_argnums=(0,))
+    @jax.jit
     def u_k(self, halo_model, k, m, z):
         """
         Compute the projected Fourier-space pressure profile for halo-model calculations.
@@ -153,7 +151,13 @@ class GNFWPressureProfile(PressureProfile):
         self.gamma = gamma
         self.B = B
 
-        self.x = x if x is not None else jnp.logspace(jnp.log10(1e-5), jnp.log10(4.0), 256) 
+        # Build default grid on NumPy first so MPI workers do not all touch JAX/GPU in __init__.
+        if x is not None:
+            self.x = x
+        else:
+            self.x = jnp.asarray(
+                np.logspace(np.log10(1e-5), np.log10(4.0), 256), dtype=jnp.float64
+            )
 
 
     @property
@@ -217,7 +221,7 @@ class GNFWPressureProfile(PressureProfile):
 
         return self._tree_unflatten(treedef, new_leaves)
 
-    @partial(jax.jit, static_argnums=(0,))
+    @jax.jit
     def u_r(self, halo_model, r, m, z):
         """
         Compute the electron-pressure profile.
@@ -420,7 +424,7 @@ class B12PressureProfile(PressureProfile):
         
         return self._tree_unflatten(treedef, new_leaves)
 
-    @partial(jax.jit, static_argnums=(0,))
+    @jax.jit
     def u_r(self, halo_model, r, m, z):
         """
         Compute the electron-pressure profile.

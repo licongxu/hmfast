@@ -191,7 +191,7 @@ class HaloModel:
         return n_min, b1_min, b2_min
 
 
-    @partial(jax.jit, static_argnums=(1, 2))
+    @jax.jit
     def pk_1h(self, tracer1, tracer2, k, m, z,  k_damp=0.01):
         """
         Compute the 1-halo contribution to the 3D power spectrum in
@@ -236,9 +236,10 @@ class HaloModel:
         
         dndlnm = self.halo_mass_function.halo_mass_function(self, m, z)
         total_weights = dndlnm * w[:, None] # (Nm, Nz)
-    
-        is_same_tracer = (tracer2 is None) or (tracer1 == tracer2)
+
+        # Use object identity (not ==) so JAX traces tracers as PyTrees; needed when B varies.
         tracer2 = tracer1 if tracer2 is None else tracer2
+        is_same_tracer = tracer1 is tracer2
 
         # Process a single mass bin at a time and extract the uk^2 at the lowest mass for the halo model consistency term
         def process_bin(i):
@@ -279,7 +280,7 @@ class HaloModel:
         return pk1h * damping[:, None]
             
        
-    @partial(jax.jit, static_argnums=(1, 2))
+    @jax.jit
     def cl_1h(self, tracer1, tracer2, l, m, z, k_damp=0.01):
         """
         Compute the 1-halo contribution to the angular power spectrum
@@ -337,7 +338,7 @@ class HaloModel:
     
 
 
-    @partial(jax.jit, static_argnums=(1, 2))
+    @jax.jit
     def pk_2h(self, tracer1, tracer2, k, m, z):
         """
         Compute the 2-halo contribution to the 3D power spectrum in
@@ -411,7 +412,7 @@ class HaloModel:
     
         # Final Power Spectrum
         I1 = get_I(tracer1)
-        I2 = I1 if tracer1 == tracer2 else get_I(tracer2)
+        I2 = I1 if tracer1 is tracer2 else get_I(tracer2)
         
         # Reconstruct the legacy linear spectrum normalization used by the
         # current halo-model projection chain so outputs remain unchanged.
@@ -420,7 +421,7 @@ class HaloModel:
         return P_lin * I1 * I2
 
 
-    @partial(jax.jit, static_argnums=(1, 2))
+    @jax.jit
     def cl_2h(self, tracer1, tracer2, l, m, z):
         """
         Compute the 2-halo contribution to the angular power spectrum

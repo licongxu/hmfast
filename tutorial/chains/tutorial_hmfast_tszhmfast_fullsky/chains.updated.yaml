@@ -1,0 +1,158 @@
+theory:
+  hmfast_cobaya_theory_fullsky.HMFastTSZFullSky:
+    output:
+    - Cl_sz
+    params:
+      H0: null
+      omega_b: null
+      omega_cdm: null
+      ln10_10A_s: null
+      n_s: null
+      tau_reio: null
+      B: null
+    data_vector_file: /scratch/scratch-lxu/tsz_cnc_scatter/synthetic_data/Dl_binned_fullsky_signal_only_real0.txt
+    n_mass: 48
+    n_z: 96
+    log10_m_min: 11.0
+    log10_m_max: 15.5
+    z_min: 0.01
+    z_max: 2.0
+    speed: -1
+    stop_at_error: false
+    version: null
+    input_params:
+    - H0
+    - ln10_10A_s
+    - n_s
+    - omega_b
+    - omega_cdm
+    - tau_reio
+    - B
+    output_params: []
+likelihood:
+  cobaya_tutorial_likelihood.tSZ_PS_Likelihood_FullSkyNPY:
+    data_directory: /scratch/scratch-lxu/tsz_cnc_scatter/synthetic_data
+    data_file: Dl_binned_fullsky_signal_only_real0.txt
+    cov_file: covmat_Dl_binned_fullsky_signal_only.npy
+    log_every: 1
+    type: []
+    speed: -1
+    stop_at_error: false
+    version: null
+    input_params: []
+    output_params: []
+params:
+  H0:
+    prior:
+      dist: norm
+      loc: 67.4
+      scale: 1.0
+    ref:
+      dist: norm
+      loc: 67.4
+      scale: 1.0
+    proposal: 0.6
+    latex: H_0
+  ln10_10A_s:
+    prior:
+      min: 2.5
+      max: 3.5
+    ref:
+      dist: norm
+      loc: 2.9718
+      scale: 0.13
+    proposal: 0.13
+    latex: \ln(10^{10}A_s)
+  n_s:
+    prior:
+      dist: norm
+      loc: 0.962
+      scale: 0.014
+    ref:
+      dist: norm
+      loc: 0.962
+      scale: 0.014
+    proposal: 0.014
+    latex: n_\mathrm{s}
+  omega_b:
+    prior:
+      dist: norm
+      loc: 0.022
+      scale: 0.002
+    ref:
+      dist: norm
+      loc: 0.022
+      scale: 0.002
+    proposal: 0.002
+    latex: \Omega_\mathrm{b} h^2
+  Omega_m:
+    prior:
+      min: 0.2
+      max: 0.5
+    ref:
+      dist: norm
+      loc: 0.3096
+      scale: 0.02
+    proposal: 0.02
+    latex: \Omega_m
+  omega_cdm:
+    derived: true
+    value: 'lambda Omega_m, H0, omega_b: Omega_m * (H0 / 100.0)**2 - omega_b'
+    latex: \Omega_\mathrm{c} h^2
+  tau_reio:
+    derived: false
+    value: 0.0544
+    latex: \tau_{reio}
+  B:
+    prior:
+      min: 1.0
+      max: 2.0
+    ref:
+      dist: norm
+      loc: 1.41
+      scale: 0.05
+    proposal: 0.05
+    latex: B
+sampler:
+  mcmc:
+    burn_in: 30
+    max_tries: 50000
+    covmat: null
+    covmat_params: null
+    proposal_scale: 1.2
+    output_every: 60s
+    learn_every: 40
+    temperature: 1
+    learn_proposal: true
+    learn_proposal_Rminus1_max: 2.0
+    learn_proposal_Rminus1_max_early: 30.0
+    learn_proposal_Rminus1_min: 0.0
+    max_samples: .inf
+    Rminus1_stop: 0.1
+    Rminus1_cl_stop: 0.2
+    Rminus1_cl_level: 0.95
+    Rminus1_single_split: 4
+    measure_speeds: true
+    oversample_power: 0.4
+    oversample_thin: true
+    drag: false
+    blocking:
+    - - 1
+      - - H0
+        - ln10_10A_s
+        - n_s
+        - omega_b
+        - Omega_m
+        - B
+    callback_function: null
+    callback_every: null
+    seed: null
+    check_every: null
+    oversample: null
+    drag_limits: null
+    fallback_covmat_scale: 4
+    version: 3.5.7
+output: chains
+timing: true
+logging_level: info
+version: 3.5.7

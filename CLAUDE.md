@@ -6,27 +6,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **hmfast** is a Python package for **machine-learning–accelerated, differentiable halo-model calculations** for cosmology. It uses **JAX** (`jax`, `jax.numpy`), **emulators** for cosmological backgrounds and spectra, and **mcfit** for correlation-function transforms. Target audience: research code (alpha quality, version 0.1.0).
 
-## Commands
-
-```bash
-# Install in editable mode with dev tools
-pip install -e ".[dev]"
-
-# Run all tests
-pytest
-
-# Run a single test
-pytest tests/test_halo_model.py::TestHaloModel::test_initialization -v
-
-# Format and lint
-black src/
-isort src/
-flake8 src/
-
-# Build docs
-cd docs && make html
-```
-
 ## Layout
 
 | Path | Role |
