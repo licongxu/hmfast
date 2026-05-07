@@ -151,13 +151,10 @@ class GNFWPressureProfile(PressureProfile):
         self.gamma = gamma
         self.B = B
 
-        # Build default grid on NumPy first so MPI workers do not all touch JAX/GPU in __init__.
         if x is not None:
             self.x = x
         else:
-            self.x = jnp.asarray(
-                np.logspace(np.log10(1e-5), np.log10(4.0), 256), dtype=jnp.float64
-            )
+            self.x = np.logspace(np.log10(1e-5), np.log10(4.0), 256)
 
 
     @property
@@ -167,26 +164,25 @@ class GNFWPressureProfile(PressureProfile):
     @x.setter
     def x(self, value):
         """
-        Whenever x is modified, immediately rebuild the hankel transform object
+        Whenever x is modified, immediately rebuild the hankel transform object.
+        Stores x as numpy so it is safe to use as JAX PyTree aux_data.
         """
-        self._x = value
-        self._hankel = HankelTransform(self._x, nu=0.5)
+        self._x = np.asarray(value)
+        self._hankel = HankelTransform(jnp.asarray(self._x), nu=0.5)
 
 
     def _tree_flatten(self):
-        # The dynamic parameters JAX should track
         leaves = (self.P0, self.c500, self.alpha, self.beta, self.gamma, self.B)
-        # Static metadata: the grid and the Hankel object
-        aux_data = (self._x, self._hankel)
+        # Store _x as tuple for hashable aux_data with proper __eq__
+        aux_data = (tuple(self._x.tolist()), self._hankel)
         return (leaves, aux_data)
 
     @classmethod
     def _tree_unflatten(cls, aux_data, leaves):
-        x, hankel = aux_data
-        # Create object without calling __init__ to avoid rebuilding Hankel
+        x_tuple, hankel = aux_data
         obj = cls.__new__(cls)
         obj.P0, obj.c500, obj.alpha, obj.beta, obj.gamma, obj.B = leaves
-        obj._x = x
+        obj._x = np.array(x_tuple)
         obj._hankel = hankel
         return obj
 
@@ -358,8 +354,8 @@ class B12PressureProfile(PressureProfile):
         self.alpha_m_P0, self.alpha_m_xc, self.alpha_m_beta = alpha_m_P0, alpha_m_xc, alpha_m_beta
         self.alpha_z_P0, self.alpha_z_xc, self.alpha_z_beta = alpha_z_P0, alpha_z_xc, alpha_z_beta
 
-        # Grid initialization
-        self.x = x if x is not None else jnp.logspace(-4, 1, 256)
+        # Grid initialization: store as numpy for hashable PyTree aux_data
+        self.x = x if x is not None else np.logspace(-4, 1, 256)
 
     @property
     def x(self):
@@ -367,8 +363,8 @@ class B12PressureProfile(PressureProfile):
 
     @x.setter
     def x(self, value):
-        self._x = value
-        self._hankel = HankelTransform(self._x, nu=0.5)
+        self._x = np.asarray(value)
+        self._hankel = HankelTransform(jnp.asarray(self._x), nu=0.5)
 
     def _tree_flatten(self):
         leaves = (
@@ -376,19 +372,19 @@ class B12PressureProfile(PressureProfile):
             self.alpha_m_P0, self.alpha_m_xc, self.alpha_m_beta,
             self.alpha_z_P0, self.alpha_z_xc, self.alpha_z_beta,
         )
-        aux_data = (self._x, self._hankel)
+        aux_data = (tuple(self._x.tolist()), self._hankel)
         return (leaves, aux_data)
 
     @classmethod
     def _tree_unflatten(cls, aux_data, leaves):
-        x, hankel = aux_data
+        x_tuple, hankel = aux_data
         obj = cls.__new__(cls)
 
         (obj.A_P0, obj.A_xc, obj.A_beta,
          obj.alpha_m_P0, obj.alpha_m_xc, obj.alpha_m_beta,
          obj.alpha_z_P0, obj.alpha_z_xc, obj.alpha_z_beta) = leaves
 
-        obj._x = x
+        obj._x = np.array(x_tuple)
         obj._hankel = hankel
         return obj
 

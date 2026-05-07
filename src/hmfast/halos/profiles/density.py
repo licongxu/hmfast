@@ -91,7 +91,7 @@ class B16DensityProfile(DensityProfile):
                 ):
         
         # Grid initialization (triggers the x.setter)
-        self.x = x if x is not None else jnp.logspace(-4, 1, 256)
+        self.x = x if x is not None else np.logspace(-4, 1, 256)
 
         self.A_rho0, self.A_alpha, self.A_beta = A_rho0, A_alpha, A_beta
         self.alpha_m_rho0, self.alpha_m_alpha, self.alpha_m_beta = alpha_m_rho0, alpha_m_alpha, alpha_m_beta
@@ -103,9 +103,12 @@ class B16DensityProfile(DensityProfile):
 
     @x.setter
     def x(self, value):
-        self._x = value
-        self._hankel = HankelTransform(self._x, nu=0.5)
-
+        """
+        Whenever x is modified, immediately rebuild the hankel transform object.
+        Stores x as numpy so it is safe to use as JAX PyTree aux_data.
+        """
+        self._x = np.asarray(value)
+        self._hankel = HankelTransform(jnp.asarray(self._x), nu=0.5)
 
     def _tree_flatten(self):
         # Dynamic calibration parameters
@@ -114,21 +117,21 @@ class B16DensityProfile(DensityProfile):
             self.alpha_m_rho0, self.alpha_m_alpha, self.alpha_m_beta,
             self.alpha_z_rho0, self.alpha_z_alpha, self.alpha_z_beta
         )
-        # Static metadata
-        aux_data = (self._x, self._hankel)
+        # _x stored as tuple so aux_data has proper __eq__ and __hash__
+        aux_data = (tuple(self._x.tolist()), self._hankel)
         return (leaves, aux_data)
 
     @classmethod
     def _tree_unflatten(cls, aux_data, leaves):
-        x, hankel = aux_data
         obj = cls.__new__(cls)
-        
+
         # Unpack leaves back into attributes
         (obj.A_rho0, obj.A_alpha, obj.A_beta,
          obj.alpha_m_rho0, obj.alpha_m_alpha, obj.alpha_m_beta,
          obj.alpha_z_rho0, obj.alpha_z_alpha, obj.alpha_z_beta) = leaves
-        
-        obj._x = x
+
+        x_tuple, hankel = aux_data
+        obj._x = np.array(x_tuple)
         obj._hankel = hankel
         return obj
 
@@ -356,8 +359,7 @@ class NFWDensityProfile(DensityProfile):
         Dimensionless radial grid :math:`x = r / r_s` used to tabulate the profile and define the Hankel transform, with :math:`r_s` expressed in the same units as :math:`r`.
     """
     def __init__(self, x=None):
-        self.x = x if x is not None else jnp.logspace(jnp.log10(1e-4), jnp.log10(1.0), 256)
-    
+        self.x = x if x is not None else np.logspace(-4, 0, 256)
 
     @property
     def x(self):
@@ -366,10 +368,11 @@ class NFWDensityProfile(DensityProfile):
     @x.setter
     def x(self, value):
         """
-        Whenever x is modified, immediately rebuild the hankel transform object
+        Whenever x is modified, immediately rebuild the hankel transform object.
+        Stores x as numpy so it is safe to use as JAX PyTree aux_data.
         """
-        self._x = value
-        self._hankel = HankelTransform(self._x, nu=0.5)
+        self._x = np.asarray(value)
+        self._hankel = HankelTransform(jnp.asarray(self._x), nu=0.5)
 
     @partial(jax.jit, static_argnums=(0,))
     def u_r(self, halo_model, r, m, z):
@@ -556,7 +559,7 @@ class BCMDensityProfile(DensityProfile):
                 ):
         
         # Grid initialization (triggers the x.setter)
-        self.x = x if x is not None else jnp.logspace(-4, 1, 256)
+        self.x = x if x is not None else np.logspace(-4, 1, 256)
 
         self.log10Mc, self.theta_ej, self.eta_star = log10Mc, theta_ej, eta_star
         self.delta, self.gamma, self.mu, self.nu_log10Mc = delta, gamma, mu, nu_log10Mc
@@ -568,9 +571,12 @@ class BCMDensityProfile(DensityProfile):
 
     @x.setter
     def x(self, value):
-        self._x = value
-        self._hankel = HankelTransform(self._x, nu=0.5)
-
+        """
+        Whenever x is modified, immediately rebuild the hankel transform object.
+        Stores x as numpy so it is safe to use as JAX PyTree aux_data.
+        """
+        self._x = np.asarray(value)
+        self._hankel = HankelTransform(jnp.asarray(self._x), nu=0.5)
 
     def _tree_flatten(self):
         # Dynamic calibration parameters
@@ -578,20 +584,20 @@ class BCMDensityProfile(DensityProfile):
             self.log10Mc, self.theta_ej, self.eta_star,
             self.delta, self.gamma, self.mu, self.nu_log10Mc
         )
-        # Static metadata
-        aux_data = (self._x, self._hankel)
+        # _x stored as tuple so aux_data has proper __eq__ and __hash__
+        aux_data = (tuple(self._x.tolist()), self._hankel)
         return (leaves, aux_data)
 
     @classmethod
     def _tree_unflatten(cls, aux_data, leaves):
-        x, hankel = aux_data
         obj = cls.__new__(cls)
-        
+
         # Unpack leaves back into attributes
         (obj.log10Mc, obj.theta_ej, obj.eta_star,
          obj.delta, obj.gamma, obj.mu, obj.nu_log10Mc) = leaves
-        
-        obj._x = x
+
+        x_tuple, hankel = aux_data
+        obj._x = np.array(x_tuple)
         obj._hankel = hankel
         return obj
 

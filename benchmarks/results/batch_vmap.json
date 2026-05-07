@@ -1,0 +1,20 @@
+{
+  "timestamp": "2026-05-07T20:00:00",
+  "git_hash": "8afc65d",
+  "description": "Batch vmap benchmark: 8 cosmologies varying omega_cdm",
+  "batch_vmap_forward": {
+    "N_cosmo": 8,
+    "total_ms": 3.83,
+    "per_cosmo_ms": 0.48,
+    "grid": {
+      "Nk": 100,
+      "Nm": 40,
+      "Nz": 1
+    }
+  },
+  "batch_vmap_gradient": {
+    "N_cosmo": 8,
+    "total_ms": 26.67,
+    "per_cosmo_ms": 3.33
+  }
+}

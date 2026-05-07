@@ -1,0 +1,5 @@
+% Minimal shim: AASTeX / RevTeX request `epsf` for legacy EPS; this tree uses PDF
+% figures only. Satisfy \RequirePackage{epsf} under pdfLaTeX.
+\ProvidesPackage{epsf}[2026/05/07 stub]
+\RequirePackage{graphicx}
+\def\epsfbox#1{\includegraphics{#1}}

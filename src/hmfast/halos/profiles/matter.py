@@ -54,6 +54,13 @@ class NFWMatterProfile(MatterProfile):
     def __init__(self):
         pass
 
+    def _tree_flatten(self):
+        return (), None
+
+    @classmethod
+    def _tree_unflatten(cls, aux_data, children):
+        return cls()
+
     @partial(jax.jit, static_argnums=(0,))
     def u_r(self, halo_model, r, m, z):
         """
@@ -130,5 +137,12 @@ class NFWMatterProfile(MatterProfile):
         m_over_rho_mean = jnp.broadcast_to(m_over_rho_mean, u_m.shape)
 
         u_m *= m_over_rho_mean
-    
+
         return u_m
+
+
+jax.tree_util.register_pytree_node(
+    NFWMatterProfile,
+    lambda obj: obj._tree_flatten(),
+    lambda aux_data, children: NFWMatterProfile._tree_unflatten(aux_data, children)
+)
