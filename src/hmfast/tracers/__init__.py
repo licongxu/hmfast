@@ -4,6 +4,7 @@ from .galaxy_hod import GalaxyHODTracer
 from .galaxy_lensing import GalaxyLensingTracer
 from .cmb_lensing import CMBLensingTracer
 from .cib import CIBTracer
+from . import tsz_completeness
 
 __all__ = [
     "tSZTracer",
@@ -12,4 +13,5 @@ __all__ = [
     "GalaxyLensingTracer",
     "CMBLensingTracer",
     "CIBTracer",
+    "tsz_completeness",
 ]
