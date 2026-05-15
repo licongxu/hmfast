@@ -317,16 +317,6 @@ def build_snr_grid(
     return _snr_grid_jit(halo_model, m, z, A_SZ, alpha_SZ, B, coeff_j)
 
 
-def snr_mask(snr_grid, q_cat: float, at: float = 0.0):
-    r"""Heaviside selection :math:`\Theta(q_{\rm cat} - \mathrm{SNR})`.
-
-    Keeps halos *below* the catalogue threshold, i.e. the unresolved
-    component that survives in a masked tSZ map.
-    """
-    q = jnp.asarray(q_cat, dtype=snr_grid.dtype)
-    return jnp.heaviside(q - snr_grid, at)
-
-
 # ----------------------------------------------------------------------
 # Log-normal intrinsic scatter completeness
 # ----------------------------------------------------------------------
@@ -403,6 +393,5 @@ __all__ = [
     "load_sigma_y0_curve",
     "sigma_y0_from_theta",
     "build_snr_grid",
-    "snr_mask",
     "conditional_An_undetected",
 ]

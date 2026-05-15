@@ -34,8 +34,8 @@ xf = os.environ.get("XLA_FLAGS", "")
 if "xla_gpu_persistent_cache_dir" in xf:
     os.environ.pop("XLA_FLAGS")
 
-# Now add hmfast tutorial path and import it
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+# Now add hmfast tutorial path (for cobaya theory module discovery)
+sys.path.insert(0, os.path.dirname(__file__))
 
 # cobaya import after all environment is set up
 import cobaya

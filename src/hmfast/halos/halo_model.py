@@ -483,7 +483,8 @@ class HaloModel:
 
         is_same_tracer = tracer1 is tracer2
 
-        def trisp_slice(zi):
+        def trisp_slice(i):
+            zi = z[i]
             chi_i = self.cosmology.angular_diameter_distance(zi) * (1.0 + zi)
             k1 = (l1 + 0.5) / chi_i
             k2 = (l2 + 0.5) / chi_i
@@ -506,13 +507,100 @@ class HaloModel:
             usq_a = usq_a * damp_a
             usq_b = usq_b * damp_b
 
-            # Mass integral: weighted by dn/dlnM
-            weight = dndlnm[:, 0] * w  # (Nm,)
+            # Mass integral: weighted by dn/dlnM at this redshift
+            weight = dndlnm[:, i] * w  # (Nm,)
             integrand = usq_a[:, None, :] * usq_b[None, :, :] * weight[None, None, :]
             T_z = jnp.sum(integrand, axis=-1)  # (Nl1, Nl2)
             return T_z
 
-        T_grid = jax.vmap(trisp_slice)(z)  # (Nz, Nl1, Nl2)
+        T_grid = jax.vmap(trisp_slice)(jnp.arange(z.shape[0]))  # (Nz, Nl1, Nl2)
+
+        kernel1 = tracer1.kernel(self.cosmology, z)
+        kernel2 = tracer2.kernel(self.cosmology, z)
+        h = self.cosmology.H0 / 100.0
+        comov_vol = self.cosmology.comoving_volume_element(z) * h**3
+
+        weight_z = comov_vol * (kernel1 ** 2) * (kernel2 ** 2)
+        integrand_z = T_grid * weight_z[:, None, None]
+        return jnp.trapezoid(integrand_z, x=z, axis=0)
+
+    @partial(jax.jit, static_argnames=())
+    def trispectrum_1h_masked(self, tracer1, tracer2, l1, l2, m, z, mask_mz, k_damp=0.0):
+        """Compute the 1-halo connected angular trispectrum with a user-supplied
+        :math:`(M, z)` selection mask applied to the mass integrand.
+
+        .. math::
+
+            T^{1h,\\mathrm{masked}}_{\\ell\\ell'} = \\int dz \\,
+                \\frac{dV}{dz\\,d\\Omega} \\,
+                W_1(z)^2 W_2(z)^2
+                \\int d\\ln M \\, \\frac{dn}{d\\ln M}\\,
+                |u_1(k_\\ell)|^2 |u_2(k_{\\ell'})|^2 \\, \\mathcal{M}(M, z)
+
+        Parameters
+        ----------
+        tracer1, tracer2 : Tracer or None
+        l1, l2 : array-like
+        m, z : array
+        mask_mz : array of shape (N_m, N_z)
+            Mask values in :math:`[0, 1]`.
+        k_damp : float, default 0.0
+
+        Returns
+        -------
+        T : array, shape (N_l1, N_l2)
+        """
+        tracer2 = tracer1 if tracer2 is None else tracer2
+
+        l1 = jnp.atleast_1d(l1)
+        l2 = jnp.atleast_1d(l2)
+        m = jnp.atleast_1d(m)
+        z = jnp.atleast_1d(z)
+        logm = jnp.log(m)
+        dm = jnp.diff(logm)
+        w = jnp.concatenate([jnp.array([dm[0]]), dm[:-1] + dm[1:], jnp.array([dm[-1]])]) * 0.5
+
+        dndlnm = self.halo_mass_function.halo_mass_function(self, m, z)  # (Nm, Nz)
+
+        damp_mask = k_damp > 0
+
+        def _damping(k_arr):
+            return jnp.where(damp_mask,
+                             1.0 - jnp.exp(-(k_arr / jnp.where(damp_mask, k_damp, 1.0))**2),
+                             1.0)
+
+        is_same_tracer = tracer1 is tracer2
+
+        def trisp_slice(i):
+            zi = z[i]
+            chi_i = self.cosmology.angular_diameter_distance(zi) * (1.0 + zi)
+            k1 = (l1 + 0.5) / chi_i
+            k2 = (l2 + 0.5) / chi_i
+
+            u1_a = tracer1.profile.u_k(self, k1, m, jnp.atleast_1d(zi))[:, :, 0]
+            u1_b = tracer2.profile.u_k(self, k2, m, jnp.atleast_1d(zi))[:, :, 0]
+
+            if is_same_tracer:
+                u2_a = u1_a
+                u2_b = u1_b
+            else:
+                u2_a = tracer2.profile.u_k(self, k1, m, jnp.atleast_1d(zi))[:, :, 0]
+                u2_b = tracer1.profile.u_k(self, k2, m, jnp.atleast_1d(zi))[:, :, 0]
+
+            usq_a = u1_a * u2_a
+            usq_b = u1_b * u2_b
+
+            damp_a = _damping(k1)[:, None]
+            damp_b = _damping(k2)[:, None]
+            usq_a = usq_a * damp_a
+            usq_b = usq_b * damp_b
+
+            weight = dndlnm[:, i] * w * mask_mz[:, i]  # (Nm,)
+            integrand = usq_a[:, None, :] * usq_b[None, :, :] * weight[None, None, :]
+            T_z = jnp.sum(integrand, axis=-1)  # (Nl1, Nl2)
+            return T_z
+
+        T_grid = jax.vmap(trisp_slice)(jnp.arange(z.shape[0]))  # (Nz, Nl1, Nl2)
 
         kernel1 = tracer1.kernel(self.cosmology, z)
         kernel2 = tracer2.kernel(self.cosmology, z)
