@@ -83,6 +83,7 @@ DEFAULT_SKYFR_FILE = "/scratch/scratch-lxu/tszsbi/noise_files/skyfracs_szifi_cos
 # ----------------------------------------------------------------------
 # Parametric y0 (matches tszpower.parametric_profile.compute_y0_parametric)
 # ----------------------------------------------------------------------
+@jax.jit
 def compute_y0_parametric(halo_model, m, z, A_SZ, alpha_SZ, B):
     """Parametric Compton-:math:`y_0` amplitude.
 
@@ -128,6 +129,7 @@ def compute_y0_parametric(halo_model, m, z, A_SZ, alpha_SZ, B):
     return y0
 
 
+@jax.jit
 def compute_theta500_arcmin(halo_model, m, z, B):
     r"""Cluster angular size in arcmin.
 
@@ -232,6 +234,7 @@ def load_sigma_y0_curve(
     return coeff, (float(x.min()), float(x.max()))
 
 
+@jax.jit
 def sigma_y0_from_theta(theta_arcmin, coeff):
     """Evaluate the log-log polynomial fit for :math:`\\sigma_{y_0}`.
 
@@ -246,10 +249,20 @@ def sigma_y0_from_theta(theta_arcmin, coeff):
     log_theta = jnp.log(jnp.asarray(theta_arcmin))
     coeff = jnp.asarray(coeff)
 
+    # Horner scheme (constant unroll via Python loop is fine — coeff is small)
     out = jnp.zeros_like(log_theta)
     for ck in coeff:
         out = out * log_theta + ck
     return jnp.exp(out)
+
+
+@jax.jit
+def _snr_grid_jit(halo_model, m, z, A_SZ, alpha_SZ, B, coeff):
+    """JIT-fused SNR grid; coefficients passed as a traced JAX array."""
+    y0 = compute_y0_parametric(halo_model, m, z, A_SZ, alpha_SZ, B)
+    theta = compute_theta500_arcmin(halo_model, m, z, B)
+    sigma = sigma_y0_from_theta(theta, coeff)
+    return y0 / sigma
 
 
 # ----------------------------------------------------------------------
@@ -300,10 +313,8 @@ def build_snr_grid(
             poly_deg=poly_deg,
         )
 
-    y0 = compute_y0_parametric(halo_model, m, z, A_SZ, alpha_SZ, B)        # (Nm, Nz)
-    theta500 = compute_theta500_arcmin(halo_model, m, z, B)                # (Nm, Nz)
-    sigma = sigma_y0_from_theta(theta500, coeff)                            # (Nm, Nz)
-    return y0 / sigma
+    coeff_j = jnp.asarray(coeff)
+    return _snr_grid_jit(halo_model, m, z, A_SZ, alpha_SZ, B, coeff_j)
 
 
 def snr_mask(snr_grid, q_cat: float, at: float = 0.0):
