@@ -1,15 +1,19 @@
 # hmfast
 
+**Machine learning accelerated and differentiable halo model code**
+
 Fast, differentiable halo-model predictions for cosmology, built on JAX and
 neural-network emulators.
+
+Authors: Patrick Janulewicz, Licong Xu, Boris Bolliet
 
 ## Overview
 
 **hmfast** provides JIT-compilable and autodiff-compatible halo model
-calculations.  It combines:
+calculations. It combines:
 
 - **JAX** for just-in-time compilation and automatic differentiation.
-- **Neural emulators** (trained on CLASS) for background quantities and linear
+- **Neural emulators** trained on CLASS for background quantities and linear
   power spectra.
 - **mcfit** (v0.0.22) for fast Hankel transforms used in Fourier-space profile
   projections.
@@ -19,8 +23,16 @@ calculations.  It combines:
 
 ## Installation
 
+From a local checkout:
+
 ```bash
 pip install -e ".[dev]"
+```
+
+From GitHub:
+
+```bash
+pip install "git+https://github.com/licongxu/hmfast.git"
 ```
 
 Importing `hmfast` may download emulator weights on first use (~few MB).
@@ -29,7 +41,7 @@ Importing `hmfast` may download emulator weights on first use (~few MB).
 
 ```python
 from hmfast.halos import HaloModel
-from hmfast.tracers import tSZTracer, CMBLensingTracer
+from hmfast.tracers import CMBLensingTracer
 
 hm = HaloModel()
 
@@ -47,6 +59,14 @@ k = jnp.logspace(-3, 1, 50)
 z = jnp.array([0.5])
 p1h = hm.pk_1h(tracer, tracer, k, m, z)
 ```
+
+## Features
+
+- JAX-based **differentiable** halo model.
+- ML emulators for fast predictions.
+- Comprehensive cosmology and tracer support.
+- Gradient-based inference ready.
+- Parametric tSZ pressure profiles and masked halo-model workflows.
 
 ## Pressure profiles
 
@@ -116,13 +136,13 @@ grad = jax.grad(loss)(profile.A_SZ)
 ## Testing
 
 ```bash
-pytest                                    # unit tests
-pytest tests/stress_test_parametric_gnfw.py  # parametric profile stress tests
+pytest
+pytest tests/stress_test_parametric_gnfw.py
 ```
 
 ## Project structure
 
-```
+```text
 src/hmfast/
   cosmology.py          Cosmology class with emulator-backed predictions
   emulator_load.py      Neural emulator loading and inference
@@ -151,10 +171,6 @@ src/hmfast/
     galaxy_lensing.py   Galaxy lensing tracer
 ```
 
-## Authors
-
-Patrick Janulewicz (PJ), Licong Xu (LX), Boris Bolliet (BB)
-
 ## License
 
-MIT
+Apache-2.0

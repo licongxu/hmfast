@@ -10,13 +10,15 @@ readme = "README.md"
 requires-python = ">=3.8"
 license = {file = "LICENSE"}
 authors = [
-    {name = "Boris", email = "boris@example.com"},
+    {name = "Licong Xu"},
+    {name = "Patrick Janulewicz"},
+    {name = "Boris Bolliet"},
 ]
 keywords = ["halo model", "cosmology", "machine learning", "jax", "emulator"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
@@ -26,9 +28,10 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Physics",
 ]
 dependencies = [
-    "jax>=0.8.3",
+    "jax>=0.4.0",
     "jaxlib>=0.4.0",
     "numpy>=1.20.0",
+    "scipy>=1.7.0",
     "mcfit==0.0.22",
 ]
 
@@ -44,12 +47,11 @@ docs = [
     "sphinx",
     "sphinx-rtd-theme",
     "numpydoc",
-    "mcfit==0.0.22",
 ]
 
 [project.urls]
-Homepage = "https://github.com/class_sz_organization/hmfast"
-Repository = "https://github.com/class_sz_organization/hmfast"
+Homepage = "https://github.com/licongxu/hmfast"
+Repository = "https://github.com/licongxu/hmfast"
 Documentation = "https://hmfast.readthedocs.io"
 
 [tool.setuptools]
