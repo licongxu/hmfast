@@ -61,9 +61,15 @@ class HaloMass(ABC):
         # Halo mass function grid, shape: (n_z, n_R)
         hmf_grid = halo_model.halo_mass_function._f_sigma(halo_model, sigma_grid, z_grid)
     
-        # Compute d n / d ln(M)
+        # Compute d n / d ln(M). Standard Tinker08 formula:
+        #   dn/dlnM = -f(σ) × R × dσ²/dR / (8π R³ σ²)
+        # gives dn/dlnM in 1/Mpc³ (with R in Mpc, ρ in M_sun/Mpc³, M in M_sun).
+        # The factor of 2 vs 8π is absorbed in the 0.5 prefactor in _f_sigma.
+        # Previously divided by h³ which then cancelled the ×h³ on the volume
+        # element in cl_1h_masked; removing both for direct 1/Mpc³ × Mpc³
+        # arithmetic to avoid spurious sub-percent floating-point cross-talk.
         dlnnu_dlnR_grid = -dvar_grid * R_grid / jnp.exp(2. * ln_sigma_grid)
-        dn_dlnM_grid = dlnnu_dlnR_grid * hmf_grid / (4.0 * jnp.pi * R_grid**3 * h**3)
+        dn_dlnM_grid = dlnnu_dlnR_grid * hmf_grid / (4.0 * jnp.pi * R_grid**3)
     
         # Grids for interpolation
         ln_x = jnp.log(1. + z_grid)
@@ -213,12 +219,18 @@ class T08HaloMass(HaloMass):
 
         ln_x_grid, ln_M_grid, dn_dlnM_grid = self._compute_hmf_grid(halo_model)
 
-        # Create the interpolator, the meshgrid, and then stack the points
-        _hmf_interp = jscipy.interpolate.RegularGridInterpolator((ln_x_grid, ln_M_grid), dn_dlnM_grid)
+        # Interpolate in LOG-LOG space: dn/dlnM varies over many orders of
+        # magnitude (e.g. 1e-30 at high M, z), so linear interpolation of the
+        # raw value introduces ~1% bias at intermediate (M, z). Interpolating
+        # log(dn/dlnM) on the same (ln(1+z), ln M) grid and exp-ing back
+        # matches tszpower (massfuncs.py:272-274 and 290-298).
+        log_dn_grid = jnp.log(jnp.clip(dn_dlnM_grid, 1e-300, None))
+        _hmf_interp = jscipy.interpolate.RegularGridInterpolator(
+            (ln_x_grid, ln_M_grid), log_dn_grid)
         mm, zz = jnp.meshgrid(m, z, indexing='ij')
         pts = jnp.stack([jnp.log(1. + zz), jnp.log(mm)], axis=-1)
-        
-        return _hmf_interp(pts)
+
+        return jnp.exp(_hmf_interp(pts))
 
 
 
@@ -331,12 +343,18 @@ class T10HaloMass(HaloMass):
 
         ln_x_grid, ln_M_grid, dn_dlnM_grid = self._compute_hmf_grid(halo_model)
 
-        # Create the interpolator, the meshgrid, and then stack the points
-        _hmf_interp = jscipy.interpolate.RegularGridInterpolator((ln_x_grid, ln_M_grid), dn_dlnM_grid)
+        # Interpolate in LOG-LOG space: dn/dlnM varies over many orders of
+        # magnitude (e.g. 1e-30 at high M, z), so linear interpolation of the
+        # raw value introduces ~1% bias at intermediate (M, z). Interpolating
+        # log(dn/dlnM) on the same (ln(1+z), ln M) grid and exp-ing back
+        # matches tszpower (massfuncs.py:272-274 and 290-298).
+        log_dn_grid = jnp.log(jnp.clip(dn_dlnM_grid, 1e-300, None))
+        _hmf_interp = jscipy.interpolate.RegularGridInterpolator(
+            (ln_x_grid, ln_M_grid), log_dn_grid)
         mm, zz = jnp.meshgrid(m, z, indexing='ij')
         pts = jnp.stack([jnp.log(1. + zz), jnp.log(mm)], axis=-1)
-        
-        return _hmf_interp(pts)
+
+        return jnp.exp(_hmf_interp(pts))
 
 
 

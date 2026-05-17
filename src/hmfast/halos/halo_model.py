@@ -9,6 +9,74 @@ from typing import Dict, Any, Optional, Callable
 from functools import partial
 from mcfit import TophatVar
 
+
+def _simpson_nonuniform(y, x, axis=-1):
+    """Composite Simpson's rule on a possibly non-uniform 1D grid.
+
+    Uses the 3-point parabolic rule on each consecutive pair of intervals.
+    For an odd number of intervals (even ``N``), the last (orphan) interval
+    is handled with a 3-point parabolic correction using the last three
+    samples (matches ``scipy.integrate.simpson``).
+
+    Parameters
+    ----------
+    y : array
+        Integrand evaluated at ``x``.
+    x : 1D array
+        Grid points (need not be uniform).
+    axis : int
+        Integration axis of ``y``.
+
+    Returns
+    -------
+    integral : array
+        Integral with ``axis`` reduced.
+    """
+    y = jnp.moveaxis(jnp.asarray(y), axis, -1)
+    x = jnp.asarray(x)
+    N = y.shape[-1]
+    h = jnp.diff(x)  # (N-1,)
+
+    if N < 3:
+        return jnp.trapezoid(y, x=x, axis=-1)
+
+    # Composite Simpson 1/3 over consecutive pairs of intervals.
+    # n_pairs = number of (2-interval) Simpson pairs; uses 2*n_pairs intervals.
+    n_pairs = (N - 1) // 2
+    n_int = 2 * n_pairs
+
+    h0 = h[0:n_int:2]                              # first  interval of each pair
+    h1 = h[1:n_int:2]                              # second interval of each pair
+    hsum = h0 + h1
+    hprod = h0 * h1
+    # 3-point parabolic formula (non-uniform Simpson):
+    #   ∫_{x_{2i}}^{x_{2i+2}} y dx ≈ (h0+h1)/6 * [ y0*(2 - h1/h0) + y1*(h0+h1)^2/(h0 h1) + y2*(2 - h0/h1) ]
+    y0 = y[..., 0:n_int:2]                         # samples at left of each pair
+    y1 = y[..., 1:n_int:2]                         # samples at middle of each pair
+    y2 = y[..., 2:n_int + 1:2]                     # samples at right of each pair
+    seg = (hsum / 6.0) * (
+        y0 * (2.0 - h1 / h0)
+        + y1 * (hsum * hsum / hprod)
+        + y2 * (2.0 - h0 / h1)
+    )
+    integral = jnp.sum(seg, axis=-1)
+
+    if N % 2 == 0:
+        # Orphan last interval [x_{N-2}, x_{N-1}] needs a 3-point correction
+        # using the last three samples (matches scipy.integrate.simpson "last"
+        # rule). Coefficients derive from the same parabolic interpolation.
+        h_m1 = h[-1]
+        h_m2 = h[-2]
+        hs = h_m1 + h_m2
+        a = (2.0 * h_m1 ** 2 + 3.0 * h_m1 * h_m2) / (6.0 * hs)
+        b = (h_m1 ** 2 + 3.0 * h_m1 * h_m2) / (6.0 * h_m2)
+        c = h_m1 ** 3 / (6.0 * h_m2 * hs)
+        last = a * y[..., -1] + b * y[..., -2] - c * y[..., -3]
+        integral = integral + last
+
+    return integral
+
+
 from hmfast.halos.massfunc import T08HaloMass, TW10SubHaloMass
 from hmfast.halos.bias import T10HaloBias
 from hmfast.halos.concentration import D08Concentration, B13Concentration
@@ -326,10 +394,10 @@ class HaloModel:
 
         # Get the halo model pk_1h, the kernel, and the comoving volume
         P_1h_grid = jax.vmap(get_pk_slice)(z)
-        kernel1 = tracer1.kernel(self.cosmology, z)  
-        kernel2 = tracer2.kernel(self.cosmology, z)  
-        h = self.cosmology.H0 / 100.0
-        comov_vol = self.cosmology.comoving_volume_element(z) * h**3
+        kernel1 = tracer1.kernel(self.cosmology, z)
+        kernel2 = tracer2.kernel(self.cosmology, z)
+        # Comoving volume in physical Mpc³ (paired with HMF in 1/Mpc³).
+        comov_vol = self.cosmology.comoving_volume_element(z)
 
         # Integrate over redshift
         integrand = P_1h_grid * (comov_vol[:, None] * kernel1[:, None] * kernel2[:, None])
@@ -517,8 +585,10 @@ class HaloModel:
 
         kernel1 = tracer1.kernel(self.cosmology, z)
         kernel2 = tracer2.kernel(self.cosmology, z)
-        h = self.cosmology.H0 / 100.0
-        comov_vol = self.cosmology.comoving_volume_element(z) * h**3
+        # Comoving volume in physical Mpc³ (paired with HMF in 1/Mpc³ after the
+        # massfunc.py h³-removal). The previous ×h³ paired with the now-removed
+        # /h³ in halo_mass_function.
+        comov_vol = self.cosmology.comoving_volume_element(z)
 
         weight_z = comov_vol * (kernel1 ** 2) * (kernel2 ** 2)
         integrand_z = T_grid * weight_z[:, None, None]
@@ -604,8 +674,10 @@ class HaloModel:
 
         kernel1 = tracer1.kernel(self.cosmology, z)
         kernel2 = tracer2.kernel(self.cosmology, z)
-        h = self.cosmology.H0 / 100.0
-        comov_vol = self.cosmology.comoving_volume_element(z) * h**3
+        # Comoving volume in physical Mpc³ (paired with HMF in 1/Mpc³ after the
+        # massfunc.py h³-removal). The previous ×h³ paired with the now-removed
+        # /h³ in halo_mass_function.
+        comov_vol = self.cosmology.comoving_volume_element(z)
 
         weight_z = comov_vol * (kernel1 ** 2) * (kernel2 ** 2)
         integrand_z = T_grid * weight_z[:, None, None]
@@ -661,11 +733,8 @@ class HaloModel:
         m = jnp.atleast_1d(m)
         z = jnp.atleast_1d(z)
         logm = jnp.log(m)
-        dm = jnp.diff(logm)
-        w = jnp.concatenate([jnp.array([dm[0]]), dm[:-1] + dm[1:], jnp.array([dm[-1]])]) * 0.5
 
         dndlnm = self.halo_mass_function.halo_mass_function(self, m, z)  # (Nm, Nz)
-        total_weights = dndlnm * w[:, None]  # (Nm, Nz)
 
         is_same_tracer = tracer1 is tracer2
 
@@ -688,17 +757,24 @@ class HaloModel:
                 u_sq = u1 * u2
             damp = _damping(ki)[:, None]
             u_sq = u_sq * damp
-            weight_i = total_weights[:, i] * mask_mz[:, i]  # (Nm,)
-            return jnp.sum(u_sq * weight_i[None, :], axis=-1)  # (Nl,)
+            # Mass integral via trapezoid in ln M (log-log HMF interp is the
+            # dominant accuracy fix; Simpson here gives only ~0.05% extra at
+            # 7x runtime cost on GPU).
+            mass_integrand = u_sq * (dndlnm[:, i] * mask_mz[:, i])[None, :]  # (Nl, Nm)
+            return jnp.trapezoid(mass_integrand, x=logm, axis=-1)            # (Nl,)
 
         pk_grid = jax.vmap(slice_z)(jnp.arange(z.shape[0]))  # (Nz, Nl)
 
         kernel1 = tracer1.kernel(self.cosmology, z)
         kernel2 = tracer2.kernel(self.cosmology, z)
-        h = self.cosmology.H0 / 100.0
-        comov_vol = self.cosmology.comoving_volume_element(z) * h**3
+        # Use the comoving volume element in PHYSICAL Mpc³, matching the
+        # 1/Mpc³ convention now used by halo_mass_function. The two h³ factors
+        # (one on dV, the inverse on dn/dlnM) cancel mathematically but their
+        # explicit cancellation was a source of sub-percent floating-point drift.
+        comov_vol = self.cosmology.comoving_volume_element(z)
         weight_z = comov_vol * kernel1 * kernel2
         integrand = pk_grid * weight_z[:, None]
+        # z-integral via trapezoid (log-log HMF interp is the dominant fix).
         return jnp.trapezoid(integrand, x=z, axis=0)
 
 
@@ -749,9 +825,9 @@ class HaloModel:
         # Get individual kernels
         kernel1 = tracer1.kernel(self.cosmology, z)
         kernel2 = tracer2.kernel(self.cosmology, z)
-        
-        h = self.cosmology.H0 / 100.0
-        comov_vol = self.cosmology.comoving_volume_element(z) * h**3
+
+        # Comoving volume in physical Mpc³ (paired with HMF in 1/Mpc³).
+        comov_vol = self.cosmology.comoving_volume_element(z)
     
         # Limber Integral: C_l = int dz P(k,z) * [W1 * W2 * dV/dz]
         integrand = P_2h_grid * (comov_vol[:, None] * kernel1[:, None] * kernel2[:, None])

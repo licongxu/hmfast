@@ -155,10 +155,13 @@ def compute_theta500_arcmin(halo_model, m, z, B):
     D_A = jnp.atleast_1d(halo_model.cosmology.angular_diameter_distance(z))[None, :]  # Mpc
 
     theta_star = 6.997  # arcmin
+    # The Arnaud / tszpower formula uses M_true in M_sun/h units, so
+    # M_true_h / (h * 3e14) = M_phys / 3e14. hmfast carries M_true in
+    # physical M_sun, hence the (h *) factor in the denominator drops out.
     theta_500 = (
         theta_star
         * (h / 0.7) ** (-2.0 / 3.0)
-        * (M_true / (h * 3.0e14)) ** (1.0 / 3.0)
+        * (M_true / 3.0e14) ** (1.0 / 3.0)
         * E_z ** (-2.0 / 3.0)
         * (D_A / 500.0) ** (-1.0)
     )
@@ -316,6 +319,16 @@ def build_snr_grid(
     coeff_j = jnp.asarray(coeff)
     return _snr_grid_jit(halo_model, m, z, A_SZ, alpha_SZ, B, coeff_j)
 
+def snr_mask(snr_grid, q_cat: float, at: float = 0.0):
+    r"""Heaviside selection :math:`\Theta(q_{\rm cat} - \mathrm{SNR})`.
+
+    Keeps halos *below* the catalogue threshold, i.e. the unresolved
+    component that survives in a masked tSZ map.
+    """
+    q = jnp.asarray(q_cat, dtype=snr_grid.dtype)
+    return jnp.heaviside(q - snr_grid, at)
+
+
 
 # ----------------------------------------------------------------------
 # Log-normal intrinsic scatter completeness
@@ -385,6 +398,59 @@ def conditional_An_undetected(snr_grid, sigma_lnY: float, q_cat: float,
     return cond_flat.reshape(snr_grid.shape)
 
 
+@partial(jax.jit, static_argnames=("n_power",))
+def conditional_An_undetected_sharp(
+    snr_grid: jax.Array,
+    *,
+    sigma_lnY: float,
+    q_cat: float,
+    n_power: int = 2,
+) -> jax.Array:
+    r"""Conditional moment with a **sharp** detection cutoff on
+    :math:`q_{\rm true} = e^{\sigma_{\ln Y} u}\,\bar q`.
+
+    Matches the realization-generation convention used by
+    ``Dl_binned_scatter_*.npz`` (``snr_column = 'snr_true'``): a halo is
+    excluded from the unresolved tSZ map when its **intrinsic** SNR exceeds
+    the catalogue threshold, with no additional observational noise on
+    :math:`q`.
+
+    Analytically:
+
+    .. math::
+
+        \langle A^n\,\Theta(q_{\rm cat} - q_{\rm true}) \rangle
+        = e^{(n\sigma_{\ln Y})^2 / 2}\,
+          \Phi\!\left(\frac{\ln(q_{\rm cat}/\bar q)}{\sigma_{\ln Y}}
+                     - n\sigma_{\ln Y}\right)
+
+    where :math:`\Phi` is the standard-normal CDF.
+
+    Parameters
+    ----------
+    snr_grid : array
+        Theory SNR :math:`\bar q(M, z)`.
+    sigma_lnY : float
+        Intrinsic log-normal scatter width.
+    q_cat : float
+        Catalogue SNR threshold.
+    n_power : int
+        Moment order (2 for masked PS, 4 for masked trispectrum).
+
+    Returns
+    -------
+    cond_An : array
+        Same shape as ``snr_grid``.
+    """
+    import jax.scipy.special as jsp
+
+    qbar = jnp.maximum(snr_grid, 1e-30)
+    u_cut = jnp.log(q_cat / qbar) / sigma_lnY
+    arg = (u_cut - n_power * sigma_lnY) / jnp.sqrt(2.0)
+    Phi = 0.5 * (1.0 + jsp.erf(arg))
+    return jnp.exp(0.5 * (n_power * sigma_lnY) ** 2) * Phi
+
+
 __all__ = [
     "DEFAULT_SIGMA_OBJ_FILE",
     "DEFAULT_SKYFR_FILE",
@@ -393,5 +459,7 @@ __all__ = [
     "load_sigma_y0_curve",
     "sigma_y0_from_theta",
     "build_snr_grid",
+    "snr_mask",
     "conditional_An_undetected",
+    "conditional_An_undetected_sharp",
 ]

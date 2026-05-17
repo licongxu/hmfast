@@ -10,7 +10,7 @@
 #   contract.
 
 theory:
-  hmfast.tutorial.hmfast_cobaya_theory_masked_scatter.HMFastTSZMaskedScatter:
+  hmfast_cobaya_theory_masked_scatter.HMFastTSZMaskedScatter:
     q_cat: 5.0
     M_min: 6.766e13
     M_max: 6.766e15

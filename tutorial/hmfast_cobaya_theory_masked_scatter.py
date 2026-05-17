@@ -140,6 +140,13 @@ class HMFastTSZMaskedScatter(Theory):
     M_max: float = 1e16 * 0.6766
     z_min: float = 5e-3
     z_max: float = 3.0
+    # When True, the (M_min, M_max) endpoints are interpreted as numerical
+    # values in M_sun/h units (tszpower convention) and the *physical* mass
+    # range is rescaled per-sample by the current h. When False, M_min/M_max
+    # are taken as PHYSICAL M_sun (the natural hmfast convention) and the
+    # integration window is fixed in physical mass regardless of cosmology.
+    # Default True for one-to-one tszpower posterior reproduction.
+    tszpower_mass_convention: bool = True
 
     # Internal ell grid used before binning to 18 bands
     n_ell_internal: int = 50
@@ -212,8 +219,24 @@ class HMFastTSZMaskedScatter(Theory):
         prof = self._prof_seed.update(A_SZ=A_SZ, alpha_SZ=alpha_SZ, B=B)
         tsz = self._tsz.update(profile=prof)
 
+        # IMPORTANT: tszpower stores M_min/M_max in M_sun/h units; the *physical*
+        # mass range it integrates over therefore depends on the current
+        # cosmology's h. To match tszpower exactly we rebuild the mass grid each
+        # call using the current h. (The mass-range constants self.M_min/M_max
+        # carry the M_sun/h numerical value 1e14*0.6766 = 6.766e13.)
+        if self.tszpower_mass_convention:
+            # Rescale physical M range by current h to match tszpower's
+            # M_sun/h convention exactly (needed for chain-level reproduction
+            # of tszpower posteriors).
+            h_now = H0 / 100.0
+            m_grid = jnp.geomspace(self.M_min / h_now, self.M_max / h_now,
+                                   self.n_grid_mz)
+        else:
+            # Fixed physical mass range (default hmfast convention).
+            m_grid = self._m
+
         snr = build_snr_grid(
-            hm, self._m, self._z,
+            hm, m_grid, self._z,
             A_SZ=A_SZ, alpha_SZ=alpha_SZ, B=B,
             coeff=self._sigma_coeff,
         )
@@ -222,7 +245,7 @@ class HMFastTSZMaskedScatter(Theory):
             n_power=2, n_grid=self.n_grid_scatter, nsig=self.nsig_scatter,
         )
         cl_int = hm.cl_1h_masked(
-            tsz, None, self._ell_int, self._m, self._z, mask, k_damp=0.0,
+            tsz, None, self._ell_int, m_grid, self._z, mask, k_damp=0.0,
         )
         return cl_int
 

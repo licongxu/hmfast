@@ -41,6 +41,7 @@ from hmfast.tracers import tSZTracer
 from hmfast.tracers.tsz_completeness import (
     build_snr_grid,
     conditional_An_undetected,
+    conditional_An_undetected_sharp,
     load_sigma_y0_curve,
 )
 
@@ -85,7 +86,7 @@ def main():
     alpha_SZ = 1.12
     sigma_lnY = 0.173
     q_cat = 5.0
-    f_sky_eff = 0.9558  # from reference notebook
+    f_sky_eff = 0.9505089455619588  # exact value stored in realization metadata
 
     # Load 1000 scatter realizations
     print("Loading 1000 scatter realizations...")
@@ -114,14 +115,21 @@ def main():
     tsz = tSZTracer(profile=prof)
 
     ell_int = jnp.geomspace(float(ELL_MIN[0]), float(ELL_MAX[-1]), 50)
-    m_grid = jnp.geomspace(6.766e13, 6.766e15, 100)
+    # hmfast uses physical M_sun; tszpower carries M in M_sun/h. The fiducial
+    # tszpower notebooks integrate over 1e14*h_fid -> 1e16*h_fid in M_sun/h,
+    # which equals 1e14 -> 1e16 in physical M_sun (cancellation only at
+    # h = h_fid). Use the physical convention here so hmfast matches.
+    m_grid = jnp.geomspace(1e14, 1e16, 100)
     z_grid = jnp.geomspace(0.005, 3.0, 100)
 
     coeff, _ = load_sigma_y0_curve()
     coeff_j = jnp.asarray(coeff)
     block = getattr(jax, "block_until_ready", lambda x: x)
 
-    # Warmup: compute SNR grid, then masks for PS (n=2) and trispectrum (n=4)
+    # Warmup: compute SNR grid, then masks for PS (n=2) and trispectrum (n=4).
+    # Use the smooth Phi (double-scatter) conditional moment -- this matches
+    # tszpower's parametric_profile._conditional_An_undetected_grid, which is
+    # the reference we are reproducing.
     snr = build_snr_grid(hm, m_grid, z_grid, A_SZ=A_SZ, alpha_SZ=alpha_SZ,
                          B=B_val, coeff=coeff_j)
     mask_ps = conditional_An_undetected(snr, sigma_lnY=sigma_lnY, q_cat=q_cat,

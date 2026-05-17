@@ -154,7 +154,12 @@ class GNFWPressureProfile(PressureProfile):
         if x is not None:
             self.x = x
         else:
-            self.x = np.logspace(np.log10(1e-5), np.log10(4.0), 256)
+            # Match tszpower/profiles.py:14 (_X_GRID = logspace(-6, 6, 1024))
+            # so the Hankel transform of GNFW captures the large-x tail. The
+            # GNFW decays as r^{-beta} (beta~5.5) so beyond x~100 contributions
+            # are < 1e-10 of central; the wide range is needed for the Hankel
+            # to be numerically well-conditioned, not for the physical integrand.
+            self.x = np.logspace(np.log10(1e-6), np.log10(1e6), 1024)
 
 
     @property
@@ -251,10 +256,10 @@ class GNFWPressureProfile(PressureProfile):
         m500c = convert_m_delta(halo_model.cosmology, m, z, mass_def_old, mass_def_500c, c_old=c_old)
     
         r_500c = mass_def_500c.r_delta(halo_model.cosmology, m500c, z)  # (Nm, Nz)
-    
+
         # Convert the comoving radius to the calibrated physical 500c coordinate.
         x_500c = r[:, None, None] / ((1.0 + z[None, None, :]) * r_500c[None, :, :])  # (Nr, Nm, Nz)
-    
+
         # Compute normalization P_500c (with hydrostatic bias)
         h = H0 / 100.0
         H = halo_model.cosmology.hubble_parameter(z)  # (Nz,)
@@ -340,7 +345,12 @@ class ParametricGNFWPressureProfile(PressureProfile):
         if x is not None:
             self.x = x
         else:
-            self.x = np.logspace(np.log10(1e-5), np.log10(4.0), 256)
+            # Match tszpower/profiles.py:14 (_X_GRID = logspace(-6, 6, 1024))
+            # so the Hankel transform of GNFW captures the large-x tail. The
+            # GNFW decays as r^{-beta} (beta~5.5) so beyond x~100 contributions
+            # are < 1e-10 of central; the wide range is needed for the Hankel
+            # to be numerically well-conditioned, not for the physical integrand.
+            self.x = np.logspace(np.log10(1e-6), np.log10(1e6), 1024)
 
     @property
     def x(self):
