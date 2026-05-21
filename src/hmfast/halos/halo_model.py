@@ -831,7 +831,125 @@ class HaloModel:
     
         # Limber Integral: C_l = int dz P(k,z) * [W1 * W2 * dV/dz]
         integrand = P_2h_grid * (comov_vol[:, None] * kernel1[:, None] * kernel2[:, None])
-        
+
+        return jnp.trapezoid(integrand, x=z, axis=0)
+
+
+    @partial(jax.jit, static_argnames=())
+    def cl_2h_masked(self, tracer1, tracer2, l, m, z, mask_mz):
+        r"""
+        Compute the 2-halo angular power spectrum with a user-supplied
+        :math:`(M, z)` selection mask applied to each bias-weighted bracket.
+
+        .. math::
+
+            C_\ell^{2h,\mathrm{masked}} = \int dz \,
+                \frac{dV}{dz\,d\Omega}\, W_1 W_2 \,
+                P_{\mathrm{lin}}(k_\ell, z) \,
+                I_1^{\mathrm{masked}}(k_\ell, z)\,
+                I_2^{\mathrm{masked}}(k_\ell, z)
+
+        with
+
+        .. math::
+
+            I_a^{\mathrm{masked}}(k, z) = \int d\ln M \,
+                \frac{dn}{d\ln M}(M, z)\, b_1(M, z)\,
+                \mathcal{W}_1(M, z)\, u_a(k \mid M, z),
+
+        and :math:`k_\ell = (\ell + 1/2)/\chi(z)`.
+
+        Notes
+        -----
+        Unlike the 1-halo term, the 2-halo term is a product of two
+        *separate* mass integrals, each linear in the profile and each
+        sourced by a *distinct* halo. With log-normal intrinsic scatter
+        :math:`\ln A \sim \mathcal{N}(0, \sigma_{\ln Y}^2)` the per-halo
+        amplitudes are independent, so the scatter expectation factorizes
+        and **each bracket** carries the conditional *first* moment
+
+        .. math::
+
+            \mathcal{W}_1(M, z) =
+                \langle A\, \mathbf{1}(q_{\mathrm{obs}} < q_{\mathrm{cat}})\rangle.
+
+        Pass this ``n_power=1`` weight as ``mask_mz`` (e.g.
+        :func:`hmfast.tracers.tsz_completeness.conditional_An_undetected`
+        with ``n_power=1``), in contrast to the ``n_power=2`` weight used by
+        :meth:`cl_1h_masked`. The halo-model consistency counterterm is
+        dropped, consistent with :meth:`cl_1h_masked`.
+
+        For the tSZ auto-spectrum the same mask weights both brackets. A
+        cross-spectrum in which only one tracer is masked would instead
+        apply ``mask_mz`` to a single bracket; that case is not handled here.
+
+        Parameters
+        ----------
+        tracer1, tracer2 : Tracer or None
+            Same conventions as :meth:`cl_2h`.
+        l : array-like
+            Multipole grid.
+        m : array
+            Halo-mass grid in physical :math:`M_\odot`. Must match the first
+            axis of ``mask_mz``.
+        z : array
+            Redshift grid. Must match the second axis of ``mask_mz``.
+        mask_mz : array
+            Mask of shape :math:`(N_m, N_z)`, the conditional first moment
+            :math:`\mathcal{W}_1`. Values in :math:`[0, 1]` are expected for
+            a Heaviside selection; larger values occur with scatter because
+            :math:`\langle A\rangle = e^{\sigma_{\ln Y}^2/2} > 1`.
+
+        Returns
+        -------
+        cl_2h_masked : array
+            2-halo angular power spectrum on the masked map with shape
+            :math:`(N_\ell,)`.
+        """
+        tracer2 = tracer1 if tracer2 is None else tracer2
+
+        cparams = self.cosmology._cosmo_params()
+        h = cparams["h"]
+
+        l = jnp.atleast_1d(l)
+        m = jnp.atleast_1d(m)
+        z = jnp.atleast_1d(z)
+        logm = jnp.log(m)
+
+        dndlnm = self.halo_mass_function.halo_mass_function(self, m, z)  # (Nm, Nz)
+        bias = self.halo_bias.halo_bias(self, m, z)                     # (Nm, Nz)
+
+        is_same_tracer = tracer1 is tracer2
+
+        def slice_z(i):
+            zi = z[i]
+            chi_i = self.cosmology.angular_diameter_distance(zi) * (1.0 + zi)
+            ki = (l + 0.5) / chi_i
+
+            # Bias- and mask-weighted mass weight, shared by both brackets.
+            wz = (dndlnm[:, i] * bias[:, i] * mask_mz[:, i])[None, :]  # (1, Nm)
+
+            u1 = tracer1.profile.u_k(self, ki, m, jnp.atleast_1d(zi))[:, :, 0]  # (Nl, Nm)
+            # Mass integral via trapezoid in ln M, matching cl_1h_masked.
+            I1 = jnp.trapezoid(u1 * wz, x=logm, axis=-1)                       # (Nl,)
+            if is_same_tracer:
+                I2 = I1
+            else:
+                u2 = tracer2.profile.u_k(self, ki, m, jnp.atleast_1d(zi))[:, :, 0]
+                I2 = jnp.trapezoid(u2 * wz, x=logm, axis=-1)
+
+            # Linear power at k_ell, reusing the legacy (Mpc/h)^3 normalization
+            # of pk_2h (h*k lookup, then * h**6) so the masked and unmasked
+            # 2-halo paths share an identical projection convention.
+            p_lin = jnp.interp(h * ki, *self.cosmology.pk(zi, linear=True)) * h**6
+            return p_lin * I1 * I2  # (Nl,)
+
+        pk_grid = jax.vmap(slice_z)(jnp.arange(z.shape[0]))  # (Nz, Nl)
+
+        kernel1 = tracer1.kernel(self.cosmology, z)
+        kernel2 = tracer2.kernel(self.cosmology, z)
+        comov_vol = self.cosmology.comoving_volume_element(z)
+        integrand = pk_grid * (comov_vol * kernel1 * kernel2)[:, None]
         return jnp.trapezoid(integrand, x=z, axis=0)
 
 
