@@ -14,7 +14,9 @@ class HankelTransform:
     Reusable Hankel transform wrapper for JAX-based computation.
     """
     def __init__(self, x, nu=0.5):
-        
+        self._x_shape = x.shape
+        self._x_hash = hash(bytes(np.asarray(x).tobytes()))
+        self._nu = nu
         self._hankel = mcfit.Hankel(x, nu=nu, lowring=True, backend='jax')
         self._hankel_jit = jax.jit(functools.partial(self._hankel, extrap=False))
 
@@ -24,6 +26,14 @@ class HankelTransform:
         """
         k, y_k = self._hankel_jit(f_theta)
         return k, y_k
+
+    def __eq__(self, other):
+        if not isinstance(other, HankelTransform):
+            return NotImplemented
+        return self._x_hash == other._x_hash and self._nu == other._nu
+
+    def __hash__(self):
+        return hash((self._x_hash, self._nu))
 
 
 class HaloProfile:

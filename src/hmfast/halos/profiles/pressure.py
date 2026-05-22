@@ -3,8 +3,6 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 import mcfit
-from functools import partial
-
 from hmfast.download import get_default_data_path
 from hmfast.utils import Const
 from hmfast.halos.mass_definition import MassDefinition, convert_m_delta
@@ -13,7 +11,7 @@ from hmfast.halos.profiles import HaloProfile, HankelTransform
 
 
 class PressureProfile(HaloProfile):
-    @partial(jax.jit, static_argnums=(0,))
+    @jax.jit
     def u_k(self, halo_model, k, m, z):
         """
         Compute the projected Fourier-space pressure profile for halo-model calculations.
@@ -153,7 +151,15 @@ class GNFWPressureProfile(PressureProfile):
         self.gamma = gamma
         self.B = B
 
-        self.x = x if x is not None else jnp.logspace(jnp.log10(1e-5), jnp.log10(4.0), 256) 
+        if x is not None:
+            self.x = x
+        else:
+            # Match tszpower/profiles.py:14 (_X_GRID = logspace(-6, 6, 1024))
+            # so the Hankel transform of GNFW captures the large-x tail. The
+            # GNFW decays as r^{-beta} (beta~5.5) so beyond x~100 contributions
+            # are < 1e-10 of central; the wide range is needed for the Hankel
+            # to be numerically well-conditioned, not for the physical integrand.
+            self.x = np.logspace(np.log10(1e-6), np.log10(1e6), 1024)
 
 
     @property
@@ -163,26 +169,25 @@ class GNFWPressureProfile(PressureProfile):
     @x.setter
     def x(self, value):
         """
-        Whenever x is modified, immediately rebuild the hankel transform object
+        Whenever x is modified, immediately rebuild the hankel transform object.
+        Stores x as numpy so it is safe to use as JAX PyTree aux_data.
         """
-        self._x = value
-        self._hankel = HankelTransform(self._x, nu=0.5)
+        self._x = np.asarray(value)
+        self._hankel = HankelTransform(jnp.asarray(self._x), nu=0.5)
 
 
     def _tree_flatten(self):
-        # The dynamic parameters JAX should track
         leaves = (self.P0, self.c500, self.alpha, self.beta, self.gamma, self.B)
-        # Static metadata: the grid and the Hankel object
-        aux_data = (self._x, self._hankel)
+        # Store _x as tuple for hashable aux_data with proper __eq__
+        aux_data = (tuple(self._x.tolist()), self._hankel)
         return (leaves, aux_data)
 
     @classmethod
     def _tree_unflatten(cls, aux_data, leaves):
-        x, hankel = aux_data
-        # Create object without calling __init__ to avoid rebuilding Hankel
+        x_tuple, hankel = aux_data
         obj = cls.__new__(cls)
         obj.P0, obj.c500, obj.alpha, obj.beta, obj.gamma, obj.B = leaves
-        obj._x = x
+        obj._x = np.array(x_tuple)
         obj._hankel = hankel
         return obj
 
@@ -217,7 +222,7 @@ class GNFWPressureProfile(PressureProfile):
 
         return self._tree_unflatten(treedef, new_leaves)
 
-    @partial(jax.jit, static_argnums=(0,))
+    @jax.jit
     def u_r(self, halo_model, r, m, z):
         """
         Compute the electron-pressure profile.
@@ -251,15 +256,15 @@ class GNFWPressureProfile(PressureProfile):
         m500c = convert_m_delta(halo_model.cosmology, m, z, mass_def_old, mass_def_500c, c_old=c_old)
     
         r_500c = mass_def_500c.r_delta(halo_model.cosmology, m500c, z)  # (Nm, Nz)
-    
+
         # Convert the comoving radius to the calibrated physical 500c coordinate.
         x_500c = r[:, None, None] / ((1.0 + z[None, None, :]) * r_500c[None, :, :])  # (Nr, Nm, Nz)
-    
+
         # Compute normalization P_500c (with hydrostatic bias)
         h = H0 / 100.0
         H = halo_model.cosmology.hubble_parameter(z)  # (Nz,)
         H = jnp.atleast_1d(H)[None, None, :]  # (1, 1, Nz)
-        m500c_tilde = (m500c * h / B)[None, :, None]  # (1, Nm, 1)
+        m500c_tilde = (m500c * h / B)[None]  # (1, Nm, Nz)
         P_500c = (1.65 * (h / 0.7) ** 2 * (H / H0) ** (8 / 3) * (m500c_tilde / (0.7 * 3e14)) ** (2 / 3 + 0.12) * (0.7 / h) ** 1.5)  # (1, Nm, Nz)
     
         # GNFW profile
@@ -272,6 +277,222 @@ jax.tree_util.register_pytree_node(
     GNFWPressureProfile,
     lambda obj: obj._tree_flatten(),
     lambda aux_data, children: GNFWPressureProfile._tree_unflatten(aux_data, children)
+)
+
+
+class ParametricGNFWPressureProfile(PressureProfile):
+    """
+    GNFW pressure profile with a parametric Compton-:math:`y_0` amplitude.
+
+    The radial shape and Arnaud :math:`P_{500c}` normalization are unchanged
+    relative to :class:`GNFWPressureProfile`; the profile is multiplied by
+    a mass- and redshift-dependent ratio
+
+    .. math::
+
+        \\mathrm{ratio}(M, z) = \\frac{y_0^{\\rm param}(M, z)}{y_0^{\\rm orig}(M, z)}
+
+    where, matching ``tszpower.parametric_profile.compute_y0_parametric``,
+
+    .. math::
+
+        y_0^{\\rm param}(M, z) = 10^{A_{\\rm SZ}}
+        \\left(\\frac{M_{500c} h / B}{0.7 \\times 3 \\times 10^{14} \\, M_\\odot}\\right)^{\\alpha_{\\rm SZ}}
+        E(z)^2 \\left(\\frac{h}{0.7}\\right)^{-1/2}
+
+    and :math:`y_0^{\\rm orig}` is the central Compton-:math:`y` of the Arnaud
+    GNFW profile evaluated at the same :math:`(M, z)`:
+
+    .. math::
+
+        y_0^{\\rm orig}(M, z) = 2 \\frac{\\sigma_T}{m_e c^2}
+        \\, P_0 \\, P_{500c}^{\\rm Arnaud}(M, z) \\, r_{500c}(M, z)
+        \\, \\mathcal{I}_{\\rm shape}
+
+    with the dimensionless GNFW shape integral
+    :math:`\\mathcal{I}_{\\rm shape} = 0.470502095` (matching tszpower).
+    When :math:`A_{\\rm SZ}, \\alpha_{\\rm SZ}` give :math:`y_0^{\\rm param}
+    = y_0^{\\rm Arnaud}`, ``ratio = 1`` and the profile reduces exactly to
+    :class:`GNFWPressureProfile`.
+
+    Attributes
+    ----------
+    x : jnp.ndarray
+        Dimensionless radial grid :math:`x = r / r_\\Delta`.
+    A_SZ : float
+        Log10 amplitude of the parametric normalization.
+    alpha_SZ : float
+        Mass-scaling exponent of the parametric normalization.
+    P0, c500, alpha, beta, gamma : float
+        gNFW shape parameters (same as :class:`GNFWPressureProfile`).
+    B : float
+        Hydrostatic mass bias factor used in the :math:`M_{500c}` normalization.
+    """
+
+    def __init__(self, x=None, A_SZ=-4.97, alpha_SZ=0.7867,
+                 P0=8.130, c500=1.156, alpha=1.0620, beta=5.4807, gamma=0.3292,
+                 B=1.4):
+
+        self.A_SZ = A_SZ
+        self.alpha_SZ = alpha_SZ
+        self.P0 = P0
+        self.c500 = c500
+        self.alpha = alpha
+        self.beta = beta
+        self.gamma = gamma
+        self.B = B
+
+        if x is not None:
+            self.x = x
+        else:
+            # Match tszpower/profiles.py:14 (_X_GRID = logspace(-6, 6, 1024))
+            # so the Hankel transform of GNFW captures the large-x tail. The
+            # GNFW decays as r^{-beta} (beta~5.5) so beyond x~100 contributions
+            # are < 1e-10 of central; the wide range is needed for the Hankel
+            # to be numerically well-conditioned, not for the physical integrand.
+            self.x = np.logspace(np.log10(1e-6), np.log10(1e6), 1024)
+
+    @property
+    def x(self):
+        return self._x
+
+    @x.setter
+    def x(self, value):
+        self._x = np.asarray(value)
+        self._hankel = HankelTransform(jnp.asarray(self._x), nu=0.5)
+
+    def _tree_flatten(self):
+        leaves = (self.A_SZ, self.alpha_SZ,
+                  self.P0, self.c500, self.alpha, self.beta, self.gamma, self.B)
+        aux_data = (tuple(self._x.tolist()), self._hankel)
+        return (leaves, aux_data)
+
+    @classmethod
+    def _tree_unflatten(cls, aux_data, leaves):
+        x_tuple, hankel = aux_data
+        obj = cls.__new__(cls)
+        (obj.A_SZ, obj.alpha_SZ,
+         obj.P0, obj.c500, obj.alpha, obj.beta, obj.gamma, obj.B) = leaves
+        obj._x = np.array(x_tuple)
+        obj._hankel = hankel
+        return obj
+
+    def update(self, A_SZ=None, alpha_SZ=None,
+               P0=None, c500=None, alpha=None, beta=None, gamma=None, B=None):
+        """
+        Return a new profile instance with updated parameters.
+
+        Parameters
+        ----------
+        A_SZ, alpha_SZ : float, optional
+            Parametric amplitude parameters.
+        P0, c500, alpha, beta, gamma, B : float, optional
+            gNFW shape and bias parameters.
+
+        Returns
+        -------
+        ParametricGNFWPressureProfile
+            New profile instance with updated parameters.
+        """
+        leaves, treedef = self._tree_flatten()
+
+        new_leaves = (
+            A_SZ if A_SZ is not None else self.A_SZ,
+            alpha_SZ if alpha_SZ is not None else self.alpha_SZ,
+            P0 if P0 is not None else self.P0,
+            c500 if c500 is not None else self.c500,
+            alpha if alpha is not None else self.alpha,
+            beta if beta is not None else self.beta,
+            gamma if gamma is not None else self.gamma,
+            B if B is not None else self.B,
+        )
+
+        return self._tree_unflatten(treedef, new_leaves)
+
+    @jax.jit
+    def u_r(self, halo_model, r, m, z):
+        """
+        Compute the electron-pressure profile with a parametric amplitude.
+
+        Parameters
+        ----------
+        halo_model : HaloModel
+            Halo model providing the cosmology, mass-definition conversion, and
+            halo radius.
+        r : float or jnp.ndarray
+            Comoving radius or radii in :math:`\\mathrm{Mpc}`.
+        m : float or jnp.ndarray
+            Halo mass or masses in physical :math:`M_\\odot`.
+        z : float or jnp.ndarray
+            Redshift(s).
+
+        Returns
+        -------
+        jnp.ndarray
+            Electron pressure profile with shape :math:`(N_r, N_m, N_z)`.
+        """
+        H0 = halo_model.cosmology.H0
+        A_SZ, alpha_SZ = self.A_SZ, self.alpha_SZ
+        P0, c500, alpha, beta, gamma, B = (
+            self.P0, self.c500, self.alpha, self.beta, self.gamma, self.B
+        )
+        r, m, z = jnp.atleast_1d(r), jnp.atleast_1d(m), jnp.atleast_1d(z)
+        h = H0 / 100.0
+
+        # Convert input mass to M500c
+        mass_def_old = halo_model.mass_definition
+        mass_def_500c = MassDefinition(500, "critical")
+        c_old = halo_model.concentration.c_delta(halo_model, m, z)
+        m500c = convert_m_delta(halo_model.cosmology, m, z, mass_def_old, mass_def_500c, c_old=c_old)
+
+        r_500c = mass_def_500c.r_delta(halo_model.cosmology, m500c, z)  # (Nm, Nz), physical Mpc
+        x_500c = r[:, None, None] / ((1.0 + z[None, None, :]) * r_500c[None, :, :])  # (Nr, Nm, Nz)
+
+        H = jnp.atleast_1d(halo_model.cosmology.hubble_parameter(z))[None, None, :]  # (1, 1, Nz)
+        E_z = H / H0
+        m500c_tilde = (m500c * h / B)[None]  # (1, Nm, Nz)
+
+        # ---- Arnaud P_500c (same as GNFWPressureProfile) ----
+        P_500c_arnaud = (
+            1.65 * (h / 0.7) ** 2 * E_z ** (8.0 / 3.0)
+            * (m500c_tilde / (0.7 * 3e14)) ** (2.0 / 3.0 + 0.12)
+            * (0.7 / h) ** 1.5
+        )  # (1, Nm, Nz)
+
+        # ---- Compton-y0 amplitudes (matches tszpower compute_y0 / compute_y0_parametric) ----
+        sigma_T_cm2 = 6.6524587e-25                     # Thomson cross section in cm^2
+        m_e_c2_eV = 510998.95                           # m_e c^2 in eV
+        shape_integral = 0.470502095                    # GNFW shape integral, hardcoded as in tszpower
+        mpc_to_cm = Const._Mpc_over_m_ * 100.0          # cm per Mpc (physical)
+
+        r_500c_cm = (r_500c * mpc_to_cm)[None, :, :]    # (1, Nm, Nz), physical cm
+
+        y0_orig = (
+            2.0 * (sigma_T_cm2 / m_e_c2_eV)
+            * P0 * P_500c_arnaud * r_500c_cm
+            * shape_integral
+        )                                                # (1, Nm, Nz)
+
+        y0_param = (
+            (10.0 ** A_SZ)
+            * (m500c_tilde / (0.7 * 3e14)) ** alpha_SZ
+            * E_z ** 2
+            * (h / 0.7) ** (-0.5)
+        )                                                # (1, Nm, Nz)
+
+        ratio = y0_param / y0_orig                       # (1, Nm, Nz)
+
+        scaled_x = c500 * x_500c
+        Pe_arnaud = P_500c_arnaud * P0 * scaled_x ** (-gamma) * (1 + scaled_x ** alpha) ** ((gamma - beta) / alpha)
+        Pe = Pe_arnaud * ratio                           # (Nr, Nm, Nz)
+
+        return Pe
+
+
+jax.tree_util.register_pytree_node(
+    ParametricGNFWPressureProfile,
+    lambda obj: obj._tree_flatten(),
+    lambda aux_data, children: ParametricGNFWPressureProfile._tree_unflatten(aux_data, children)
 )
 
 
@@ -354,8 +575,8 @@ class B12PressureProfile(PressureProfile):
         self.alpha_m_P0, self.alpha_m_xc, self.alpha_m_beta = alpha_m_P0, alpha_m_xc, alpha_m_beta
         self.alpha_z_P0, self.alpha_z_xc, self.alpha_z_beta = alpha_z_P0, alpha_z_xc, alpha_z_beta
 
-        # Grid initialization
-        self.x = x if x is not None else jnp.logspace(-4, 1, 256)
+        # Grid initialization: store as numpy for hashable PyTree aux_data
+        self.x = x if x is not None else np.logspace(-4, 1, 256)
 
     @property
     def x(self):
@@ -363,8 +584,8 @@ class B12PressureProfile(PressureProfile):
 
     @x.setter
     def x(self, value):
-        self._x = value
-        self._hankel = HankelTransform(self._x, nu=0.5)
+        self._x = np.asarray(value)
+        self._hankel = HankelTransform(jnp.asarray(self._x), nu=0.5)
 
     def _tree_flatten(self):
         leaves = (
@@ -372,19 +593,19 @@ class B12PressureProfile(PressureProfile):
             self.alpha_m_P0, self.alpha_m_xc, self.alpha_m_beta,
             self.alpha_z_P0, self.alpha_z_xc, self.alpha_z_beta,
         )
-        aux_data = (self._x, self._hankel)
+        aux_data = (tuple(self._x.tolist()), self._hankel)
         return (leaves, aux_data)
 
     @classmethod
     def _tree_unflatten(cls, aux_data, leaves):
-        x, hankel = aux_data
+        x_tuple, hankel = aux_data
         obj = cls.__new__(cls)
 
         (obj.A_P0, obj.A_xc, obj.A_beta,
          obj.alpha_m_P0, obj.alpha_m_xc, obj.alpha_m_beta,
          obj.alpha_z_P0, obj.alpha_z_xc, obj.alpha_z_beta) = leaves
 
-        obj._x = x
+        obj._x = np.array(x_tuple)
         obj._hankel = hankel
         return obj
 
@@ -420,7 +641,7 @@ class B12PressureProfile(PressureProfile):
         
         return self._tree_unflatten(treedef, new_leaves)
 
-    @partial(jax.jit, static_argnums=(0,))
+    @jax.jit
     def u_r(self, halo_model, r, m, z):
         """
         Compute the electron-pressure profile.
@@ -457,7 +678,7 @@ class B12PressureProfile(PressureProfile):
     
         # Convert the comoving radius to the calibrated physical 200c coordinate.
         x_200c = r[:, None, None] / ((1.0 + z[None, None, :]) * r_200c[None, :, :])  # (Nr, Nm, Nz)
-        m200c_b = m200c[None, :, None]
+        m200c_b = m200c[None]
         z_b = z[None, None, :]
         mass_ratio = m200c_b / 1e14
     

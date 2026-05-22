@@ -211,6 +211,7 @@ class S12CIBProfile(CIBProfile):
        
         # Log-normal in mass
         log10_m = jnp.log10(m)
+        log10_M_eff = jnp.log10(M_eff_cib)
         Sigma_M = m / jnp.sqrt(2 * jnp.pi * sigma2_LM)  *  jnp.exp( -(log10_m - log10_M_eff)**2 / (2 * sigma2_LM) )
         return Sigma_M
 
@@ -253,18 +254,19 @@ class S12CIBProfile(CIBProfile):
         nu = self.nu * (1 + z)
         T0, alpha, beta, gamma = self.T0, self.alpha, self.beta, self.gamma
     
+        k_B = Const._k_B_  # Boltzmann constant [J/K]
         h = Const._h_P_  # Planck [J s]
         c = Const._c_  #2.99792458e8    # speed of light [m/s]
-    
+
         T_d_z = T0 * (1 + z) ** alpha
-    
+
         x = -(3. + beta + gamma) * jnp.exp(-(3. + beta + gamma))
         # nu0 in GHz
         nu0_GHz = 1e-9 * k_B * T_d_z / h * (3. + beta + gamma + lambertw(x))
         # convert all nu, nu0 to Hz for Planck
         nu_Hz   = nu * 1e9      # If input is GHz!
         nu0_Hz  = nu0_GHz * 1e9
-    
+
         def B_nu(nu_Hz, T):
             return (2 * h * nu_Hz ** 3 / c ** 2) / (jnp.exp(h * nu_Hz / (k_B * T)) - 1)
     

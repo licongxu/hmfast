@@ -153,8 +153,15 @@ class MassDefinition:
         """
         delta, reference = self.delta, self.reference
 
-        m = jnp.atleast_1d(m)[:, None]
-        z = jnp.atleast_1d(z)[None, :]
+        m = jnp.atleast_1d(m)
+        z = jnp.atleast_1d(z)
+
+        # Only add outer axes when inputs are 1D so that already-broadcast
+        # (Nm, Nz) mass arrays are handled correctly.
+        if m.ndim == 1:
+            m = m[:, None]
+        if z.ndim == 1:
+            z = z[None, :]
 
         rho_ref = cosmology.critical_density(z)
 
