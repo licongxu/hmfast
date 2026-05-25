@@ -2,7 +2,8 @@ import os
 import jax
 import jax.numpy as jnp
 import jax.scipy as jscipy
-from jax.scipy.special import sici, erf 
+from jax.scipy.special import erf
+from hmfast._special import sici
 
 from hmfast.tracers.base_tracer import Tracer
 from hmfast.download import get_default_data_path

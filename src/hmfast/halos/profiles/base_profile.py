@@ -5,7 +5,7 @@ import jax.numpy as jnp
 from hmfast.mcfit_compat import Hankel as McfitHankel
 from hmfast.jax_platform import float_dtype
 import functools
-from jax.scipy.special import sici
+from hmfast._special import sici
 from jax.tree_util import register_pytree_node_class
 
 

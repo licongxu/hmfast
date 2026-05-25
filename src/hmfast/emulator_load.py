@@ -1,8 +1,11 @@
 """
 Clean JAX-based neural network emulator classes.
 
-This module provides pure JAX implementations without any tensorflow dependencies,
-specifically designed for loading cosmopower-style .npz emulator files.
+Inference is pure JAX -- no tensorflow ops are ever called here. However, the
+upstream cosmopower ``.npz`` files we consume embed pickled references to
+tensorflow keras classes, so ``tensorflow`` must be importable for
+``numpy.load(..., allow_pickle=True)`` to deserialize them. The dependency is
+declared in ``pyproject.toml`` for that reason.
 """
 
 import os
@@ -12,8 +15,14 @@ import jax.numpy as jnp
 from typing import Dict, Any, Optional, List, Union
 from functools import partial
 
-# Enable 64-bit precision for better accuracy
-jax.config.update("jax_enable_x64", True)
+from hmfast.jax_platform import configure_jax, float_dtype
+
+# Respect the platform-aware dtype selection in `hmfast.jax_platform`. On
+# CPU/GPU this enables x64; on TPU it stays at float32/complex64 because the
+# TPU driver does not support 64-bit types. Hard-coding x64 here would
+# silently break TPU runs (jax truncates the arrays and downstream casts
+# overflow, producing NaN tSZ spectra).
+configure_jax()
 
 
 class EmulatorLoader:
@@ -33,18 +42,17 @@ class EmulatorLoader:
         """
         self.filename = filename
         self.load(filename)
-        
-        # Convert to JAX arrays for efficient computation
-        self.parameters_mean = jnp.array(self.parameters_mean_, dtype=jnp.float64)
-        self.parameters_std = jnp.array(self.parameters_std_, dtype=jnp.float64)
-        self.features_mean = jnp.array(self.features_mean_, dtype=jnp.float64)
-        self.features_std = jnp.array(self.features_std_, dtype=jnp.float64)
-        
-        # Convert weights and biases to JAX arrays
-        self.W_ = [jnp.array(w, dtype=jnp.float64) for w in self.W_]
-        self.b_ = [jnp.array(b, dtype=jnp.float64) for b in self.b_]
-        self.alphas_ = [jnp.array(alpha, dtype=jnp.float64) for alpha in self.alphas_]
-        self.betas_ = [jnp.array(beta, dtype=jnp.float64) for beta in self.betas_]
+
+        _fd = float_dtype()
+        self.parameters_mean = jnp.array(self.parameters_mean_, dtype=_fd)
+        self.parameters_std = jnp.array(self.parameters_std_, dtype=_fd)
+        self.features_mean = jnp.array(self.features_mean_, dtype=_fd)
+        self.features_std = jnp.array(self.features_std_, dtype=_fd)
+
+        self.W_ = [jnp.array(w, dtype=_fd) for w in self.W_]
+        self.b_ = [jnp.array(b, dtype=_fd) for b in self.b_]
+        self.alphas_ = [jnp.array(alpha, dtype=_fd) for alpha in self.alphas_]
+        self.betas_ = [jnp.array(beta, dtype=_fd) for beta in self.betas_]
     
     def load(self, filename: str) -> None:
         """
