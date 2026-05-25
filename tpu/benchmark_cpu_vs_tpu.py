@@ -29,6 +29,7 @@ import time
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from hmfast.cosmology import Cosmology
 from hmfast.halos import HaloModel
@@ -37,6 +38,11 @@ from hmfast.tracers import tSZTracer
 
 N_WARMUP = 1
 N_RUNS = 5
+
+# Grid is shared by both backends so the comparison is apples-to-apples.
+ELL = (10.0, 10000.0, 50)   # logspace(log10(10), log10(10000), 50)
+M = (10.0, 15.0, 64)        # logspace(10, 15, 64) in M_sun
+Z = (0.01, 3.0, 32)         # linspace
 
 
 def _device_label() -> str:
@@ -53,9 +59,9 @@ def benchmark():
     hm = HaloModel(cosmology=cosmo)
     tsz = tSZTracer(profile=GNFWPressureProfile())
 
-    m = jnp.logspace(10, 15, 64)
-    z = jnp.linspace(0.01, 3.0, 32)
-    ell = jnp.logspace(jnp.log10(10), jnp.log10(10000), 50)
+    m = jnp.logspace(M[0], M[1], M[2])
+    z = jnp.linspace(Z[0], Z[1], Z[2])
+    ell = jnp.logspace(jnp.log10(ELL[0]), jnp.log10(ELL[1]), ELL[2])
 
     @jax.jit
     def compute_tsz_cl(hm, tsz, ell, m, z):
@@ -70,13 +76,13 @@ def benchmark():
     cl2h.block_until_ready()
     compile_seconds = time.perf_counter() - t0
 
-    # Extra warmup runs (post-compile) to flush any one-off caching
+    # Extra warmup runs (post-compile) to flush any one-off caching.
     for _ in range(N_WARMUP):
         c1, c2 = compute_tsz_cl(hm, tsz, ell, m, z)
         c1.block_until_ready()
         c2.block_until_ready()
 
-    # Timed runs
+    # Timed runs.
     run_times = []
     for _ in range(N_RUNS):
         t = time.perf_counter()
@@ -85,7 +91,15 @@ def benchmark():
         c2.block_until_ready()
         run_times.append(time.perf_counter() - t)
 
-    cl_tot = cl1h + cl2h
+    # Correctness probes: full Cl arrays + a few non-projected sanity points.
+    cl1h_np = np.asarray(cl1h)
+    cl2h_np = np.asarray(cl2h)
+    cl_tot = cl1h_np + cl2h_np
+
+    # Spot checks against pk_* at a couple representative (k, z) values.
+    pk1h = hm.pk_1h(tsz, tsz, k=jnp.array([0.01, 0.1, 1.0]), m=m, z=jnp.array([0.5]))
+    pk2h = hm.pk_2h(tsz, tsz, k=jnp.array([0.01, 0.1, 1.0]), m=m, z=jnp.array([0.5]))
+
     return {
         "backend": jax.default_backend(),
         "device": _device_label(),
@@ -103,9 +117,17 @@ def benchmark():
         "run_seconds_mean": statistics.mean(run_times),
         "run_seconds_max": max(run_times),
         "run_seconds_all": run_times,
-        "cl_mean": float(jnp.mean(cl_tot)),
-        "cl1h_all_positive": bool(jnp.all(cl1h > 0)),
-        "cl2h_all_positive": bool(jnp.all(cl2h > 0)),
+        # Correctness payload.
+        "ell": np.asarray(ell).tolist(),
+        "cl1h": cl1h_np.tolist(),
+        "cl2h": cl2h_np.tolist(),
+        "cl_mean": float(np.mean(cl_tot)),
+        "cl1h_all_finite": bool(np.all(np.isfinite(cl1h_np))),
+        "cl2h_all_finite": bool(np.all(np.isfinite(cl2h_np))),
+        "cl1h_all_positive": bool(np.all(cl1h_np > 0)),
+        "cl2h_all_positive": bool(np.all(cl2h_np > 0)),
+        "pk1h_spot_k_0p01_0p1_1p0_z_0p5": np.asarray(pk1h).flatten().tolist(),
+        "pk2h_spot_k_0p01_0p1_1p0_z_0p5": np.asarray(pk2h).flatten().tolist(),
     }
 
 
