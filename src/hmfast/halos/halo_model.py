@@ -419,31 +419,105 @@ class HaloModel:
 
         kernel1 = tracer1.kernel(self.cosmology, z)
         kernel2 = tracer2.kernel(self.cosmology, z)
-        # Comoving volume in physical Mpc³ (paired with HMF in 1/Mpc³).
         comov_vol = self.cosmology.comoving_volume_element(z)
 
-        # Multiply each tracer's z-dependent kernel into u_k **before** the
-        # m-axis sum (and the implicit squaring inside it). Mathematically
-        # identical to the legacy form ``pk_1h * kernel1 * kernel2``, but
-        # numerically stable in float32: see ``_pk_1h_impl`` docstring.
-        def get_pk_slice(zi, k1, k2):
-            chi_i = self.cosmology.angular_diameter_distance(zi) * (1 + zi)
-            ki = (l + 0.5) / chi_i
-            pk_y = self._pk_1h_impl(
-                tracer1, tracer2,
-                k=ki, m=m, z=jnp.atleast_1d(zi),
-                k_damp=k_damp,
-                profile_scale1=jnp.atleast_1d(k1),
-                profile_scale2=jnp.atleast_1d(k2),
-            )
-            return pk_y.flatten()
+        P_y_grid = self._cl_1h_pressure_fast(
+            tracer1, tracer2, l, m, z, k_damp, kernel1, kernel2
+        )
 
-        P_y_grid = jax.vmap(get_pk_slice)(z, kernel1, kernel2)
-
-        # Integrate over redshift
         integrand = P_y_grid * comov_vol[:, None]
-
         return jnp.trapezoid(integrand, x=z, axis=0)
+
+    def _cl_1h_pressure_fast(self, tracer1, tracer2, l, m, z, k_damp,
+                              kernel1, kernel2):
+        """Fast 1-halo Limber grid for pressure-like profiles.
+
+        Computes the native Hankel transform ONCE for all (m, z) and then
+        does cheap per-z interpolation to the Limber k-grid. This avoids
+        re-running the expensive Hankel FFT for every z-slice.
+        """
+        from hmfast.halos.profiles.pressure import PressureProfile
+
+        is_same_tracer = tracer1 is tracer2
+        has_fast = (isinstance(tracer1.profile, PressureProfile)
+                    and (is_same_tracer or isinstance(tracer2.profile, PressureProfile)))
+
+        if not has_fast:
+            # Fall back to the per-z-slice path for non-pressure profiles.
+            def get_pk_slice(zi, k1, k2):
+                chi_i = self.cosmology.angular_diameter_distance(zi) * (1 + zi)
+                ki = (l + 0.5) / chi_i
+                pk_y = self._pk_1h_impl(
+                    tracer1, tracer2, k=ki, m=m, z=jnp.atleast_1d(zi),
+                    k_damp=k_damp,
+                    profile_scale1=jnp.atleast_1d(k1),
+                    profile_scale2=jnp.atleast_1d(k2),
+                )
+                return pk_y.flatten()
+            return jax.vmap(get_pk_slice)(z, kernel1, kernel2)
+
+        # --- Fast path: one Hankel transform for all (m, z) ---
+        l = jnp.atleast_1d(l)
+        m = jnp.atleast_1d(m)
+        z = jnp.atleast_1d(z)
+
+        # Compute native ell-grid profile once.
+        ell_nat1, u_ell1 = tracer1.profile._u_ell_native(self, m, z)
+        if is_same_tracer:
+            ell_nat2, u_ell2 = ell_nat1, u_ell1
+        else:
+            ell_nat2, u_ell2 = tracer2.profile._u_ell_native(self, m, z)
+
+        # HMF weights (same as _pk_1h_impl).
+        logm = jnp.log(m)
+        dm = jnp.diff(logm)
+        w = jnp.concatenate([jnp.array([dm[0]]), dm[:-1] + dm[1:], jnp.array([dm[-1]])]) * 0.5
+        dndlnm = self.halo_mass_function.halo_mass_function(self, m, z)
+        total_weights = dndlnm * w[:, None]  # (Nm, Nz)
+
+        # Damping.
+        d_A = self.cosmology.angular_diameter_distance(z)
+        chi = d_A * (1 + z)
+
+        mask = k_damp > 0
+
+        def _one_z(zi_idx):
+            """Process one z-slice: interp from native ell to target ell, then mass-sum."""
+            ell_t = l  # target ell
+            k1z = kernel1[zi_idx]
+            k2z = kernel2[zi_idx]
+
+            # Interpolate u_ell from native grid to target ell for each mass bin.
+            def _interp_m(ell_n, u_n):
+                return jnp.interp(ell_t, ell_n, u_n)
+
+            # ell_nat1[:, :, zi_idx] has shape (Nk_native, Nm); vmap over m axis.
+            u1_at_ell = jax.vmap(_interp_m, in_axes=(1, 1), out_axes=1)(
+                ell_nat1[:, :, zi_idx], u_ell1[:, :, zi_idx]
+            )  # (Nell, Nm)
+            u1_at_ell = u1_at_ell * k1z
+
+            if is_same_tracer:
+                u2_at_ell = u1_at_ell  # already scaled by k1z == k2z
+            else:
+                u2_at_ell = jax.vmap(_interp_m, in_axes=(1, 1), out_axes=1)(
+                    ell_nat2[:, :, zi_idx], u_ell2[:, :, zi_idx]
+                ) * k2z
+
+            uk_sq = u1_at_ell * u2_at_ell  # (Nell, Nm)
+            pk_y = jnp.sum(uk_sq * total_weights[None, :, zi_idx], axis=1)  # (Nell,)
+
+            # Consistency correction.
+            uk_sq_min = uk_sq[:, 0]
+            n_min, _, _ = self._counter_terms(m, z)
+            pk_y = pk_y + self.hm_consistency * n_min[zi_idx] * uk_sq_min
+
+            # Damping.
+            ki = (l + 0.5) / chi[zi_idx]
+            damping = jnp.where(mask, 1.0 - jnp.exp(-(ki / jnp.where(mask, k_damp, 1.0))**2), 1.0)
+            return pk_y * damping
+
+        return jax.vmap(_one_z)(jnp.arange(z.shape[0]))
     
 
 
@@ -870,25 +944,97 @@ class HaloModel:
         kernel2 = tracer2.kernel(self.cosmology, z)
         comov_vol = self.cosmology.comoving_volume_element(z)
 
-        # Fold each kernel into its own profile inside the m-integral so the
-        # I_i = sum_m dndlnm * b * (kernel_i * u_i) stays bounded in float32
-        # (vs. multiplying kernel^2 outside, where I_1 * I_2 ~ 1e40 overflows
-        # for the tSZ pressure profile). Mathematically identical.
-        def get_pk_slice(zi, k1, k2):
-            chi_i = self.cosmology.angular_diameter_distance(zi) * (1 + zi)
-            ki = (l + 0.5) / chi_i
-            return self._pk_2h_impl(
-                tracer1, tracer2,
-                k=ki, m=m, z=jnp.atleast_1d(zi),
-                profile_scale1=jnp.atleast_1d(k1),
-                profile_scale2=jnp.atleast_1d(k2),
-            ).flatten()
-
-        P_y_grid = jax.vmap(get_pk_slice)(z, kernel1, kernel2)
+        P_y_grid = self._cl_2h_pressure_fast(
+            tracer1, tracer2, l, m, z, kernel1, kernel2
+        )
 
         integrand = P_y_grid * comov_vol[:, None]
-
         return jnp.trapezoid(integrand, x=z, axis=0)
+
+    def _cl_2h_pressure_fast(self, tracer1, tracer2, l, m, z,
+                              kernel1, kernel2):
+        """Fast 2-halo Limber grid for pressure-like profiles."""
+        from hmfast.halos.profiles.pressure import PressureProfile
+
+        is_same_tracer = tracer1 is tracer2
+        has_fast = (isinstance(tracer1.profile, PressureProfile)
+                    and (is_same_tracer or isinstance(tracer2.profile, PressureProfile)))
+
+        if not has_fast:
+            def get_pk_slice(zi, k1, k2):
+                chi_i = self.cosmology.angular_diameter_distance(zi) * (1 + zi)
+                ki = (l + 0.5) / chi_i
+                return self._pk_2h_impl(
+                    tracer1, tracer2, k=ki, m=m, z=jnp.atleast_1d(zi),
+                    profile_scale1=jnp.atleast_1d(k1),
+                    profile_scale2=jnp.atleast_1d(k2),
+                ).flatten()
+            return jax.vmap(get_pk_slice)(z, kernel1, kernel2)
+
+        # --- Fast path ---
+        l = jnp.atleast_1d(l)
+        m = jnp.atleast_1d(m)
+        z = jnp.atleast_1d(z)
+
+        ell_nat1, u_ell1 = tracer1.profile._u_ell_native(self, m, z)
+        if is_same_tracer:
+            ell_nat2, u_ell2 = ell_nat1, u_ell1
+        else:
+            ell_nat2, u_ell2 = tracer2.profile._u_ell_native(self, m, z)
+
+        cparams = self.cosmology._cosmo_params()
+        h = cparams["h"]
+
+        logm = jnp.log(m)
+        dm = jnp.diff(logm)
+        w = jnp.concatenate([jnp.array([dm[0]]), dm[:-1] + dm[1:], jnp.array([dm[-1]])]) * 0.5
+        dndlnm = self.halo_mass_function.halo_mass_function(self, m, z)
+        bias = self.halo_bias.halo_bias(self, m, z)
+        total_weights = dndlnm * bias * w[:, None]  # (Nm, Nz)
+
+        n_min, b1_min, _ = self._counter_terms(m, z)
+        d_A = self.cosmology.angular_diameter_distance(z)
+        chi = d_A * (1 + z)
+
+        def _one_z(zi_idx):
+            k1z = kernel1[zi_idx]
+            k2z = kernel2[zi_idx]
+
+            def _interp_m(ell_n, u_n):
+                return jnp.interp(l, ell_n, u_n)
+
+            u1_at_ell = jax.vmap(_interp_m, in_axes=(1, 1), out_axes=1)(
+                ell_nat1[:, :, zi_idx], u_ell1[:, :, zi_idx]
+            ) * k1z  # (Nell, Nm)
+
+            if is_same_tracer:
+                u2_at_ell = u1_at_ell
+            else:
+                u2_at_ell = jax.vmap(_interp_m, in_axes=(1, 1), out_axes=1)(
+                    ell_nat2[:, :, zi_idx], u_ell2[:, :, zi_idx]
+                ) * k2z
+
+            # I = sum_m (u * weight) for each tracer.
+            I1 = jnp.sum(u1_at_ell * total_weights[None, :, zi_idx], axis=1)  # (Nell,)
+            I2 = jnp.sum(u2_at_ell * total_weights[None, :, zi_idx], axis=1) if not is_same_tracer else I1
+
+            # Consistency correction.
+            u1_min = u1_at_ell[:, 0]
+            correction1 = b1_min[zi_idx] * n_min[zi_idx] * u1_min
+            I1 = I1 + self.hm_consistency * correction1
+            if not is_same_tracer:
+                u2_min = u2_at_ell[:, 0]
+                correction2 = b1_min[zi_idx] * n_min[zi_idx] * u2_min
+                I2 = I2 + self.hm_consistency * correction2
+            else:
+                I2 = I1
+
+            ki = (l + 0.5) / chi[zi_idx]
+            P_lin_z = jnp.interp(h * ki, *self.cosmology.pk(z[zi_idx], linear=True)) * h**6
+
+            return P_lin_z * I1 * I2
+
+        return jax.vmap(_one_z)(jnp.arange(z.shape[0]))
 
 
 jax.tree_util.register_pytree_node(

@@ -11,6 +11,49 @@ from hmfast.halos.profiles import HaloProfile, HankelTransform
 
 
 class PressureProfile(HaloProfile):
+
+    @jax.jit
+    def _u_ell_native(self, halo_model, m, z):
+        """Compute the native-grid Hankel-transformed pressure profile.
+
+        This is the expensive part of ``u_k`` (the Hankel FFT + real-space
+        profile evaluation). The result lives on the Hankel transform's own
+        k-grid and does *not* depend on the caller's target ``k``.
+
+        Callers that need the profile at many different ``k`` grids (e.g.
+        the Limber projections in ``cl_1h``/``cl_2h`` which have a different
+        ``k = (ell+0.5)/chi(z)`` per z-slice) should call this once, then
+        do the cheap per-z ``jnp.interp`` themselves, avoiding redundant
+        Hankel transforms.
+
+        Returns
+        -------
+        ell_native : (Nk_native, Nm, Nz)
+            Native ell grid.
+        u_ell_val : (Nk_native, Nm, Nz)
+            Projected pressure profile on the native ell grid with the
+            physical prefactor applied.
+        """
+        m, z = jnp.atleast_1d(m), jnp.atleast_1d(z)
+        B = getattr(self, "B", 1.0)
+
+        r_delta_native = halo_model.mass_definition.r_delta(halo_model.cosmology, m, z)
+        r_delta = r_delta_native / B**(1 / 3)
+        r = self.x[:, None, None] * r_delta_native[None, :, :] * (1.0 + z[None, None, :])
+        d_A = jnp.atleast_1d(halo_model.cosmology.angular_diameter_distance(z))
+        ell_delta = d_A[None, :] / r_delta  # (Nm, Nz)
+
+        mpc_to_m = Const._Mpc_over_m_
+        prefactor = (1 + z)[None, :] * 4 * jnp.pi * r_delta * mpc_to_m / (ell_delta**2)
+
+        k_native, u_k_native = self._u_k_hankel(halo_model, self.x, r, m, z)
+
+        u_ell_native = u_k_native * jnp.sqrt(jnp.pi / (2 * k_native[:, None, None]))
+        ell_native = k_native[:, None, None] * ell_delta[None, :, :]
+        u_ell_val = prefactor[None, :, :] * u_ell_native
+
+        return ell_native, u_ell_val
+
     @jax.jit
     def u_k(self, halo_model, k, m, z):
         """
@@ -33,45 +76,22 @@ class PressureProfile(HaloProfile):
             Transformed profile with shape :math:`(N_k, N_m, N_z)`.
         """
         k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
-        B = getattr(self, "B", 1.0)
 
-        r_delta_native = halo_model.mass_definition.r_delta(halo_model.cosmology, m, z)
-        r_delta = r_delta_native / B**(1 / 3)
-        r = self.x[:, None, None] * r_delta_native[None, :, :] * (1.0 + z[None, None, :])
         d_A = jnp.atleast_1d(halo_model.cosmology.angular_diameter_distance(z))
-        ell_delta = d_A[None, :] / r_delta  # (Nm, Nz)
-        
-        mpc_to_m = Const._Mpc_over_m_
-        prefactor = (1 + z)[None, :] * 4 * jnp.pi * r_delta * mpc_to_m / (ell_delta**2)  # (Nm, Nz)
-        
-        # Target ell grid for interpolation: (Nk, Nz)
         chi = d_A * (1 + z)
-        ell_target = k[:, None] * chi[None, :] - 0.5 
-        
-        # Get native Hankel transform outputs, which may not align with the k from this function's input
-        k_native, u_k_native = self._u_k_hankel(halo_model, self.x, r, m, z)
-        
-        # Calculate native u_ell and the native ell grid
-        u_ell_native = u_k_native * jnp.sqrt(jnp.pi / (2 * k_native[:, None, None])) 
-        ell_native = k_native[:, None, None] * ell_delta[None, :, :] # (Nk_native, Nm, Nz)
-        
-        # Apply prefactor
-        u_ell_base = prefactor[None, :, :] * u_ell_native # (Nk_native, Nm, Nz)
-        u_ell_val = u_ell_base
-    
-        # Interpolate over the native k-axis (axis 0) for every combination of m and z    
+        ell_target = k[:, None] * chi[None, :] - 0.5   # (Nk, Nz)
+
+        ell_native, u_ell_val = self._u_ell_native(halo_model, m, z)
+
         def interp_at_z(ell_t, ell_n, u_n):
             return jnp.interp(ell_t, ell_n, u_n)
-       
+
         vmap_interp = jax.vmap(
-            jax.vmap(interp_at_z, in_axes=(None, 1, 1), out_axes=1), 
+            jax.vmap(interp_at_z, in_axes=(None, 1, 1), out_axes=1),
             in_axes=(1, 2, 2), out_axes=2
         )
-        
-        # Resulting shape: (Nk, Nm, Nz)
-        u_ell_interp = vmap_interp(ell_target, ell_native, u_ell_val)
-        
-        return u_ell_interp
+
+        return vmap_interp(ell_target, ell_native, u_ell_val)
 
 
 

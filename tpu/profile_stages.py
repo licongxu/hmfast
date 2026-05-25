@@ -1,4 +1,15 @@
-"""Profile individual stages of the tSZ Cl pipeline to find bottlenecks."""
+"""Profile individual stages of the tSZ Cl pipeline to find bottlenecks.
+
+Run with::
+
+    PYTHONPATH=~/hmfast/src JAX_PLATFORMS=tpu HMFAST_JAX_ENABLE_X64=0 \
+        python3 tpu/profile_stages.py
+
+Reports median wall-time (5 runs, post-warmup) for each pipeline stage.
+On lxu-persistent (TPU v6 lite) the dominant cost is the per-z vmap over
+``profile.u_k(...)`` — see ``tpu/README.md`` for the analysis and the
+acceleration path forward.
+"""
 import time
 import jax
 import jax.numpy as jnp
