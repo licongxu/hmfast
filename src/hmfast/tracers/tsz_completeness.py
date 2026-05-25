@@ -73,11 +73,81 @@ from hmfast.halos.mass_definition import MassDefinition, convert_m_delta
 
 
 # ----------------------------------------------------------------------
-# Path defaults — the Planck/cosmocnc-style SZiFi noise files live under
-# the tszpower scratch directory by default; users can override per call.
+# Path defaults — the Planck/cosmocnc-style SZiFi noise files are large
+# user-supplied data products and are NOT shipped with hmfast. Users
+# must either pass explicit paths to :func:`load_sigma_y0_curve` /
+# :func:`build_snr_grid` or set the environment variables below.
+#
+# Environment variables (recommended for repeated use)
+# ----------------------------------------------------
+# ``HMFAST_TSZ_SIGMA_OBJ_FILE``
+#     Path to the SZiFi ``sigma_dict_*.npy`` file (loaded with
+#     ``np.load(allow_pickle=True).item()`` — only point this at files
+#     you trust).
+# ``HMFAST_TSZ_SKYFR_FILE``
+#     Path to the matching ``skyfracs_*.npy`` array.
 # ----------------------------------------------------------------------
-DEFAULT_SIGMA_OBJ_FILE = "/scratch/scratch-lxu/tszsbi/noise_files/sigma_dict_szifi.npy"
-DEFAULT_SKYFR_FILE = "/scratch/scratch-lxu/tszsbi/noise_files/skyfracs_szifi_cosmology.npy"
+SIGMA_OBJ_FILE_ENV = "HMFAST_TSZ_SIGMA_OBJ_FILE"
+SKYFR_FILE_ENV = "HMFAST_TSZ_SKYFR_FILE"
+
+
+def get_default_sigma_obj_file() -> str | None:
+    """Return the SZiFi sigma-object file path from the environment.
+
+    Reads :envvar:`HMFAST_TSZ_SIGMA_OBJ_FILE` and returns its value, or
+    ``None`` if the variable is not set. Callers are expected to either
+    use the returned value or pass an explicit path.
+    """
+    return os.environ.get(SIGMA_OBJ_FILE_ENV)
+
+
+def get_default_skyfr_file() -> str | None:
+    """Return the SZiFi sky-fraction file path from the environment.
+
+    Reads :envvar:`HMFAST_TSZ_SKYFR_FILE` and returns its value, or
+    ``None`` if the variable is not set.
+    """
+    return os.environ.get(SKYFR_FILE_ENV)
+
+
+def _resolve_noise_paths(
+    sigma_obj_file: str | None,
+    skyfr_file: str | None,
+) -> tuple[str, str]:
+    """Resolve user-supplied / env-var noise file paths.
+
+    Precedence: explicit argument > environment variable > error.
+    """
+    sigma_obj_file = sigma_obj_file or get_default_sigma_obj_file()
+    skyfr_file = skyfr_file or get_default_skyfr_file()
+
+    missing = []
+    if not sigma_obj_file:
+        missing.append(
+            f"sigma_obj_file (or set ${SIGMA_OBJ_FILE_ENV})"
+        )
+    if not skyfr_file:
+        missing.append(
+            f"skyfr_file (or set ${SKYFR_FILE_ENV})"
+        )
+    if missing:
+        raise FileNotFoundError(
+            "hmfast.tracers.tsz_completeness needs the SZiFi noise "
+            "files but none were provided. Missing: "
+            + ", ".join(missing)
+            + ". Pass the paths explicitly or export the corresponding "
+            "environment variables."
+        )
+
+    for label, path in (("sigma_obj_file", sigma_obj_file),
+                        ("skyfr_file", skyfr_file)):
+        if not os.path.isfile(path):
+            raise FileNotFoundError(
+                f"hmfast.tracers.tsz_completeness: {label}={path!r} "
+                "does not exist or is not a regular file."
+            )
+
+    return sigma_obj_file, skyfr_file
 
 
 # ----------------------------------------------------------------------
@@ -204,8 +274,8 @@ def _load_sigma_skyavg_cached(
 
 
 def load_sigma_y0_curve(
-    sigma_obj_file: str = DEFAULT_SIGMA_OBJ_FILE,
-    skyfr_file: str = DEFAULT_SKYFR_FILE,
+    sigma_obj_file: str | None = None,
+    skyfr_file: str | None = None,
     filter_name: str = "immf6",
     theta_min: float = 0.5,
     theta_max: float = 32.0,
@@ -217,6 +287,16 @@ def load_sigma_y0_curve(
     SZiFi tiles. ``poly_deg=3`` matches the ``cosmocnc`` / ``tszpower``
     default (``compute_sigma_y0`` polynomial fit).
 
+    Parameters
+    ----------
+    sigma_obj_file, skyfr_file : str, optional
+        Paths to the SZiFi ``sigma_dict`` and ``skyfracs`` ``.npy`` files.
+        If ``None``, the environment variables
+        :envvar:`HMFAST_TSZ_SIGMA_OBJ_FILE` and
+        :envvar:`HMFAST_TSZ_SKYFR_FILE` are used. A clear
+        :class:`FileNotFoundError` is raised when neither source provides
+        the path.
+
     Returns
     -------
     coeff : np.ndarray
@@ -226,6 +306,9 @@ def load_sigma_y0_curve(
         Min and max of :math:`\log\theta_{500}` covered by the input
         sigma curve (in arcmin). Useful for diagnostics; not enforced.
     """
+    sigma_obj_file, skyfr_file = _resolve_noise_paths(
+        sigma_obj_file, skyfr_file,
+    )
     theta_grid, sigma_skyavg = _load_sigma_skyavg_cached(
         sigma_obj_file, skyfr_file, filter_name, theta_min, theta_max,
     )
@@ -279,8 +362,8 @@ def build_snr_grid(
     alpha_SZ: float,
     B: float,
     *,
-    sigma_obj_file: str = DEFAULT_SIGMA_OBJ_FILE,
-    skyfr_file: str = DEFAULT_SKYFR_FILE,
+    sigma_obj_file: str | None = None,
+    skyfr_file: str | None = None,
     filter_name: str = "immf6",
     theta_min: float = 0.5,
     theta_max: float = 32.0,
@@ -452,8 +535,10 @@ def conditional_An_undetected_sharp(
 
 
 __all__ = [
-    "DEFAULT_SIGMA_OBJ_FILE",
-    "DEFAULT_SKYFR_FILE",
+    "SIGMA_OBJ_FILE_ENV",
+    "SKYFR_FILE_ENV",
+    "get_default_sigma_obj_file",
+    "get_default_skyfr_file",
     "compute_y0_parametric",
     "compute_theta500_arcmin",
     "load_sigma_y0_curve",
