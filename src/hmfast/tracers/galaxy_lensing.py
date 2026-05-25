@@ -8,7 +8,9 @@ from hmfast.utils import Const
 from hmfast.download import get_default_data_path
 
 
-jax.config.update("jax_enable_x64", True)
+from hmfast.jax_platform import configure_jax
+
+configure_jax()
 
 class GalaxyLensingTracer(Tracer):
     """

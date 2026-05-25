@@ -7,7 +7,7 @@ import jax.numpy as jnp
 import jax.scipy as jscipy
 from typing import Dict, Any, Optional, Callable
 from functools import partial
-from mcfit import TophatVar
+from hmfast.mcfit_compat import TophatVar
 
 
 def _simpson_nonuniform(y, x, axis=-1):
@@ -83,7 +83,9 @@ from hmfast.halos.concentration import D08Concentration, B13Concentration
 from hmfast.halos.mass_definition import MassDefinition
 from hmfast.cosmology import Cosmology
 
-jax.config.update("jax_enable_x64", True)
+from hmfast.jax_platform import configure_jax, float_dtype
+
+configure_jax()
 
 
 class HaloModel:
@@ -145,7 +147,8 @@ class HaloModel:
         # Create TophatVar instance once to instantiate it
         dummy_k, _ = self.cosmology.pk(1., linear=True)
         h = self.cosmology.H0 / 100.0
-        self._tophat_instance = partial(TophatVar(dummy_k / h, lowring=True, backend='jax'), extrap=True)
+        k_tophat = jnp.asarray(dummy_k / h, dtype=float_dtype())
+        self._tophat_instance = partial(TophatVar(k_tophat, lowring=True, backend='jax'), extrap=True)
 
 
     def _tree_flatten(self):

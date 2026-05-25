@@ -3,7 +3,7 @@ import jax.numpy as jnp
 import jax.scipy as jscipy
 from functools import partial
 from abc import ABC, abstractmethod
-from mcfit import TophatVar
+from hmfast.mcfit_compat import TophatVar
 
 
 class HaloBias(ABC):

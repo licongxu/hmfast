@@ -197,19 +197,20 @@ class EmulatorLoaderPCA:
         self.load(filename) 
         
         # Convert to JAX arrays
-        self.parameters_mean = jnp.array(self.parameters_mean_, dtype=jnp.float64)
-        self.parameters_std = jnp.array(self.parameters_std_, dtype=jnp.float64)
-        self.pca_mean = jnp.array(self.pca_mean_, dtype=jnp.float64)
-        self.pca_std = jnp.array(self.pca_std_, dtype=jnp.float64)
-        self.features_mean = jnp.array(self.features_mean_, dtype=jnp.float64)
-        self.features_std = jnp.array(self.features_std_, dtype=jnp.float64)
-        self.pca_transform_matrix = jnp.array(self.pca_transform_matrix_, dtype=jnp.float64)
+        _fd = float_dtype()
+        self.parameters_mean = jnp.array(self.parameters_mean_, dtype=_fd)
+        self.parameters_std = jnp.array(self.parameters_std_, dtype=_fd)
+        self.pca_mean = jnp.array(self.pca_mean_, dtype=_fd)
+        self.pca_std = jnp.array(self.pca_std_, dtype=_fd)
+        self.features_mean = jnp.array(self.features_mean_, dtype=_fd)
+        self.features_std = jnp.array(self.features_std_, dtype=_fd)
+        self.pca_transform_matrix = jnp.array(self.pca_transform_matrix_, dtype=_fd)
         
         # Convert weights and biases to JAX arrays
-        self.W_ = [jnp.array(w, dtype=jnp.float64) for w in self.W_]
-        self.b_ = [jnp.array(b, dtype=jnp.float64) for b in self.b_]
-        self.alphas_ = [jnp.array(alpha, dtype=jnp.float64) for alpha in self.alphas_]
-        self.betas_ = [jnp.array(beta, dtype=jnp.float64) for beta in self.betas_]
+        self.W_ = [jnp.array(w, dtype=_fd) for w in self.W_]
+        self.b_ = [jnp.array(b, dtype=_fd) for b in self.b_]
+        self.alphas_ = [jnp.array(alpha, dtype=_fd) for alpha in self.alphas_]
+        self.betas_ = [jnp.array(beta, dtype=_fd) for beta in self.betas_]
     
     def load(self, filename: str) -> None:
         """Load pre-trained PCA+NN model from .npz file."""

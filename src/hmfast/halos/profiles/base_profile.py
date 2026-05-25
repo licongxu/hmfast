@@ -2,7 +2,8 @@ import os
 import numpy as np
 import jax
 import jax.numpy as jnp
-import mcfit
+from hmfast.mcfit_compat import Hankel as McfitHankel
+from hmfast.jax_platform import float_dtype
 import functools
 from jax.scipy.special import sici
 from jax.tree_util import register_pytree_node_class
@@ -17,7 +18,8 @@ class HankelTransform:
         self._x_shape = x.shape
         self._x_hash = hash(bytes(np.asarray(x).tobytes()))
         self._nu = nu
-        self._hankel = mcfit.Hankel(x, nu=nu, lowring=True, backend='jax')
+        x_jax = jnp.asarray(x, dtype=float_dtype())
+        self._hankel = McfitHankel(x_jax, nu=nu, lowring=True, backend='jax')
         self._hankel_jit = jax.jit(functools.partial(self._hankel, extrap=False))
 
     def transform(self, f_theta):

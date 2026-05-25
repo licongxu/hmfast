@@ -7,7 +7,9 @@ from hmfast.download import get_default_data_path
 from hmfast.utils import Const
 from functools import partial
 
-jax.config.update("jax_enable_x64", True)
+from hmfast.jax_platform import configure_jax, float_dtype
+
+configure_jax()
 
 
 _COSMO_MODELS = {
@@ -225,11 +227,11 @@ class Cosmology:
     # ------------------------------------------------------------------
 
     def _z_grid_bg(self):
-        return jnp.linspace(0.0, 20.0, 5000, dtype=jnp.float64) 
+        return jnp.linspace(0.0, 20.0, 5000, dtype=float_dtype()) 
 
     def _z_grid_pk(self):
         z_max = jnp.where(self.emulator_set == "ede:v2", 20.0, 5.0)
-        return jnp.linspace(0.0, z_max, 100, dtype=jnp.float64)     # z grid for Pk(z)
+        return jnp.linspace(0.0, z_max, 100, dtype=float_dtype())     # z grid for Pk(z)
 
     def _pk_grid(self):
         is_ede_v2 = (self.emulator_set == "ede:v2")
@@ -238,7 +240,7 @@ class Cosmology:
 
         n_downsample_k = 1 if is_ede_v2 else 10
         n_k            = 1000 if is_ede_v2 else 5000
-        _k_grid = jnp.geomspace(k_min, k_max, n_k, dtype=jnp.float64)[::n_downsample_k]
+        _k_grid = jnp.geomspace(k_min, k_max, n_k, dtype=float_dtype())[::n_downsample_k]
 
         if is_ede_v2:
             _pk_power_fac = _k_grid ** (-3)
