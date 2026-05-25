@@ -224,7 +224,11 @@ class T08HaloMass(HaloMass):
         # raw value introduces ~1% bias at intermediate (M, z). Interpolating
         # log(dn/dlnM) on the same (ln(1+z), ln M) grid and exp-ing back
         # matches tszpower (massfuncs.py:272-274 and 290-298).
-        log_dn_grid = jnp.log(jnp.clip(dn_dlnM_grid, 1e-300, None))
+        # Floor must be representable in the working dtype: float32 underflows
+        # 1e-300 to 0, so log(0) -> -inf and downstream RegularGridInterpolator
+        # produces NaN. Use the smallest normal float for the active dtype.
+        floor = jnp.finfo(dn_dlnM_grid.dtype).tiny
+        log_dn_grid = jnp.log(jnp.clip(dn_dlnM_grid, floor, None))
         _hmf_interp = jscipy.interpolate.RegularGridInterpolator(
             (ln_x_grid, ln_M_grid), log_dn_grid)
         mm, zz = jnp.meshgrid(m, z, indexing='ij')
@@ -348,7 +352,11 @@ class T10HaloMass(HaloMass):
         # raw value introduces ~1% bias at intermediate (M, z). Interpolating
         # log(dn/dlnM) on the same (ln(1+z), ln M) grid and exp-ing back
         # matches tszpower (massfuncs.py:272-274 and 290-298).
-        log_dn_grid = jnp.log(jnp.clip(dn_dlnM_grid, 1e-300, None))
+        # Floor must be representable in the working dtype: float32 underflows
+        # 1e-300 to 0, so log(0) -> -inf and downstream RegularGridInterpolator
+        # produces NaN. Use the smallest normal float for the active dtype.
+        floor = jnp.finfo(dn_dlnM_grid.dtype).tiny
+        log_dn_grid = jnp.log(jnp.clip(dn_dlnM_grid, floor, None))
         _hmf_interp = jscipy.interpolate.RegularGridInterpolator(
             (ln_x_grid, ln_M_grid), log_dn_grid)
         mm, zz = jnp.meshgrid(m, z, indexing='ij')

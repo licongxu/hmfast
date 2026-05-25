@@ -373,7 +373,20 @@ class Cosmology:
         p['Omega_cdm'] = p['omega_cdm'] / p['h']**2.
         
         # More cosmological params
-        p['Omega0_g'] = (4. * sigma_B / c * p['T_cmb']**4.) / (3.0 * c**2 * 1e10 * p['h']**2 / Mpc_over_m**2 /8.0 / jnp.pi / G)
+        # NOTE: the previous form
+        #     (4 sigma_B T^4 / c) / (3 c^2 * 1e10 * h^2 / Mpc_over_m**2 / 8 / pi / G)
+        # builds the intermediate ``Mpc_over_m**2 ≈ 9.5e44`` which exceeds the
+        # float32 maximum (~3.4e38). On TPU (float32 by default) that constant
+        # silently casts to +inf, making Omega0_g = 0, then Omega_Lambda = 1,
+        # then omega_m(z) finite-but-wrong, then sigma -> NaN downstream in
+        # the halo mass function. The rearrangement below keeps every
+        # intermediate within float32 range while remaining algebraically
+        # identical (see ``mpc_over_c = Mpc_over_m / c ≈ 1.03e14``).
+        mpc_over_c = Mpc_over_m / c
+        p['Omega0_g'] = (
+            (32.0 * jnp.pi * G * sigma_B * p['T_cmb']**4.0) * mpc_over_c**2
+            / (3.0 * c * 1e10 * p['h']**2)
+        )
         p['Omega0_ur'] = p['N_ur']* 7.0/8.0 * (4.0/11.0)**(4.0/3.0) * p['Omega0_g']
         p['Omega0_ncdm'] = p['deg_ncdm'] * p['m_ncdm'] / (93.14 * p['h']**2) ## valid only in standard cases, default T_ncdm etc
         p['Omega_Lambda'] = 1. - p['Omega0_g'] - p['Omega_b'] - p['Omega_cdm'] - p['Omega0_ncdm'] - p['Omega0_ur']
