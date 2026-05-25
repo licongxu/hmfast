@@ -296,40 +296,41 @@ class HaloModel:
         s1 = profile_scale1[None, None, :]
         s2 = profile_scale2[None, None, :]
 
-        def process_bin(i):
-            if is_same_tracer:
-                if tracer1.profile.has_central_contribution:
-                    sat, cen = tracer1.profile._sat_and_cen_contribution(self, k, m, z)
-                    sat_y = sat * s1
-                    cen_y = cen * s1  # autocorr: s1 == s2
-                    uk_sq_row = sat_y[:, i, :] * sat_y[:, i, :] + 2.0 * sat_y[:, i, :] * cen_y[:, i, :]
-                else:
-                    u1 = tracer1.profile.u_k(self, k, m, z)
-                    u1_y = u1 * s1
-                    uk_sq_row = u1_y[:, i, :] * u1_y[:, i, :]
-            elif tracer1.profile.has_central_contribution and tracer2.profile.has_central_contribution:
-                sat1, cen1 = tracer1.profile._sat_and_cen_contribution(self, k, m, z)
-                sat2, cen2 = tracer2.profile._sat_and_cen_contribution(self, k, m, z)
-                sat1_y, cen1_y = sat1 * s1, cen1 * s1
-                sat2_y, cen2_y = sat2 * s2, cen2 * s2
-                uk_sq_row = (sat1_y[:, i, :] * sat2_y[:, i, :]
-                             + sat1_y[:, i, :] * cen2_y[:, i, :]
-                             + sat2_y[:, i, :] * cen1_y[:, i, :])
+        # Compute the full (Nk, Nm, Nz) "uk_sq" tensor in one pass.
+        # The previous form vmapped over the mass index and called
+        # ``profile.u_k(...)`` inside each iteration; XLA *can* hoist the
+        # invariant subexpression but the pattern is fragile and especially
+        # bad on TPU (small per-iteration dispatch). Computing once + a
+        # single reduction is structurally cleaner and lets the compiler
+        # fuse everything into one kernel.
+        if is_same_tracer:
+            if tracer1.profile.has_central_contribution:
+                sat, cen = tracer1.profile._sat_and_cen_contribution(self, k, m, z)
+                sat_y = sat * s1
+                cen_y = cen * s1  # autocorr: s1 == s2
+                uk_sq = sat_y * sat_y + 2.0 * sat_y * cen_y
             else:
                 u1 = tracer1.profile.u_k(self, k, m, z)
-                u2 = tracer2.profile.u_k(self, k, m, z)
                 u1_y = u1 * s1
-                u2_y = u2 * s2
-                uk_sq_row = u1_y[:, i, :] * u2_y[:, i, :]
+                uk_sq = u1_y * u1_y
+        elif tracer1.profile.has_central_contribution and tracer2.profile.has_central_contribution:
+            sat1, cen1 = tracer1.profile._sat_and_cen_contribution(self, k, m, z)
+            sat2, cen2 = tracer2.profile._sat_and_cen_contribution(self, k, m, z)
+            sat1_y, cen1_y = sat1 * s1, cen1 * s1
+            sat2_y, cen2_y = sat2 * s2, cen2 * s2
+            uk_sq = sat1_y * sat2_y + sat1_y * cen2_y + sat2_y * cen1_y
+        else:
+            u1 = tracer1.profile.u_k(self, k, m, z)
+            u2 = tracer2.profile.u_k(self, k, m, z)
+            u1_y = u1 * s1
+            u2_y = u2 * s2
+            uk_sq = u1_y * u2_y
 
-            return uk_sq_row * total_weights[i], uk_sq_row
-
-        integrand_rows, all_sq_profiles = jax.vmap(process_bin)(jnp.arange(len(m)))
-
-        pk1h = jnp.sum(integrand_rows, axis=0)
+        # Mass-axis integration in one shot: sum over Nm with HMF + log-mass weights.
+        pk1h = jnp.sum(uk_sq * total_weights[None, :, :], axis=1)
 
         # Halo-model consistency correction at the minimum mass bin.
-        uk_sq_min = all_sq_profiles[0]
+        uk_sq_min = uk_sq[:, 0, :]
         n_min, _, _ = self._counter_terms(m, z)
         correction = n_min[None, :] * uk_sq_min
         pk1h = pk1h + self.hm_consistency * correction
@@ -469,16 +470,14 @@ class HaloModel:
         n_min, b1_min, _ = self._counter_terms(m, z)
 
         def get_I(tracer, scale):
-            s = scale[None, :]  # (1, Nz)
-
-            def process_bin(i):
-                uk_full = tracer.profile.u_k(self, k, m, z)
-                uk_slice = uk_full[:, i, :] * s  # (Nk, Nz)
-                return uk_slice * total_weights[i], uk_slice
-
-            integrand_rows, all_profiles = jax.vmap(process_bin)(jnp.arange(len(m)))
-            integral = jnp.sum(integrand_rows, axis=0)
-            u_k_min = all_profiles[0]
+            # Compute u_k once over (Nk, Nm, Nz) and reduce in a single
+            # ``jnp.sum`` rather than vmapping over the mass index. Same
+            # rationale as ``_pk_1h_impl``: avoid recomputing the profile
+            # under vmap and let XLA fuse the m-axis reduction.
+            s = scale[None, None, :]  # (1, 1, Nz)
+            uk_full = tracer.profile.u_k(self, k, m, z) * s  # (Nk, Nm, Nz)
+            integral = jnp.sum(uk_full * total_weights[None, :, :], axis=1)
+            u_k_min = uk_full[:, 0, :]
             correction = b1_min[None, :] * n_min[None, :] * u_k_min
             return integral + self.hm_consistency * correction
 
