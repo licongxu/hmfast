@@ -9,6 +9,9 @@ __version__ = "0.1.0"
 __author__ = "Patrick Janulewicz, Licong Xu, Boris Bolliet"
 __email__ = "pj407@cam.ac.uk"
 
+from .jax_platform import configure_jax
+
+configure_jax()
 
 from .download import download_emulators
 

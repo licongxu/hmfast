@@ -6,7 +6,9 @@ from hmfast.tracers.base_tracer import Tracer
 from hmfast.utils import Const
 from hmfast.halos.profiles import DensityProfile, NFWDensityProfile, B16DensityProfile
 
-jax.config.update("jax_enable_x64", True)
+from hmfast.jax_platform import configure_jax
+
+configure_jax()
 
 class kSZTracer(Tracer):
     """
@@ -89,7 +91,14 @@ class kSZTracer(Tracer):
             kSZ kernel evaluated at redshift(s) :math:`z`.
         """
         # sigmaT / m_prot in physical Mpc^2 / Msun.
-        sigma_T_over_m_p = (Const._sigma_T_ / Const._m_p_) / Const._Mpc_over_m_**2 * Const._M_sun_
+        # Chained division (rather than `/ Mpc_over_m**2`) keeps every
+        # intermediate within float32 range. The literal Mpc_over_m**2
+        # is ~9.5e44 and overflows to +inf on TPU (float32 default),
+        # which used to zero this kernel out.
+        sigma_T_over_m_p = (
+            (Const._sigma_T_ / Const._m_p_) * Const._M_sun_
+            / Const._Mpc_over_m_ / Const._Mpc_over_m_
+        )
         return sigma_T_over_m_p / (1.0 + z)
 
 

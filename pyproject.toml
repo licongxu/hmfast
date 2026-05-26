@@ -33,6 +33,12 @@ dependencies = [
     "numpy>=1.20.0",
     "scipy>=1.7.0",
     "mcfit==0.0.22",
+    "requests>=2.20",
+    # The cosmopower emulator .npz files are pickled with references to
+    # tensorflow keras classes. We do not call any tensorflow ops at runtime
+    # (inference goes through the pure-JAX `EmulatorLoader`), but `tensorflow`
+    # must be importable for `numpy.load(..., allow_pickle=True)` to succeed.
+    "tensorflow>=2.10",
 ]
 
 [project.optional-dependencies]

@@ -7,7 +7,7 @@ import jax.numpy as jnp
 import jax.scipy as jscipy
 from typing import Dict, Any, Optional, Callable
 from functools import partial
-from mcfit import TophatVar
+from hmfast.mcfit_compat import TophatVar
 
 
 def _simpson_nonuniform(y, x, axis=-1):
@@ -83,7 +83,9 @@ from hmfast.halos.concentration import D08Concentration, B13Concentration
 from hmfast.halos.mass_definition import MassDefinition
 from hmfast.cosmology import Cosmology
 
-jax.config.update("jax_enable_x64", True)
+from hmfast.jax_platform import configure_jax, float_dtype
+
+configure_jax()
 
 
 class HaloModel:
@@ -145,7 +147,8 @@ class HaloModel:
         # Create TophatVar instance once to instantiate it
         dummy_k, _ = self.cosmology.pk(1., linear=True)
         h = self.cosmology.H0 / 100.0
-        self._tophat_instance = partial(TophatVar(dummy_k / h, lowring=True, backend='jax'), extrap=True)
+        k_tophat = jnp.asarray(dummy_k / h, dtype=float_dtype())
+        self._tophat_instance = partial(TophatVar(k_tophat, lowring=True, backend='jax'), extrap=True)
 
 
     def _tree_flatten(self):
@@ -259,6 +262,84 @@ class HaloModel:
         return n_min, b1_min, b2_min
 
 
+    def _pk_1h_impl(self, tracer1, tracer2, k, m, z, k_damp, profile_scale1, profile_scale2):
+        """Internal 1-halo computation with per-z multiplicative scales on each profile.
+
+        Mathematically equivalent to ``profile_scale1 * profile_scale2 * pk_1h``,
+        but the scales are folded into ``u_k`` **before** squaring. This is
+        essential for float32 stability when the absolute profile magnitudes
+        are very large (e.g. the tSZ pressure profile, where ``|u_k| ~ 1e20``
+        in CGS-Mpc units and ``u_k**2 ~ 1e40`` overflows the float32 maximum
+        of ~3.4e38). The tSZ tracer ``kernel ~ 1e-28`` absorbs the bulk of
+        that magnitude, so ``(kernel*u_k)**2 ~ 1e-16`` stays well within
+        float32 range.
+
+        Parameters
+        ----------
+        profile_scale1, profile_scale2 : array of shape ``(Nz,)``
+            Per-z multiplicative scale factors applied to ``u_k`` of each
+            tracer before the autocorrelation / cross-correlation product.
+        """
+        k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
+
+        logm = jnp.log(m)
+        dm = jnp.diff(logm)
+        w = jnp.concatenate([jnp.array([dm[0]]), dm[:-1] + dm[1:], jnp.array([dm[-1]])]) * 0.5
+
+        dndlnm = self.halo_mass_function.halo_mass_function(self, m, z)
+        total_weights = dndlnm * w[:, None]  # (Nm, Nz)
+
+        tracer2 = tracer1 if tracer2 is None else tracer2
+        is_same_tracer = tracer1 is tracer2
+
+        # Reshape scales for broadcasting against (Nk, Nm, Nz) profiles.
+        s1 = profile_scale1[None, None, :]
+        s2 = profile_scale2[None, None, :]
+
+        # Compute the full (Nk, Nm, Nz) "uk_sq" tensor in one pass.
+        # The previous form vmapped over the mass index and called
+        # ``profile.u_k(...)`` inside each iteration; XLA *can* hoist the
+        # invariant subexpression but the pattern is fragile and especially
+        # bad on TPU (small per-iteration dispatch). Computing once + a
+        # single reduction is structurally cleaner and lets the compiler
+        # fuse everything into one kernel.
+        if is_same_tracer:
+            if tracer1.profile.has_central_contribution:
+                sat, cen = tracer1.profile._sat_and_cen_contribution(self, k, m, z)
+                sat_y = sat * s1
+                cen_y = cen * s1  # autocorr: s1 == s2
+                uk_sq = sat_y * sat_y + 2.0 * sat_y * cen_y
+            else:
+                u1 = tracer1.profile.u_k(self, k, m, z)
+                u1_y = u1 * s1
+                uk_sq = u1_y * u1_y
+        elif tracer1.profile.has_central_contribution and tracer2.profile.has_central_contribution:
+            sat1, cen1 = tracer1.profile._sat_and_cen_contribution(self, k, m, z)
+            sat2, cen2 = tracer2.profile._sat_and_cen_contribution(self, k, m, z)
+            sat1_y, cen1_y = sat1 * s1, cen1 * s1
+            sat2_y, cen2_y = sat2 * s2, cen2 * s2
+            uk_sq = sat1_y * sat2_y + sat1_y * cen2_y + sat2_y * cen1_y
+        else:
+            u1 = tracer1.profile.u_k(self, k, m, z)
+            u2 = tracer2.profile.u_k(self, k, m, z)
+            u1_y = u1 * s1
+            u2_y = u2 * s2
+            uk_sq = u1_y * u2_y
+
+        # Mass-axis integration in one shot: sum over Nm with HMF + log-mass weights.
+        pk1h = jnp.sum(uk_sq * total_weights[None, :, :], axis=1)
+
+        # Halo-model consistency correction at the minimum mass bin.
+        uk_sq_min = uk_sq[:, 0, :]
+        n_min, _, _ = self._counter_terms(m, z)
+        correction = n_min[None, :] * uk_sq_min
+        pk1h = pk1h + self.hm_consistency * correction
+
+        mask = k_damp > 0
+        damping = jnp.where(mask, 1.0 - jnp.exp(-(k / jnp.where(mask, k_damp, 1.0))**2), 1.0)
+
+        return pk1h * damping[:, None]
+
     @jax.jit
     def pk_1h(self, tracer1, tracer2, k, m, z,  k_damp=0.01):
         """
@@ -294,58 +375,9 @@ class HaloModel:
             1-halo power spectrum in :math:`\\mathrm{Mpc}^3`, with shape
             :math:`(N_k, N_z)`.
         """
-    
-        k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
-        
-        # Weights and Setup
-        logm = jnp.log(m)
-        dm = jnp.diff(logm)
-        w = jnp.concatenate([jnp.array([dm[0]]), dm[:-1] + dm[1:], jnp.array([dm[-1]])]) * 0.5
-        
-        dndlnm = self.halo_mass_function.halo_mass_function(self, m, z)
-        total_weights = dndlnm * w[:, None] # (Nm, Nz)
-
-        # Use object identity (not ==) so JAX traces tracers as PyTrees; needed when B varies.
-        tracer2 = tracer1 if tracer2 is None else tracer2
-        is_same_tracer = tracer1 is tracer2
-
-        # Process a single mass bin at a time and extract the uk^2 at the lowest mass for the halo model consistency term
-        def process_bin(i):
-            # We need the profiles for index 'i' while squaring uk if the user is doing an autocorrelation
-            if is_same_tracer:
-                if tracer1.profile.has_central_contribution:
-                    s1, c1 = tracer1.profile._sat_and_cen_contribution(self, k, m, z)
-                    uk_sq_row = s1[:, i, :] * s1[:, i, :] + 2.0 * s1[:, i, :] * c1[:, i, :]
-                else:
-                    u1 = tracer1.profile.u_k(self, k, m, z)
-                    uk_sq_row = u1[:, i, :] ** 2
-            elif tracer1.profile.has_central_contribution and tracer2.profile.has_central_contribution:
-                s1, c1 = tracer1.profile._sat_and_cen_contribution(self, k, m, z)
-                s2, c2 = tracer2.profile._sat_and_cen_contribution(self, k, m, z)
-                uk_sq_row = s1[:, i, :] * s2[:, i, :] + s1[:, i, :] * c2[:, i, :] + s2[:, i, :] * c1[:, i, :]
-            else:
-                u1 = tracer1.profile.u_k(self, k, m, z)
-                u2 = tracer2.profile.u_k(self, k, m, z)
-                uk_sq_row = u1[:, i, :] * u2[:, i, :]
-    
-            return uk_sq_row * total_weights[i], uk_sq_row
-    
-        # vmap through the mass bins
-        integrand_rows, all_sq_profiles = jax.vmap(process_bin)(jnp.arange(len(m)))
-    
-        pk1h = jnp.sum(integrand_rows, axis=0)
-    
-        # Apply halo model consistency correction: n_min * uk_sq_min 
-        uk_sq_min = all_sq_profiles[0] 
-        n_min, _, _ = self._counter_terms(m, z)
-        correction = n_min[None, :] * uk_sq_min
-        pk1h = pk1h + self.hm_consistency * correction
-    
-        # Apply damping
-        mask = k_damp > 0
-        damping = jnp.where(mask, 1.0 - jnp.exp(-(k / jnp.where(mask, k_damp, 1.0))**2), 1.0)
-    
-        return pk1h * damping[:, None]
+        z_arr = jnp.atleast_1d(z)
+        ones = jnp.ones_like(z_arr, dtype=float_dtype())
+        return self._pk_1h_impl(tracer1, tracer2, k, m, z_arr, k_damp, ones, ones)
             
        
     @jax.jit
@@ -385,26 +417,169 @@ class HaloModel:
 
         tracer2 = tracer1 if tracer2 is None else tracer2
 
-        # Define the slice function to map l -> k for a specific z
-        def get_pk_slice(zi):
-            chi_i = self.cosmology.angular_diameter_distance(zi) * (1 + zi) 
-            ki = (l + 0.5) / chi_i
-            pk = self.pk_1h(tracer1, tracer2, k=ki, m=m, z=jnp.atleast_1d(zi), k_damp=k_damp)
-            return pk.flatten()
-
-        # Get the halo model pk_1h, the kernel, and the comoving volume
-        P_1h_grid = jax.vmap(get_pk_slice)(z)
         kernel1 = tracer1.kernel(self.cosmology, z)
         kernel2 = tracer2.kernel(self.cosmology, z)
-        # Comoving volume in physical Mpc³ (paired with HMF in 1/Mpc³).
         comov_vol = self.cosmology.comoving_volume_element(z)
 
-        # Integrate over redshift
-        integrand = P_1h_grid * (comov_vol[:, None] * kernel1[:, None] * kernel2[:, None])
-        
+        P_y_grid = self._cl_1h_pressure_fast(
+            tracer1, tracer2, l, m, z, k_damp, kernel1, kernel2
+        )
+
+        integrand = P_y_grid * comov_vol[:, None]
         return jnp.trapezoid(integrand, x=z, axis=0)
+
+    def _cl_1h_pressure_fast(self, tracer1, tracer2, l, m, z, k_damp,
+                              kernel1, kernel2):
+        """Fast 1-halo Limber grid for pressure-like profiles.
+
+        Computes the native Hankel transform ONCE for all (m, z) and then
+        does cheap per-z interpolation to the Limber k-grid. This avoids
+        re-running the expensive Hankel FFT for every z-slice.
+
+        Performance notes (TPU-specific):
+        - ``_counter_terms`` is hoisted out of the vmap to avoid redundant
+          HMF / bias recomputation (saves ~25 ms on TPU v6 lite).
+        - Arrays are transposed so the z-axis is leading before the vmap,
+          eliminating dynamic-index gathers that are very expensive on the
+          TPU scalar unit (saves another ~25 ms).
+        """
+        from hmfast.halos.profiles.pressure import PressureProfile
+
+        is_same_tracer = tracer1 is tracer2
+        has_fast = (isinstance(tracer1.profile, PressureProfile)
+                    and (is_same_tracer or isinstance(tracer2.profile, PressureProfile)))
+
+        if not has_fast:
+            def get_pk_slice(zi, k1, k2):
+                chi_i = self.cosmology.angular_diameter_distance(zi) * (1 + zi)
+                ki = (l + 0.5) / chi_i
+                pk_y = self._pk_1h_impl(
+                    tracer1, tracer2, k=ki, m=m, z=jnp.atleast_1d(zi),
+                    k_damp=k_damp,
+                    profile_scale1=jnp.atleast_1d(k1),
+                    profile_scale2=jnp.atleast_1d(k2),
+                )
+                return pk_y.flatten()
+            return jax.vmap(get_pk_slice)(z, kernel1, kernel2)
+
+        # --- Fast path: one Hankel transform for all (m, z) ---
+        l = jnp.atleast_1d(l)
+        m = jnp.atleast_1d(m)
+        z = jnp.atleast_1d(z)
+
+        k_nat1, ed1, u_ell1 = tracer1.profile._u_ell_native(self, m, z)
+        if is_same_tracer:
+            k_nat2, ed2, u_ell2 = k_nat1, ed1, u_ell1
+        else:
+            k_nat2, ed2, u_ell2 = tracer2.profile._u_ell_native(self, m, z)
+
+        logm = jnp.log(m)
+        dm = jnp.diff(logm)
+        w = jnp.concatenate([jnp.array([dm[0]]), dm[:-1] + dm[1:], jnp.array([dm[-1]])]) * 0.5
+        dndlnm = self.halo_mass_function.halo_mass_function(self, m, z)
+        total_weights = dndlnm * w[:, None]  # (Nm, Nz)
+
+        d_A = self.cosmology.angular_diameter_distance(z)
+        chi = d_A * (1 + z)
+
+        n_min, _, _ = self._counter_terms(m, z)
+
+        mask = k_damp > 0
+        Nk_nat = k_nat1.shape[0]
+
+        # Transpose to z-leading layout to avoid dynamic-index gathers.
+        u_ell1_t = jnp.transpose(u_ell1, (2, 1, 0))   # (Nz, Nm, Nk)
+        ed1_t = ed1.T                                   # (Nz, Nm)
+        total_weights_t = total_weights.T                # (Nz, Nm)
+        if not is_same_tracer:
+            u_ell2_t = jnp.transpose(u_ell2, (2, 1, 0))
+            ed2_t = ed2.T
+
+        def _one_z(un1, ed1_z, tw, k1z, k2z, n_min_z, chi_z, *extra):
+            """Per-z slice: interpolate on FIXED k_native grid, then mass-integrate."""
+            # Query points: ell_target / ell_delta → on fixed k_nat1 grid.
+            q1 = l[None, :] / ed1_z[:, None]  # (Nm, Nell)
+            idx1 = jnp.clip(jnp.searchsorted(k_nat1, q1, side='right') - 1, 0, Nk_nat - 2)
+            x0 = k_nat1[idx1]
+            frac1 = (q1 - x0) / (k_nat1[idx1 + 1] - x0)
+
+            def _gather(ui, idx_m, frac_m):
+                return (ui[idx_m] * (1 - frac_m) + ui[idx_m + 1] * frac_m)
+            u1 = jax.vmap(_gather)(un1, idx1, frac1) * k1z  # (Nm, Nell)
+
+            if is_same_tracer:
+                u2 = u1
+            else:
+                un2, ed2_z = extra
+                q2 = l[None, :] / ed2_z[:, None]
+                idx2 = jnp.clip(jnp.searchsorted(k_nat2, q2, side='right') - 1, 0, Nk_nat - 2)
+                x0_2 = k_nat2[idx2]
+                frac2 = (q2 - x0_2) / (k_nat2[idx2 + 1] - x0_2)
+                u2 = jax.vmap(_gather)(un2, idx2, frac2) * k2z
+
+            uk_sq = u1 * u2  # (Nm, Nell)
+            pk_y = jnp.sum(uk_sq * tw[:, None], axis=0)  # (Nell,)
+
+            pk_y = pk_y + self.hm_consistency * n_min_z * uk_sq[0, :]
+
+            ki = (l + 0.5) / chi_z
+            damping = jnp.where(mask, 1.0 - jnp.exp(-(ki / jnp.where(mask, k_damp, 1.0))**2), 1.0)
+            return pk_y * damping
+
+        if is_same_tracer:
+            return jax.vmap(_one_z)(
+                u_ell1_t, ed1_t, total_weights_t,
+                kernel1, kernel2, n_min, chi,
+            )
+        else:
+            return jax.vmap(_one_z)(
+                u_ell1_t, ed1_t, total_weights_t,
+                kernel1, kernel2, n_min, chi,
+                u_ell2_t, ed2_t,
+            )
     
 
+
+    def _pk_2h_impl(self, tracer1, tracer2, k, m, z, profile_scale1, profile_scale2):
+        """Internal 2-halo computation with per-z multiplicative scales on each profile.
+
+        Same float32-stability rationale as ``_pk_1h_impl``: ``I_i(k,z)`` is a
+        mass-weighted sum of ``u_i`` (no squaring), then ``P_2h = P_lin * I_1
+        * I_2`` and ``cl_2h ∝ kernel_1 * kernel_2 * P_2h``. Folding each
+        kernel into its own ``I_i`` keeps the product within float32 range.
+        """
+        cparams = self.cosmology._cosmo_params()
+        h, k, m, z = cparams["h"], jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
+        tracer2 = tracer1 if tracer2 is None else tracer2
+
+        logm = jnp.log(m)
+        dm = jnp.diff(logm)
+        w = jnp.concatenate([jnp.array([dm[0]]), dm[:-1] + dm[1:], jnp.array([dm[-1]])]) * 0.5
+
+        dndlnm = self.halo_mass_function.halo_mass_function(self, m, z)
+        bias = self.halo_bias.halo_bias(self, m, z)
+        total_weights = dndlnm * bias * w[:, None]
+
+        n_min, b1_min, _ = self._counter_terms(m, z)
+
+        def get_I(tracer, scale):
+            # Compute u_k once over (Nk, Nm, Nz) and reduce in a single
+            # ``jnp.sum`` rather than vmapping over the mass index. Same
+            # rationale as ``_pk_1h_impl``: avoid recomputing the profile
+            # under vmap and let XLA fuse the m-axis reduction.
+            s = scale[None, None, :]  # (1, 1, Nz)
+            uk_full = tracer.profile.u_k(self, k, m, z) * s  # (Nk, Nm, Nz)
+            integral = jnp.sum(uk_full * total_weights[None, :, :], axis=1)
+            u_k_min = uk_full[:, 0, :]
+            correction = b1_min[None, :] * n_min[None, :] * u_k_min
+            return integral + self.hm_consistency * correction
+
+        I1 = get_I(tracer1, profile_scale1)
+        I2 = I1 if (tracer1 is tracer2 and profile_scale1 is profile_scale2) else get_I(tracer2, profile_scale2)
+
+        P_lin = jax.vmap(lambda zi: jnp.interp(h * k, *self.cosmology.pk(zi, linear=True)))(z).T * h**6
+
+        return P_lin * I1 * I2
 
     @jax.jit
     def pk_2h(self, tracer1, tracer2, k, m, z):
@@ -446,47 +621,9 @@ class HaloModel:
             2-halo power spectrum in :math:`\\mathrm{Mpc}^3`, with shape
             :math:`(N_k, N_z)`.
         """
-        
-        cparams = self.cosmology._cosmo_params()
-        h, k, m, z = cparams["h"], jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
-        tracer2 = tracer1 if tracer2 is None else tracer2
-    
-        # Weights and Ingredients
-        logm = jnp.log(m)
-        dm = jnp.diff(logm)
-        w = jnp.concatenate([jnp.array([dm[0]]), dm[:-1] + dm[1:], jnp.array([dm[-1]])]) * 0.5
-
-        # Combine hmf, bias, and weights into a single (Nm, Nz) weight grid
-        dndlnm = self.halo_mass_function.halo_mass_function(self, m, z)
-        bias = self.halo_bias.halo_bias(self, m, z)
-        total_weights = dndlnm * bias * w[:, None]
-    
-        def get_I(tracer):
-            # This function processes a single index 'i' of the mass axis
-            def process_bin(i):
-                uk_full = tracer.profile.u_k(self, k, m, z)
-                uk_slice = uk_full[:, i, :] 
-                return uk_slice * total_weights[i], uk_slice
-    
-            # Vmap over the indices 0...Nm-1, then integrate and pluck index 0 for hm consistency
-            integrand_rows, all_profiles = jax.vmap(process_bin)(jnp.arange(len(m)))
-            integral = jnp.sum(integrand_rows, axis=0)
-            u_k_min = all_profiles[0] # vmap output is (Nm, Nk, Nz)
-    
-            n_min, b1_min, _ = self._counter_terms(m, z)
-            correction = b1_min[None, :] * n_min[None, :] * u_k_min
-            
-            return integral + self.hm_consistency * correction
-    
-        # Final Power Spectrum
-        I1 = get_I(tracer1)
-        I2 = I1 if tracer1 is tracer2 else get_I(tracer2)
-        
-        # Reconstruct the legacy linear spectrum normalization used by the
-        # current halo-model projection chain so outputs remain unchanged.
-        P_lin = jax.vmap(lambda zi: jnp.interp(h * k, *self.cosmology.pk(zi, linear=True)))(z).T * h**6
-        
-        return P_lin * I1 * I2
+        z_arr = jnp.atleast_1d(z)
+        ones = jnp.ones_like(z_arr, dtype=float_dtype())
+        return self._pk_2h_impl(tracer1, tracer2, k, m, z_arr, ones, ones)
 
 
     @jax.jit
@@ -551,38 +688,6 @@ class HaloModel:
 
         is_same_tracer = tracer1 is tracer2
 
-        def trisp_slice(i):
-            zi = z[i]
-            chi_i = self.cosmology.angular_diameter_distance(zi) * (1.0 + zi)
-            k1 = (l1 + 0.5) / chi_i
-            k2 = (l2 + 0.5) / chi_i
-
-            u1_a = tracer1.profile.u_k(self, k1, m, jnp.atleast_1d(zi))[:, :, 0]  # (Nl1, Nm)
-            u1_b = tracer2.profile.u_k(self, k2, m, jnp.atleast_1d(zi))[:, :, 0]  # (Nl2, Nm)
-
-            if is_same_tracer:
-                u2_a = u1_a
-                u2_b = u1_b
-            else:
-                u2_a = tracer2.profile.u_k(self, k1, m, jnp.atleast_1d(zi))[:, :, 0]
-                u2_b = tracer1.profile.u_k(self, k2, m, jnp.atleast_1d(zi))[:, :, 0]
-
-            usq_a = u1_a * u2_a  # (Nl1, Nm)
-            usq_b = u1_b * u2_b  # (Nl2, Nm)
-
-            damp_a = _damping(k1)[:, None]
-            damp_b = _damping(k2)[:, None]
-            usq_a = usq_a * damp_a
-            usq_b = usq_b * damp_b
-
-            # Mass integral: weighted by dn/dlnM at this redshift
-            weight = dndlnm[:, i] * w  # (Nm,)
-            integrand = usq_a[:, None, :] * usq_b[None, :, :] * weight[None, None, :]
-            T_z = jnp.sum(integrand, axis=-1)  # (Nl1, Nl2)
-            return T_z
-
-        T_grid = jax.vmap(trisp_slice)(jnp.arange(z.shape[0]))  # (Nz, Nl1, Nl2)
-
         kernel1 = tracer1.kernel(self.cosmology, z)
         kernel2 = tracer2.kernel(self.cosmology, z)
         # Comoving volume in physical Mpc³ (paired with HMF in 1/Mpc³ after the
@@ -590,8 +695,44 @@ class HaloModel:
         # /h³ in halo_mass_function.
         comov_vol = self.cosmology.comoving_volume_element(z)
 
-        weight_z = comov_vol * (kernel1 ** 2) * (kernel2 ** 2)
-        integrand_z = T_grid * weight_z[:, None, None]
+        # Fold each tracer's per-z kernel into its u_k BEFORE squaring on the
+        # mass axis. Mathematically equivalent to ``(kernel1*kernel2)^2 ×
+        # T_grid`` outside, but the legacy form computes u**4 (or worse) in
+        # the m-integral and overflows float32 for the tSZ pressure profile.
+        def trisp_slice(i):
+            zi = z[i]
+            k1z = kernel1[i]
+            k2z = kernel2[i]
+            chi_i = self.cosmology.angular_diameter_distance(zi) * (1.0 + zi)
+            k1 = (l1 + 0.5) / chi_i
+            k2 = (l2 + 0.5) / chi_i
+
+            u1_a = tracer1.profile.u_k(self, k1, m, jnp.atleast_1d(zi))[:, :, 0] * k1z
+            u1_b = tracer2.profile.u_k(self, k2, m, jnp.atleast_1d(zi))[:, :, 0] * k2z
+
+            if is_same_tracer:
+                u2_a = u1_a
+                u2_b = u1_b
+            else:
+                u2_a = tracer2.profile.u_k(self, k1, m, jnp.atleast_1d(zi))[:, :, 0] * k2z
+                u2_b = tracer1.profile.u_k(self, k2, m, jnp.atleast_1d(zi))[:, :, 0] * k1z
+
+            usq_a = u1_a * u2_a
+            usq_b = u1_b * u2_b
+
+            damp_a = _damping(k1)[:, None]
+            damp_b = _damping(k2)[:, None]
+            usq_a = usq_a * damp_a
+            usq_b = usq_b * damp_b
+
+            weight = dndlnm[:, i] * w
+            integrand = usq_a[:, None, :] * usq_b[None, :, :] * weight[None, None, :]
+            T_z = jnp.sum(integrand, axis=-1)
+            return T_z
+
+        T_y_grid = jax.vmap(trisp_slice)(jnp.arange(z.shape[0]))
+
+        integrand_z = T_y_grid * comov_vol[:, None, None]
         return jnp.trapezoid(integrand_z, x=z, axis=0)
 
     @partial(jax.jit, static_argnames=())
@@ -641,21 +782,32 @@ class HaloModel:
 
         is_same_tracer = tracer1 is tracer2
 
+        kernel1 = tracer1.kernel(self.cosmology, z)
+        kernel2 = tracer2.kernel(self.cosmology, z)
+        # Comoving volume in physical Mpc³ (paired with HMF in 1/Mpc³ after the
+        # massfunc.py h³-removal). The previous ×h³ paired with the now-removed
+        # /h³ in halo_mass_function.
+        comov_vol = self.cosmology.comoving_volume_element(z)
+
+        # See ``trispectrum_1h`` for the float32 rationale: fold each per-z
+        # kernel into u_k before the m-axis squaring.
         def trisp_slice(i):
             zi = z[i]
+            k1z = kernel1[i]
+            k2z = kernel2[i]
             chi_i = self.cosmology.angular_diameter_distance(zi) * (1.0 + zi)
             k1 = (l1 + 0.5) / chi_i
             k2 = (l2 + 0.5) / chi_i
 
-            u1_a = tracer1.profile.u_k(self, k1, m, jnp.atleast_1d(zi))[:, :, 0]
-            u1_b = tracer2.profile.u_k(self, k2, m, jnp.atleast_1d(zi))[:, :, 0]
+            u1_a = tracer1.profile.u_k(self, k1, m, jnp.atleast_1d(zi))[:, :, 0] * k1z
+            u1_b = tracer2.profile.u_k(self, k2, m, jnp.atleast_1d(zi))[:, :, 0] * k2z
 
             if is_same_tracer:
                 u2_a = u1_a
                 u2_b = u1_b
             else:
-                u2_a = tracer2.profile.u_k(self, k1, m, jnp.atleast_1d(zi))[:, :, 0]
-                u2_b = tracer1.profile.u_k(self, k2, m, jnp.atleast_1d(zi))[:, :, 0]
+                u2_a = tracer2.profile.u_k(self, k1, m, jnp.atleast_1d(zi))[:, :, 0] * k2z
+                u2_b = tracer1.profile.u_k(self, k2, m, jnp.atleast_1d(zi))[:, :, 0] * k1z
 
             usq_a = u1_a * u2_a
             usq_b = u1_b * u2_b
@@ -665,22 +817,14 @@ class HaloModel:
             usq_a = usq_a * damp_a
             usq_b = usq_b * damp_b
 
-            weight = dndlnm[:, i] * w * mask_mz[:, i]  # (Nm,)
+            weight = dndlnm[:, i] * w * mask_mz[:, i]
             integrand = usq_a[:, None, :] * usq_b[None, :, :] * weight[None, None, :]
-            T_z = jnp.sum(integrand, axis=-1)  # (Nl1, Nl2)
+            T_z = jnp.sum(integrand, axis=-1)
             return T_z
 
-        T_grid = jax.vmap(trisp_slice)(jnp.arange(z.shape[0]))  # (Nz, Nl1, Nl2)
+        T_y_grid = jax.vmap(trisp_slice)(jnp.arange(z.shape[0]))
 
-        kernel1 = tracer1.kernel(self.cosmology, z)
-        kernel2 = tracer2.kernel(self.cosmology, z)
-        # Comoving volume in physical Mpc³ (paired with HMF in 1/Mpc³ after the
-        # massfunc.py h³-removal). The previous ×h³ paired with the now-removed
-        # /h³ in halo_mass_function.
-        comov_vol = self.cosmology.comoving_volume_element(z)
-
-        weight_z = comov_vol * (kernel1 ** 2) * (kernel2 ** 2)
-        integrand_z = T_grid * weight_z[:, None, None]
+        integrand_z = T_y_grid * comov_vol[:, None, None]
         return jnp.trapezoid(integrand_z, x=z, axis=0)
 
 
@@ -745,26 +889,6 @@ class HaloModel:
                              1.0 - jnp.exp(-(k_arr / jnp.where(damp_mask, k_damp, 1.0))**2),
                              1.0)
 
-        def slice_z(i):
-            zi = z[i]
-            chi_i = self.cosmology.angular_diameter_distance(zi) * (1.0 + zi)
-            ki = (l + 0.5) / chi_i
-            u1 = tracer1.profile.u_k(self, ki, m, jnp.atleast_1d(zi))[:, :, 0]  # (Nl, Nm)
-            if is_same_tracer:
-                u_sq = u1 * u1
-            else:
-                u2 = tracer2.profile.u_k(self, ki, m, jnp.atleast_1d(zi))[:, :, 0]
-                u_sq = u1 * u2
-            damp = _damping(ki)[:, None]
-            u_sq = u_sq * damp
-            # Mass integral via trapezoid in ln M (log-log HMF interp is the
-            # dominant accuracy fix; Simpson here gives only ~0.05% extra at
-            # 7x runtime cost on GPU).
-            mass_integrand = u_sq * (dndlnm[:, i] * mask_mz[:, i])[None, :]  # (Nl, Nm)
-            return jnp.trapezoid(mass_integrand, x=logm, axis=-1)            # (Nl,)
-
-        pk_grid = jax.vmap(slice_z)(jnp.arange(z.shape[0]))  # (Nz, Nl)
-
         kernel1 = tracer1.kernel(self.cosmology, z)
         kernel2 = tracer2.kernel(self.cosmology, z)
         # Use the comoving volume element in PHYSICAL Mpc³, matching the
@@ -772,9 +896,32 @@ class HaloModel:
         # (one on dV, the inverse on dn/dlnM) cancel mathematically but their
         # explicit cancellation was a source of sub-percent floating-point drift.
         comov_vol = self.cosmology.comoving_volume_element(z)
-        weight_z = comov_vol * kernel1 * kernel2
-        integrand = pk_grid * weight_z[:, None]
-        # z-integral via trapezoid (log-log HMF interp is the dominant fix).
+
+        # Fold per-z kernels into u_k BEFORE squaring so the mass integral stays
+        # within float32 dynamic range for high-magnitude profiles like tSZ
+        # pressure. Mathematically identical to multiplying kernel^2 outside.
+        def slice_z(i):
+            zi = z[i]
+            k1z = kernel1[i]
+            k2z = kernel2[i]
+            chi_i = self.cosmology.angular_diameter_distance(zi) * (1.0 + zi)
+            ki = (l + 0.5) / chi_i
+            u1 = tracer1.profile.u_k(self, ki, m, jnp.atleast_1d(zi))[:, :, 0]  # (Nl, Nm)
+            u1_y = u1 * k1z
+            if is_same_tracer:
+                u_y_sq = u1_y * u1_y
+            else:
+                u2 = tracer2.profile.u_k(self, ki, m, jnp.atleast_1d(zi))[:, :, 0]
+                u2_y = u2 * k2z
+                u_y_sq = u1_y * u2_y
+            damp = _damping(ki)[:, None]
+            u_y_sq = u_y_sq * damp
+            mass_integrand = u_y_sq * (dndlnm[:, i] * mask_mz[:, i])[None, :]
+            return jnp.trapezoid(mass_integrand, x=logm, axis=-1)
+
+        pk_y_grid = jax.vmap(slice_z)(jnp.arange(z.shape[0]))
+
+        integrand = pk_y_grid * comov_vol[:, None]
         return jnp.trapezoid(integrand, x=z, axis=0)
 
 
@@ -812,27 +959,122 @@ class HaloModel:
         """
         tracer2 = tracer1 if tracer2 is None else tracer2
 
-        # Define the slice function for Limber integration
-        def get_pk_slice(zi):
-            # Map l to k using the Limber approximation and then get the pk_2h  
-            chi_i = self.cosmology.angular_diameter_distance(zi) * (1 + zi) 
-            ki = (l + 0.5) / chi_i
-            return self.pk_2h(tracer1, tracer2, k=ki, m=m, z=jnp.atleast_1d(zi)).flatten()
-    
-        # Map over redshift to get P(k=l/chi, z)
-        P_2h_grid = jax.vmap(get_pk_slice)(z) 
-        
-        # Get individual kernels
         kernel1 = tracer1.kernel(self.cosmology, z)
         kernel2 = tracer2.kernel(self.cosmology, z)
-
-        # Comoving volume in physical Mpc³ (paired with HMF in 1/Mpc³).
         comov_vol = self.cosmology.comoving_volume_element(z)
-    
-        # Limber Integral: C_l = int dz P(k,z) * [W1 * W2 * dV/dz]
-        integrand = P_2h_grid * (comov_vol[:, None] * kernel1[:, None] * kernel2[:, None])
-        
+
+        P_y_grid = self._cl_2h_pressure_fast(
+            tracer1, tracer2, l, m, z, kernel1, kernel2
+        )
+
+        integrand = P_y_grid * comov_vol[:, None]
         return jnp.trapezoid(integrand, x=z, axis=0)
+
+    def _cl_2h_pressure_fast(self, tracer1, tracer2, l, m, z,
+                              kernel1, kernel2):
+        """Fast 2-halo Limber grid for pressure-like profiles.
+
+        Same TPU optimizations as ``_cl_1h_pressure_fast``: counter-terms
+        hoisted, z-leading array layout to avoid dynamic gathers.
+        """
+        from hmfast.halos.profiles.pressure import PressureProfile
+
+        is_same_tracer = tracer1 is tracer2
+        has_fast = (isinstance(tracer1.profile, PressureProfile)
+                    and (is_same_tracer or isinstance(tracer2.profile, PressureProfile)))
+
+        if not has_fast:
+            def get_pk_slice(zi, k1, k2):
+                chi_i = self.cosmology.angular_diameter_distance(zi) * (1 + zi)
+                ki = (l + 0.5) / chi_i
+                return self._pk_2h_impl(
+                    tracer1, tracer2, k=ki, m=m, z=jnp.atleast_1d(zi),
+                    profile_scale1=jnp.atleast_1d(k1),
+                    profile_scale2=jnp.atleast_1d(k2),
+                ).flatten()
+            return jax.vmap(get_pk_slice)(z, kernel1, kernel2)
+
+        # --- Fast path ---
+        l = jnp.atleast_1d(l)
+        m = jnp.atleast_1d(m)
+        z = jnp.atleast_1d(z)
+
+        k_nat1, ed1, u_ell1 = tracer1.profile._u_ell_native(self, m, z)
+        if is_same_tracer:
+            k_nat2, ed2, u_ell2 = k_nat1, ed1, u_ell1
+        else:
+            k_nat2, ed2, u_ell2 = tracer2.profile._u_ell_native(self, m, z)
+
+        cparams = self.cosmology._cosmo_params()
+        h = cparams["h"]
+
+        logm = jnp.log(m)
+        dm = jnp.diff(logm)
+        w = jnp.concatenate([jnp.array([dm[0]]), dm[:-1] + dm[1:], jnp.array([dm[-1]])]) * 0.5
+        dndlnm = self.halo_mass_function.halo_mass_function(self, m, z)
+        bias = self.halo_bias.halo_bias(self, m, z)
+        total_weights = dndlnm * bias * w[:, None]  # (Nm, Nz)
+
+        n_min, b1_min, _ = self._counter_terms(m, z)
+        d_A = self.cosmology.angular_diameter_distance(z)
+        chi = d_A * (1 + z)
+
+        def _plin_at_z(zi_chi):
+            zi, chi_i = zi_chi
+            ki = (l + 0.5) / chi_i
+            return jnp.interp(h * ki, *self.cosmology.pk(zi, linear=True)) * h**6
+        P_lin_all = jax.vmap(_plin_at_z)((z, chi))  # (Nz, Nell)
+
+        Nk_nat = k_nat1.shape[0]
+        u_ell1_t = jnp.transpose(u_ell1, (2, 1, 0))   # (Nz, Nm, Nk)
+        ed1_t = ed1.T                                   # (Nz, Nm)
+        total_weights_t = total_weights.T                # (Nz, Nm)
+        if not is_same_tracer:
+            u_ell2_t = jnp.transpose(u_ell2, (2, 1, 0))
+            ed2_t = ed2.T
+
+        def _one_z(un1, ed1_z, tw, k1z, k2z, n_min_z, b1_min_z, P_lin_z, *extra):
+            q1 = l[None, :] / ed1_z[:, None]
+            idx1 = jnp.clip(jnp.searchsorted(k_nat1, q1, side='right') - 1, 0, Nk_nat - 2)
+            x0 = k_nat1[idx1]
+            frac1 = (q1 - x0) / (k_nat1[idx1 + 1] - x0)
+
+            def _gather(ui, idx_m, frac_m):
+                return ui[idx_m] * (1 - frac_m) + ui[idx_m + 1] * frac_m
+            u1 = jax.vmap(_gather)(un1, idx1, frac1) * k1z
+
+            if is_same_tracer:
+                u2 = u1
+            else:
+                un2, ed2_z = extra
+                q2 = l[None, :] / ed2_z[:, None]
+                idx2 = jnp.clip(jnp.searchsorted(k_nat2, q2, side='right') - 1, 0, Nk_nat - 2)
+                x0_2 = k_nat2[idx2]
+                frac2 = (q2 - x0_2) / (k_nat2[idx2 + 1] - x0_2)
+                u2 = jax.vmap(_gather)(un2, idx2, frac2) * k2z
+
+            I1 = jnp.sum(u1 * tw[:, None], axis=0)
+            I1 = I1 + self.hm_consistency * b1_min_z * n_min_z * u1[0, :]
+
+            if is_same_tracer:
+                I2 = I1
+            else:
+                I2 = jnp.sum(u2 * tw[:, None], axis=0)
+                I2 = I2 + self.hm_consistency * b1_min_z * n_min_z * u2[0, :]
+
+            return P_lin_z * I1 * I2
+
+        if is_same_tracer:
+            return jax.vmap(_one_z)(
+                u_ell1_t, ed1_t, total_weights_t,
+                kernel1, kernel2, n_min, b1_min, P_lin_all,
+            )
+        else:
+            return jax.vmap(_one_z)(
+                u_ell1_t, ed1_t, total_weights_t,
+                kernel1, kernel2, n_min, b1_min, P_lin_all,
+                u_ell2_t, ed2_t,
+            )
 
 
 jax.tree_util.register_pytree_node(

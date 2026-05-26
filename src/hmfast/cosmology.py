@@ -7,7 +7,9 @@ from hmfast.download import get_default_data_path
 from hmfast.utils import Const
 from functools import partial
 
-jax.config.update("jax_enable_x64", True)
+from hmfast.jax_platform import configure_jax, float_dtype
+
+configure_jax()
 
 
 _COSMO_MODELS = {
@@ -225,11 +227,11 @@ class Cosmology:
     # ------------------------------------------------------------------
 
     def _z_grid_bg(self):
-        return jnp.linspace(0.0, 20.0, 5000, dtype=jnp.float64) 
+        return jnp.linspace(0.0, 20.0, 5000, dtype=float_dtype()) 
 
     def _z_grid_pk(self):
         z_max = jnp.where(self.emulator_set == "ede:v2", 20.0, 5.0)
-        return jnp.linspace(0.0, z_max, 100, dtype=jnp.float64)     # z grid for Pk(z)
+        return jnp.linspace(0.0, z_max, 100, dtype=float_dtype())     # z grid for Pk(z)
 
     def _pk_grid(self):
         is_ede_v2 = (self.emulator_set == "ede:v2")
@@ -238,7 +240,7 @@ class Cosmology:
 
         n_downsample_k = 1 if is_ede_v2 else 10
         n_k            = 1000 if is_ede_v2 else 5000
-        _k_grid = jnp.geomspace(k_min, k_max, n_k, dtype=jnp.float64)[::n_downsample_k]
+        _k_grid = jnp.geomspace(k_min, k_max, n_k, dtype=float_dtype())[::n_downsample_k]
 
         if is_ede_v2:
             _pk_power_fac = _k_grid ** (-3)
@@ -371,7 +373,20 @@ class Cosmology:
         p['Omega_cdm'] = p['omega_cdm'] / p['h']**2.
         
         # More cosmological params
-        p['Omega0_g'] = (4. * sigma_B / c * p['T_cmb']**4.) / (3.0 * c**2 * 1e10 * p['h']**2 / Mpc_over_m**2 /8.0 / jnp.pi / G)
+        # NOTE: the previous form
+        #     (4 sigma_B T^4 / c) / (3 c^2 * 1e10 * h^2 / Mpc_over_m**2 / 8 / pi / G)
+        # builds the intermediate ``Mpc_over_m**2 ≈ 9.5e44`` which exceeds the
+        # float32 maximum (~3.4e38). On TPU (float32 by default) that constant
+        # silently casts to +inf, making Omega0_g = 0, then Omega_Lambda = 1,
+        # then omega_m(z) finite-but-wrong, then sigma -> NaN downstream in
+        # the halo mass function. The rearrangement below keeps every
+        # intermediate within float32 range while remaining algebraically
+        # identical (see ``mpc_over_c = Mpc_over_m / c ≈ 1.03e14``).
+        mpc_over_c = Mpc_over_m / c
+        p['Omega0_g'] = (
+            (32.0 * jnp.pi * G * sigma_B * p['T_cmb']**4.0) * mpc_over_c**2
+            / (3.0 * c * 1e10 * p['h']**2)
+        )
         p['Omega0_ur'] = p['N_ur']* 7.0/8.0 * (4.0/11.0)**(4.0/3.0) * p['Omega0_g']
         p['Omega0_ncdm'] = p['deg_ncdm'] * p['m_ncdm'] / (93.14 * p['h']**2) ## valid only in standard cases, default T_ncdm etc
         p['Omega_Lambda'] = 1. - p['Omega0_g'] - p['Omega_b'] - p['Omega_cdm'] - p['Omega0_ncdm'] - p['Omega0_ur']
