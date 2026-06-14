@@ -1,6 +1,7 @@
 import jax
 import jax.numpy as jnp
 import jax.scipy as jscipy
+import numpy as np
 from functools import partial
 from abc import ABC, abstractmethod
 from mcfit import TophatVar
@@ -358,6 +359,202 @@ class T10HaloMass(HaloMass):
 
 
 
+
+
+class MTHaloMass(HaloMass):
+    """
+    Halo mass function from the Mira-Titan Universe emulator
+    (`Bocquet et al. 2020 <https://ui.adsabs.harvard.edu/abs/2020ApJ...901....5B/abstract>`_).
+
+    Emulated spherical-overdensity mass function for the
+    :math:`M_\\mathrm{200c}` definition (200 times the critical density),
+    calibrated on the Mira-Titan Universe suite of :math:`w_0 w_a`-CDM
+    N-body simulations. The emulator is the external ``MiraTitanHMFemulator``
+    package; this class wraps it for use inside the JAX halo model.
+
+    Because the underlying emulator is a NumPy Gaussian-process model (not a
+    JAX function and not differentiable), the halo mass function cannot be
+    evaluated inside JIT directly. Instead :meth:`prepare` calls the emulator
+    once on the host to tabulate :math:`\\ln(dn/d\\ln M)` on a
+    :math:`(z, M)` grid, and :meth:`halo_mass_function` performs a pure-JAX
+    log-log interpolation over that frozen grid (the same interpolation used by
+    :class:`T08HaloMass` / :class:`T10HaloMass`). The grid is tied to the
+    cosmology passed to :meth:`prepare`; if the cosmology changes the model
+    must be re-prepared, and gradients do not flow through the cosmology.
+
+    Parameters
+    ----------
+    emulator : object, optional
+        An instantiated ``MiraTitanHMFemulator.Emulator``. If ``None`` the
+        emulator is imported and instantiated lazily on the first call to
+        :meth:`prepare`.
+    m_min_h : float, default 1e13
+        Lower edge of the mass grid in :math:`M_\\odot / h` (emulator-native
+        units). The Mira-Titan emulator is valid for
+        :math:`M_\\mathrm{200c} \\ge 10^{13} \\, M_\\odot / h`.
+    m_max_h : float, default 1e16
+        Upper edge of the mass grid in :math:`M_\\odot / h`.
+    n_mass : int, default 200
+        Number of (log-spaced) mass grid points.
+    n_z : int, default 60
+        Number of (linearly spaced) redshift grid points spanning
+        :math:`[0, z_\\max]`.
+    z_max : float, default 2.0
+        Maximum redshift of the tabulation grid. The emulator is defined for
+        :math:`z \\le 2.02`.
+    w0 : float, default -1.0
+        Dark-energy equation-of-state parameter :math:`w_0` passed to the
+        emulator. Defaults to ``-1.0`` (LCDM) rather than the cosmology's
+        ``w0_fld``, because the ``lcdm`` emulator sets carry a placeholder
+        ``w0_fld`` that does not affect the LCDM matter power spectrum. For a
+        genuine :math:`w`-CDM run, pass the cosmology's ``w0_fld`` explicitly.
+    wa : float, default 0.0
+        Dark-energy equation-of-state evolution parameter :math:`w_a`.
+
+    Notes
+    -----
+    Unit conventions follow the rest of ``hmfast``: :meth:`halo_mass_function`
+    takes ``m`` in physical :math:`M_\\odot` and returns :math:`dn/d\\ln M` in
+    comoving :math:`\\mathrm{Mpc}^{-3}`. The emulator natively returns
+    :math:`dn/d\\ln M` in :math:`(h / \\mathrm{Mpc})^3` for masses in
+    :math:`M_\\odot / h`; this class applies the :math:`h^3` and :math:`h`
+    conversions internally.
+
+    References
+    ----------
+    Bocquet et al. (2020), ApJ 901, 5, "The Mira-Titan Universe. III.
+    Emulation of the Halo Mass Function".
+    """
+
+    def __init__(self, emulator=None, m_min_h: float = 1e13, m_max_h: float = 1e16,
+                 n_mass: int = 200, n_z: int = 60, z_max: float = 2.0,
+                 w0: float = -1.0, wa: float = 0.0):
+        self.emulator = emulator
+        self.m_min_h = m_min_h
+        self.m_max_h = m_max_h
+        self.n_mass = n_mass
+        self.n_z = n_z
+        self.z_max = z_max
+        self.w0 = w0
+        self.wa = wa
+
+        # Frozen tabulation, populated by prepare().
+        self._ln_x_grid = None
+        self._ln_M_grid = None
+        self._log_dn_grid = None
+
+    def prepare(self, cosmology) -> "MTHaloMass":
+        """
+        Tabulate the emulated halo mass function for a fixed cosmology.
+
+        Calls the Mira-Titan emulator on the host (outside JIT) and stores the
+        resulting :math:`\\ln(dn/d\\ln M)` grid for later JAX interpolation.
+        Must be called before :meth:`halo_mass_function`, and re-called whenever
+        the cosmology changes.
+
+        Parameters
+        ----------
+        cosmology : Cosmology
+            Cosmology supplying the emulator input parameters via
+            :meth:`Cosmology._cosmo_params` and :meth:`Cosmology.sigma8`.
+
+        Returns
+        -------
+        MTHaloMass
+            ``self``, with the tabulation grid populated, to allow chaining.
+        """
+        if self.emulator is None:
+            import MiraTitanHMFemulator
+
+            self.emulator = MiraTitanHMFemulator.Emulator()
+
+        p = cosmology._cosmo_params()
+        h = float(p["h"])
+
+        w0 = float(self.w0)
+        requested_cosmology = {
+            "Ommh2": float(p["Omega0_m"]) * h**2,
+            "Ombh2": float(p["Omega_b"]) * h**2,
+            "Omnuh2": float(p["Omega0_ncdm"]) * h**2,
+            "n_s": float(p["n_s"]),
+            "h": h,
+            "sigma_8": float(cosmology.sigma8(0.0)),
+            "w_0": w0,
+            "w_a": float(self.wa),
+        }
+
+        # Mass grid in emulator-native Msun/h; redshift grid within [0, z_max].
+        M_grid_h = jnp.geomspace(self.m_min_h, self.m_max_h, self.n_mass)
+        z_grid = jnp.linspace(0.0, self.z_max, self.n_z)
+
+        # External Mira-Titan GP emulator is a host-side NumPy model: drop to
+        # numpy only at this boundary, then return immediately to jax.numpy.
+        # Emulator returns dn/dlnM in (h/Mpc)^3 with shape (n_z, n_mass).
+        hmf_emu = jnp.asarray(
+            self.emulator.predict(requested_cosmology, np.asarray(z_grid),
+                                  np.asarray(M_grid_h), get_errors=False)[0]
+        )
+        # Convert to comoving Mpc^-3 (physical convention used across hmfast).
+        dn_dlnM_grid = hmf_emu * h**3
+
+        self._ln_x_grid = jnp.log1p(z_grid)
+        self._ln_M_grid = jnp.log(M_grid_h / h)  # physical Msun
+        self._log_dn_grid = jnp.log(jnp.clip(dn_dlnM_grid, 1e-300, None))
+
+        return self
+
+    def _f_sigma(self, halo_model, sigma, z):
+        """Not defined for the Mira-Titan emulator.
+
+        The emulator predicts :math:`dn/d\\ln M` directly and does not expose a
+        :math:`f(\\sigma)` multiplicity function.
+        """
+        raise NotImplementedError(
+            "MTHaloMass wraps an emulator and has no f(sigma); "
+            "use halo_mass_function() after calling prepare()."
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def halo_mass_function(self, halo_model, m, z) -> jnp.ndarray:
+        """
+        Compute the emulated halo mass function :math:`dn/d\\ln M`.
+
+        Interpolates the frozen Mira-Titan tabulation (see :meth:`prepare`) in
+        log-log space on the :math:`(\\ln(1+z), \\ln M)` grid, matching the
+        interpolation convention of :class:`T08HaloMass`.
+
+        Parameters
+        ----------
+        halo_model : HaloModel
+            Halo model instance (unused beyond interface compatibility; the
+            cosmology dependence is frozen into the tabulation by
+            :meth:`prepare`).
+        m : array-like
+            Halo mass grid in physical :math:`M_\\odot` (:math:`M_\\mathrm{200c}`).
+        z : array-like
+            Redshift grid.
+
+        Returns
+        -------
+        dndlnM : array-like
+            Halo mass function values :math:`dn/d\\ln M` in comoving
+            :math:`\\mathrm{Mpc}^{-3}`, with shape :math:`(N_m, N_z)`.
+        """
+        if self._log_dn_grid is None:
+            raise RuntimeError(
+                "MTHaloMass.prepare(cosmology) must be called before "
+                "halo_mass_function()."
+            )
+
+        m = jnp.atleast_1d(m)
+        z = jnp.atleast_1d(z)
+
+        _hmf_interp = jscipy.interpolate.RegularGridInterpolator(
+            (self._ln_x_grid, self._ln_M_grid), self._log_dn_grid)
+        mm, zz = jnp.meshgrid(m, z, indexing="ij")
+        pts = jnp.stack([jnp.log(1.0 + zz), jnp.log(mm)], axis=-1)
+
+        return jnp.exp(_hmf_interp(pts))
 
 
 class SubHaloMass(ABC):
