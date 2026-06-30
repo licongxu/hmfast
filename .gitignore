@@ -211,6 +211,15 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
+# Paper / LaTeX (keep local only)
+paper/
+
+# MCMC chain outputs
+tutorial/chains/
+
+# Benchmark plot/data outputs (regenerate with benchmarks/*.py)
+benchmarks/results/
+
 # LaTeX build artifacts
 *.aux
 *.bbl
