@@ -12,6 +12,16 @@ import os
 import sys
 import time
 
+# Hide GPUs from TensorFlow (classy_szfast loads emulators in TF; the installed
+# TF binary does not support the Blackwell SM_120 GPU on this machine). JAX
+# uses CUDA directly and is unaffected by this TF-side device-visibility call,
+# so the hmfast (JAX) side still runs on GPU while TF (classy_sz) runs on CPU.
+import tensorflow as tf
+try:
+    tf.config.set_visible_devices([], "GPU")
+except RuntimeError:
+    pass
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -21,6 +31,7 @@ jax.config.update("jax_enable_x64", True)
 from hmfast.cosmology import Cosmology
 from hmfast.halos import HaloModel
 from hmfast.halos.mass_definition import MassDefinition
+from hmfast.halos.concentration import ConstantConcentration
 from hmfast.halos.profiles import ParametricGNFWPressureProfile
 from hmfast.tracers import tSZTracer
 from hmfast.tracers.tsz_completeness import (
@@ -33,6 +44,8 @@ sys.path.insert(0, "/scratch/scratch-lxu/tszsbi/tszpower")
 import tszpower.masked_tsz_ps_completeness as mp_comp
 import tszpower.parametric_profile as pp
 from tszpower.utils import ELL_EFF, ELL_MIN, ELL_MAX
+from tszpower.config import classy_sz
+from tszpower.initialise import initialise as _tszp_initialise
 
 _L_MAX = int(np.max(ELL_MAX - ELL_MIN + 1))
 _ELL_INT = ELL_MIN[:, None] + np.arange(_L_MAX)[None, :]
@@ -50,17 +63,23 @@ def bin_to_18(ell_in, Cl_in):
 
 
 FID = dict(
-    H0=73.8, omega_cdm=0.119, omega_b=0.022,
-    ln10_10A_s=2.9718, n_s=0.962, tau_reio=0.0544,
+    H0=67.66, omega_cdm=0.1193, omega_b=0.02242,
+    ln10_10A_s=2.9718, n_s=0.9665, tau_reio=0.0544,
 )
-FID_B = 1.0 / 0.709
-FID_A_SZ = -4.31
+FID_B = 1.41
+FID_A_SZ = -4.2373
 FID_ALPHA_SZ = 1.12
 FID_SIGMA_LNY = 0.173
 Q_CAT = 5.0
 
-M_MIN = 6.766e13
-M_MAX = 6.766e15
+# tszpower stores M in "M_sun/h" units (literal value = M_phys * h). At the
+# fiducial cosmology (h_fid = 0.6766) tszpower's literal M_min=6.766e13 maps
+# to physical M_min=1e14 M_sun. hmfast uses physical M_sun directly, so we
+# pass M_MIN=1e14 to hmfast and M_MIN_TSZP=6.766e13 to tszpower.
+M_MIN = 1e14            # physical M_sun, used for hmfast
+M_MAX = 1e16
+M_MIN_TSZP = 1e14 * (FID["H0"] / 100.0)   # M_sun/h, used for tszpower
+M_MAX_TSZP = 1e16 * (FID["H0"] / 100.0)
 Z_MIN = 0.005
 Z_MAX = 3.0
 N_GRID_MZ = 100
@@ -78,7 +97,9 @@ def benchmark_hmfast():
     hm = HaloModel(
         cosmology=cosmo,
         mass_definition=MassDefinition(500, "critical"),
+        concentration=ConstantConcentration(c=4.0),
         convert_masses=True,
+        hm_consistency=False,
     )
     prof = ParametricGNFWPressureProfile(
         A_SZ=FID_A_SZ, alpha_SZ=FID_ALPHA_SZ, B=FID_B,
@@ -121,14 +142,37 @@ def benchmark_hmfast():
 def benchmark_tszpower():
     params = {
         "H0": FID["H0"], "omega_b": FID["omega_b"], "omega_cdm": FID["omega_cdm"],
-        "ln10_10A_s": FID["ln10_10A_s"], "n_s": FID["n_s"], "tau_reio": FID["tau_reio"],
-        "B": FID_B, "A_SZ": FID_A_SZ, "alpha_SZ": FID_ALPHA_SZ,
-        "sigma_lnY": FID_SIGMA_LNY, "q_cat": Q_CAT,
+        "ln10^{10}A_s": FID["ln10_10A_s"], "n_s": FID["n_s"], "tau_reio": FID["tau_reio"],
+        "B": FID_B,
     }
+    # tszpower requires that classy_sz be initialised with the cosmology AND
+    # the {"jax": 1, "cosmo_model": 0, ...} fixed astro settings before the
+    # jit'd masked-tsz function is called (see _init_tszpower + _FIXED_ASTRO
+    # in tszpower_cobaya_theory_masked_scatter.py).
+    _FIXED_ASTRO = {
+        "M_min": M_MIN_TSZP, "M_max": M_MAX_TSZP,
+        "z_min": 5e-3, "z_max": 3.0,
+        "P0GNFW": 8.130, "c500": 1.156,
+        "gammaGNFW": 0.3292, "alphaGNFW": 1.0620, "betaGNFW": 5.4807,
+        "jax": 1, "cosmo_model": 0,
+    }
+    init = dict(_FIXED_ASTRO)
+    init.update({"H0": FID["H0"], "omega_b": FID["omega_b"], "omega_cdm": FID["omega_cdm"],
+                 "ln10^{10}A_s": FID["ln10_10A_s"], "n_s": FID["n_s"], "tau_reio": FID["tau_reio"],
+                 "B": FID_B})
+    classy_sz.set(init)
+    _tszp_initialise()
+    # Merge fixed-astro into the params dict (same as _build_pars in
+    # tszpower_cobaya_theory_masked_scatter.py)
+    params.update(_FIXED_ASTRO)
 
     print("\ntszpower: computing masked D_ell...")
     t0 = time.perf_counter()
-    Dl_tszpower = pp.compute_masked_tsz_Dell_binned_parametric(params)
+    Dl_tszpower = pp.compute_masked_tsz_Dell_binned_parametric(
+        params_values_dict=params,
+        A_SZ=FID_A_SZ, alpha_SZ=FID_ALPHA_SZ,
+        q_cat=Q_CAT, sigma_lnY=FID_SIGMA_LNY,
+    )
     elapsed = time.perf_counter() - t0
     print(f"tszpower timing: {elapsed*1000:.2f} ms")
     return Dl_tszpower
@@ -143,7 +187,9 @@ def benchmark_hmfast_trispectrum():
     hm = HaloModel(
         cosmology=cosmo,
         mass_definition=MassDefinition(500, "critical"),
+        concentration=ConstantConcentration(c=4.0),
         convert_masses=True,
+        hm_consistency=False,
     )
     prof = ParametricGNFWPressureProfile(
         A_SZ=FID_A_SZ, alpha_SZ=FID_ALPHA_SZ, B=FID_B,
@@ -187,12 +233,15 @@ def main():
     print("\n--- D_ell comparison (18 Planck bands) ---")
     print(f"{'Band':>5s} {'ell_eff':>8s} {'hmfast':>12s} {'tszpower':>12s} {'ratio':>10s} {'diff%':>8s}")
     print("-" * 60)
-    max_diff = 0
+    max_diff = 0.0
+    Dl_hmfast_np = np.array(jax.device_get(Dl_hmfast))
+    Dl_tszp_np   = np.array(jax.device_get(Dl_tszpower))
     for i in range(18):
-        r = Dl_hmfast[i] / Dl_tszpower[i]
-        d = abs(Dl_hmfast[i] - Dl_tszpower[i]) / abs(Dl_tszpower[i]) * 100
-        max_diff = max(max_diff, d)
-        print(f"{i:5d} {ELL_EFF[i]:8.1f} {Dl_hmfast[i]:12.6f} {Dl_tszpower[i]:12.6f} {r:10.6f} {d:8.3f}")
+        r = float(Dl_hmfast_np[i] / Dl_tszp_np[i])
+        d = float(abs(Dl_hmfast_np[i] - Dl_tszp_np[i]) / abs(Dl_tszp_np[i]) * 100.0)
+        if d > max_diff:
+            max_diff = d
+        print(f"{i:5d} {ELL_EFF[i]:8.1f} {Dl_hmfast_np[i]:12.6f} {Dl_tszp_np[i]:12.6f} {r:10.6f} {d:8.3f}")
 
     print(f"\nMax relative difference: {max_diff:.3f}%")
     print(f"hmfast per-sample time: {t_hmfast*1000:.2f} ms")
