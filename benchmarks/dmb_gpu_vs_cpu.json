@@ -6,21 +6,18 @@
     "nell": 40
   },
   "gpu": {
-    "cold_gnfw_s": 5.498805908020586,
-    "cold_dmb_s": 6.554241399979219,
-    "warm_gnfw_s": 0.0035381389316171408,
-    "warm_dmb_s": 0.004724657046608627,
-    "ratio_warm_dmb_over_gnfw": 1.3353509112908624,
+    "warm_gnfw_s": 0.004531905986368656,
+    "warm_dmb_s": 0.005071450024843216,
+    "ratio": 1.1190545523445177,
     "backend": "gpu"
   },
   "cpu": {
-    "cold_gnfw_s": 3.491620491957292,
-    "cold_dmb_s": 3.874454092932865,
-    "warm_gnfw_s": 0.024838684010319412,
-    "warm_dmb_s": 0.08379169402178377,
-    "ratio_warm_dmb_over_gnfw": 3.3734353231826573,
+    "warm_gnfw_s": 0.02523317001760006,
+    "warm_dmb_s": 0.09328677295707166,
+    "ratio": 3.6969898309251046,
     "backend": "cpu"
   },
-  "speedup_gpu_over_cpu_dmb_warm": 17.734979109632878,
-  "speedup_gpu_over_cpu_gnfw_warm": 7.020268138245959
+  "speedup_gpu_over_cpu_dmb_warm": 18.394497135945972,
+  "speedup_gpu_over_cpu_gnfw_warm": 5.5678935294549206,
+  "note": "After vectorized zeta-HSE; correctness gated by tests/test_dmb_profiles.py"
 }

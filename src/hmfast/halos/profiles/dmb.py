@@ -220,9 +220,17 @@ def dmb_halo_quantities(
     """
     DMB densities and electron pressure on a work radial grid for one halo.
 
-    GPU-oriented implementation: enclosed masses and HSE pressure use cumulative
-    trapezoid sweeps instead of re-integrating from scratch at every radius
-    (the dominant cost in a literal port of GODMAX's per-radius ``vmap``).
+    **Correctness.** Physics matches GODMAX ``BCM_18_wP`` (same β, θ_ej/θ_co,
+    component fractions, adiabatic-contraction root, HSE → Pe). Enclosed mass
+    and HSE use cumulative trapezoid sweeps on the work grid instead of
+    GODMAX's per-radius re-integration; on the same nodes this is the same
+    trapezoid rule. Residual vs GODMAX is dominated by quadrature-grid
+    differences and is checked in ``tests/test_dmb_profiles.py``
+    (median |Δ| / |ref| ≲ 2% on ``0.05–3 R200c``).
+
+    **GPU path.** ζ is solved on a dense ``(N_ζ, N_r)`` grid with precomputed
+    cumulative masses (no nested ∫ per trial ζ); HSE is one reverse sweep.
+    Callers evaluate many halos with ``vmap`` (see ``_eval_field``).
 
     Parameters
     ----------
@@ -238,8 +246,7 @@ def dmb_halo_quantities(
     Returns
     -------
     dict
-        ``r_comoving`` (Mpc), ``rho_gas`` / ``rho_dmb`` (comoving
-        ``M_sun/Mpc^3``), ``Pe`` (physical ``eV/cm^3``), and helpers.
+        ``r_comoving``, ``rho_gas``, ``rho_dmb``, ``Pe``, ``zeta``, …
     """
     n_int = int(params["num_points_trapz_int"])
     if r_work_over_r200 is None:
@@ -338,31 +345,37 @@ def dmb_halo_quantities(
     Mgas = _cum_mass(rho_gas_arr, r_h)
     Mcga = _cum_mass(rho_cga_arr, r_h)
 
-    def mass_at(M_cum, r_q):
-        return jnp.interp(jnp.log(jnp.asarray(r_q)), log_r_h, M_cum)
-
-    # Adiabatic contraction: root in zeta using precomputed cumulative masses.
-    zeta_grid = jnp.linspace(0.5, 1.5, 32)
+    # Adiabatic contraction ζ(r): evaluate the root equation on a (Nζ, Nr)
+    # grid in one shot using precomputed cumulative masses (no per-radius
+    # re-integration). This is algebraically the same root as GODMAX's
+    # 32-point interp, just vectorized for GPU.
+    n_zeta_grid = 32
+    zeta_grid = jnp.linspace(0.5, 1.5, n_zeta_grid)
     a_zeta = params["a_zeta"]
     n_zeta = params["n_zeta"]
+    rf = zeta_grid[:, None] * r_h[None, :]  # (Nζ, Nr)
+    log_rf = jnp.log(rf)
 
-    def zeta_at(ri, Mi):
-        def eq(zeta):
-            rf = zeta * ri
-            Mf = fclm * Mi + mass_at(Mcga, rf) + mass_at(Mgas, rf)
-            Mf = jnp.maximum(Mf, 1e-30 * m_h)
-            return (zeta - 1.0) - a_zeta * ((Mi / Mf) ** n_zeta - 1.0)
+    def _interp_rows(log_q):
+        return jnp.interp(log_q, log_r_h, Mcga), jnp.interp(
+            log_q, log_r_h, Mgas
+        )
 
-        return jnp.interp(0.0, jax.vmap(eq)(zeta_grid), zeta_grid)
+    Mcga_rf, Mgas_rf = jax.vmap(_interp_rows)(log_rf)
+    Mi = Mnfw[None, :]
+    Mf = fclm * Mi + Mcga_rf + Mgas_rf
+    Mf = jnp.maximum(Mf, 1e-30 * m_h)
+    eq = (zeta_grid[:, None] - 1.0) - a_zeta * ((Mi / Mf) ** n_zeta - 1.0)
+    zeta_arr = jax.vmap(
+        lambda eq_col: jnp.interp(0.0, eq_col, zeta_grid), in_axes=1
+    )(eq)
 
-    zeta_arr = jax.vmap(zeta_at)(r_h, Mnfw)
     rho_clm = (fclm / zeta_arr**3) * rho_nfw(r_h / zeta_arr)
     rho_dmb_arr = rho_gas_arr + rho_cga_arr + rho_clm
     mdmb_arr = _cum_mass(rho_dmb_arr, r_h)
 
-    # HSE: P(r) = ∫_r^{r_out} G ρ_gas M(<r') / r'^2 dr' with r_out = 6 R200c.
+    # HSE: one reverse cumulative sweep, P(r)=∫_r^{6 R200c} G ρ_g M / r'^2 dr'
     r_out = 6.0 * r200c_h
-    # Mask integrand beyond r_out (work grid may extend further).
     w_out = jnp.where(r_h <= r_out, 1.0, 0.0)
     f_hse = w_out * (_G_KEV * rho_gas_arr * mdmb_arr / (r_h**2))
     ptot_comoving = jnp.clip(_reverse_cumtrapz(f_hse, r_h), 1e-30) * h**2
@@ -387,6 +400,7 @@ def dmb_halo_quantities(
         rho_clm=rho_clm * rho_to_phys,
         rho_dmb=rho_dmb_arr * rho_to_phys,
         Pe=pe_ev,
+        zeta=zeta_arr,
     )
 
 
