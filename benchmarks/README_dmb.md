@@ -20,7 +20,7 @@ residuals vs GODMAX are from quadrature grids / interpolation, not a different m
 
 - Compare \(P_e\) and \(\rho_{\rm dmb}\) to GODMAX
 - Median relative error \(<2\%\) on \(0.05\text{–}3\,R_{200c}\)
-- Max relative error \(<5\%\) on \(0.05\text{–}2\,R_{200c}\)
+- Max relative error \(<5\%\) on \(0.05\text{–}1.5\,R_{200c}\)
   (outer HSE is more sensitive to quadrature grids; median remains the
   primary science gate)
 
