@@ -1,0 +1,26 @@
+{
+  "mem_fraction": 0.1,
+  "grid": {
+    "nM": 32,
+    "nz": 20,
+    "nell": 40
+  },
+  "gpu": {
+    "cold_gnfw_s": 5.498805908020586,
+    "cold_dmb_s": 6.554241399979219,
+    "warm_gnfw_s": 0.0035381389316171408,
+    "warm_dmb_s": 0.004724657046608627,
+    "ratio_warm_dmb_over_gnfw": 1.3353509112908624,
+    "backend": "gpu"
+  },
+  "cpu": {
+    "cold_gnfw_s": 3.491620491957292,
+    "cold_dmb_s": 3.874454092932865,
+    "warm_gnfw_s": 0.024838684010319412,
+    "warm_dmb_s": 0.08379169402178377,
+    "ratio_warm_dmb_over_gnfw": 3.3734353231826573,
+    "backend": "cpu"
+  },
+  "speedup_gpu_over_cpu_dmb_warm": 17.734979109632878,
+  "speedup_gpu_over_cpu_gnfw_warm": 7.020268138245959
+}

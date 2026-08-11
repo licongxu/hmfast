@@ -1,13 +1,28 @@
 """
 Angular power spectrum → correlation function via Hankel transforms.
 
-Mirrors the GODMAX ``get_corrfunc_BCMP`` conventions:
+Implements the flat-sky / Limber Bessel integrals used by GODMAX
+(``get_corrfunc_BCMP``) and equivalent to CCL's FFTLog / Bessel correlators:
 
-- shear–y: ``ν=2``, ``gty(θ) = Hankel[C_ℓ^{κy}] / (2π)``
-- ξ₊: ``ν=0``, ``ξ₊(θ) = Hankel[C_ℓ^{κκ}] / (2π)``
-- ξ₋: ``ν=4``, ``ξ₋(θ) = Hankel[C_ℓ^{κκ}] / (2π)``
+.. math::
 
-Uses ``mcfit`` (already a hmfast dependency) with the JAX backend.
+    \\xi_+(\\theta) = \\int_0^\\infty \\frac{\\ell\\,d\\ell}{2\\pi}\\,
+    C_\\ell^{\\kappa\\kappa}\\, J_0(\\ell\\theta)
+
+    \\xi_-(\\theta) = \\int_0^\\infty \\frac{\\ell\\,d\\ell}{2\\pi}\\,
+    C_\\ell^{\\kappa\\kappa}\\, J_4(\\ell\\theta)
+
+    \\mathrm{gty}(\\theta) = \\int_0^\\infty \\frac{\\ell\\,d\\ell}{2\\pi}\\,
+    C_\\ell^{\\kappa y}\\, J_2(\\ell\\theta)
+
+``mcfit.Hankel`` evaluates ``∫ f(ℓ) J_ν(ℓθ) ℓ dℓ``; dividing by ``2π`` recovers
+the expressions above (same convention as GODMAX: ``nu∈{0,2,4}``, ``q=1``,
+``/ (2π)``). CCL ``correlation(..., type='GG+'/'GG-'/'NG', method='fftlog')``
+targets the same transforms (CCL's public API also offers a full-sky Wigner-d
+sum; the Bessel/FFTLog path is the small-angle limit used here).
+
+Uses ``mcfit`` (already a hmfast dependency) with the JAX backend so the
+transform runs on GPU when JAX does.
 """
 
 from __future__ import annotations
@@ -32,7 +47,7 @@ def _hankel_cl(ell, cl, nu, q=1.0):
         Angular power spectrum sampled on ``ell``. Extra leading axes are
         allowed; the transform runs along the last axis.
     nu : float
-        Bessel order.
+        Bessel order (``0`` → ξ₊, ``2`` → gty / γ_t, ``4`` → ξ₋).
     q : float
         mcfit bias parameter (GODMAX uses ``q=1``).
 
@@ -46,7 +61,9 @@ def _hankel_cl(ell, cl, nu, q=1.0):
     """
     ell = jnp.asarray(ell)
     cl = jnp.asarray(cl)
-    hankel = mcfit.Hankel(np.asarray(ell), nu=nu, q=q, lowring=True, backend="jax")
+    hankel = mcfit.Hankel(
+        np.asarray(ell), nu=nu, q=q, lowring=True, backend="jax"
+    )
     hankel_jit = jax.jit(functools.partial(hankel, extrap=False))
 
     if cl.ndim == 1:
@@ -66,17 +83,17 @@ def _hankel_cl(ell, cl, nu, q=1.0):
 
 
 def cl_ky_to_gty(ell, cl_ky):
-    """Convert ``C_ℓ^{κy}`` to the shear–y correlation ``γ_t y (θ)``."""
+    """Convert ``C_ℓ^{κy}`` to the shear–y correlation ``γ_t y (θ)`` (``J_2``)."""
     return _hankel_cl(ell, cl_ky, nu=2.0)
 
 
 def cl_kk_to_xip(ell, cl_kk):
-    """Convert ``C_ℓ^{κκ}`` to ``ξ₊(θ)``."""
+    """Convert ``C_ℓ^{κκ}`` to ``ξ₊(θ)`` (``J_0``; CCL ``GG+``)."""
     return _hankel_cl(ell, cl_kk, nu=0.0)
 
 
 def cl_kk_to_xim(ell, cl_kk):
-    """Convert ``C_ℓ^{κκ}`` to ``ξ₋(θ)``."""
+    """Convert ``C_ℓ^{κκ}`` to ``ξ₋(θ)`` (``J_4``; CCL ``GG-``)."""
     return _hankel_cl(ell, cl_kk, nu=4.0)
 
 
@@ -94,15 +111,12 @@ def interp_xi_theta(theta_native_rad, xi_native, theta_out_arcmin):
     xi_native = jnp.asarray(xi_native)
 
     def interp_one(xi):
-        # Preserve sign while interpolating in log|xi|
         log_xi = jnp.interp(
             jnp.log(theta_out),
             jnp.log(theta_native_arcmin),
             jnp.log(jnp.maximum(jnp.abs(xi), 1e-30)),
         )
-        sgn = jnp.sign(
-            jnp.interp(theta_out, theta_native_arcmin, xi)
-        )
+        sgn = jnp.sign(jnp.interp(theta_out, theta_native_arcmin, xi))
         return jnp.exp(log_xi) * sgn
 
     if xi_native.ndim == 1:

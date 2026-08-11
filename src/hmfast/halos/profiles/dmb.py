@@ -108,6 +108,33 @@ def _trapz_mass(f_r, log_r):
     return jnp.trapezoid(f_r * 4.0 * jnp.pi * r**2 * r, x=log_r)
 
 
+def _cum_mass(rho, r):
+    """
+    Cumulative enclosed mass ``M(<r)`` via trapezoid on a log-spaced radial grid.
+
+    Replaces repeated ``∫_0^{r_i}`` calls with one ``O(N_r)`` sweep (GPU-friendly).
+    The mass interior to the first node uses ``4π/3 r_0^3 ρ_0`` so ``M(r_0)>0``
+    (needed for a stable adiabatic-contraction root near the origin).
+    """
+    log_r = jnp.log(r)
+    # dM/dln r = 4π r^3 ρ
+    integ = 4.0 * jnp.pi * rho * r**3
+    dln = jnp.diff(log_r)
+    dM = 0.5 * (integ[:-1] + integ[1:]) * dln
+    m_inner = (4.0 / 3.0) * jnp.pi * r[0] ** 3 * rho[0]
+    return jnp.concatenate(
+        [jnp.array([m_inner], dtype=rho.dtype), m_inner + jnp.cumsum(dM)]
+    )
+
+
+def _reverse_cumtrapz(f, r):
+    """``I(r_i) = ∫_{r_i}^{r_max} f(r) dr`` from a single reverse sweep."""
+    dr = jnp.diff(r)
+    dI = 0.5 * (f[:-1] + f[1:]) * dr
+    from_out = jnp.cumsum(dI[::-1])[::-1]
+    return jnp.concatenate([from_out, jnp.zeros((1,), dtype=f.dtype)])
+
+
 def _param_dict(obj):
     d = {k: getattr(obj, k) for k in _PARAM_KEYS}
     d["nfw_trunc"] = obj.nfw_trunc
@@ -193,6 +220,10 @@ def dmb_halo_quantities(
     """
     DMB densities and electron pressure on a work radial grid for one halo.
 
+    GPU-oriented implementation: enclosed masses and HSE pressure use cumulative
+    trapezoid sweeps instead of re-integrating from scratch at every radius
+    (the dominant cost in a literal port of GODMAX's per-radius ``vmap``).
+
     Parameters
     ----------
     m_phys : float
@@ -212,6 +243,7 @@ def dmb_halo_quantities(
     """
     n_int = int(params["num_points_trapz_int"])
     if r_work_over_r200 is None:
+        # Extend slightly past 6 R200c so the HSE outer boundary matches GODMAX.
         r_work_over_r200 = jnp.logspace(-3.0, jnp.log10(16.0), 96)
 
     m_h = m_phys * h
@@ -223,6 +255,7 @@ def dmb_halo_quantities(
 
     r_h = r_work_over_r200 * r200c_h
     rt = params["epsilon_rt"] * r200c_h
+    log_r_h = jnp.log(r_h)
 
     Mc0 = 10.0 ** params["log10_Mc0"]
     Mstar0 = 10.0 ** params["log10_Mstar0"]
@@ -268,15 +301,6 @@ def dmb_halo_quantities(
             rho = rho / (1.0 + y**2) ** 2
         return rho
 
-    log_norm = jnp.linspace(jnp.log(0.01 * r200c_h), jnp.log(r200c_h), n_int)
-    rho_nfw_0 = m_h / _trapz_mass(nfw_unnorm(jnp.exp(log_norm)), log_norm)
-
-    def rho_nfw(r):
-        return rho_nfw_0 * nfw_unnorm(r)
-
-    log_tot = jnp.linspace(jnp.log(0.01 * r200c_h), jnp.log(16.0 * r200c_h), n_int)
-    Mtot = _trapz_mass(rho_nfw(jnp.exp(log_tot)), log_tot)
-
     def gas_unnorm(r):
         u = r / r_co
         v = r / r_ej
@@ -285,6 +309,15 @@ def dmb_halo_quantities(
             * (1.0 + v**gamma_g) ** ((delta_g - beta) / gamma_g)
         )
 
+    # Normalizations on a dedicated quadrature grid (matches GODMAX limits).
+    log_norm = jnp.linspace(jnp.log(0.01 * r200c_h), jnp.log(r200c_h), n_int)
+    rho_nfw_0 = m_h / _trapz_mass(nfw_unnorm(jnp.exp(log_norm)), log_norm)
+
+    def rho_nfw(r):
+        return rho_nfw_0 * nfw_unnorm(r)
+
+    log_tot = jnp.linspace(jnp.log(0.01 * r200c_h), jnp.log(16.0 * r200c_h), n_int)
+    Mtot = _trapz_mass(rho_nfw(jnp.exp(log_tot)), log_tot)
     rho_gas_0 = fgas * Mtot / _trapz_mass(gas_unnorm(jnp.exp(log_tot)), log_tot)
 
     def rho_gas(r):
@@ -297,67 +330,45 @@ def dmb_halo_quantities(
             * jnp.exp(-((0.5 * r / Rh) ** 2))
         )
 
-    def mass_to_r(dens_fn, r_out):
-        minr = jnp.minimum(5e-4, 0.005 * r200c_h)
-        log_r = jnp.linspace(jnp.log(minr), jnp.log(r_out), n_int)
-        return _trapz_mass(dens_fn(jnp.exp(log_r)), log_r)
-
-    def zeta_at_ri(ri):
-        Mi = mass_to_r(rho_nfw, ri)
-
-        def zeta_eq(zeta):
-            rf = zeta * ri
-            Mf = fclm * Mi + mass_to_r(rho_cga, rf) + mass_to_r(rho_gas, rf)
-            return (rf / ri - 1.0) - params["a_zeta"] * (
-                (Mi / Mf) ** params["n_zeta"] - 1.0
-            )
-
-        zeta_grid = jnp.linspace(0.5, 1.5, 32)
-        return jnp.interp(0.0, jax.vmap(zeta_eq)(zeta_grid), zeta_grid)
-
-    zeta_arr = jax.vmap(zeta_at_ri)(r_h)
-
-    def rho_clm_at(jr):
-        zeta = zeta_arr[jr]
-        return (fclm / zeta**3) * rho_nfw(r_h[jr] / zeta)
-
-    rho_clm = jax.vmap(rho_clm_at)(jnp.arange(r_h.shape[0]))
+    rho_nfw_arr = rho_nfw(r_h)
     rho_gas_arr = rho_gas(r_h)
     rho_cga_arr = rho_cga(r_h)
+
+    Mnfw = _cum_mass(rho_nfw_arr, r_h)
+    Mgas = _cum_mass(rho_gas_arr, r_h)
+    Mcga = _cum_mass(rho_cga_arr, r_h)
+
+    def mass_at(M_cum, r_q):
+        return jnp.interp(jnp.log(jnp.asarray(r_q)), log_r_h, M_cum)
+
+    # Adiabatic contraction: root in zeta using precomputed cumulative masses.
+    zeta_grid = jnp.linspace(0.5, 1.5, 32)
+    a_zeta = params["a_zeta"]
+    n_zeta = params["n_zeta"]
+
+    def zeta_at(ri, Mi):
+        def eq(zeta):
+            rf = zeta * ri
+            Mf = fclm * Mi + mass_at(Mcga, rf) + mass_at(Mgas, rf)
+            Mf = jnp.maximum(Mf, 1e-30 * m_h)
+            return (zeta - 1.0) - a_zeta * ((Mi / Mf) ** n_zeta - 1.0)
+
+        return jnp.interp(0.0, jax.vmap(eq)(zeta_grid), zeta_grid)
+
+    zeta_arr = jax.vmap(zeta_at)(r_h, Mnfw)
+    rho_clm = (fclm / zeta_arr**3) * rho_nfw(r_h / zeta_arr)
     rho_dmb_arr = rho_gas_arr + rho_cga_arr + rho_clm
+    mdmb_arr = _cum_mass(rho_dmb_arr, r_h)
 
-    def mdmb_to_r(r_out):
-        minr = jnp.minimum(5e-4, 0.005 * r200c_h)
-        log_r = jnp.linspace(jnp.log(minr), jnp.log(r_out), n_int)
-        rr = jnp.exp(log_r)
-        rho_i = jnp.exp(
-            jnp.interp(
-                jnp.log(rr),
-                jnp.log(r_h),
-                jnp.log(jnp.maximum(rho_dmb_arr, 1e-30)),
-            )
-        )
-        return _trapz_mass(rho_i, log_r)
+    # HSE: P(r) = ∫_r^{r_out} G ρ_gas M(<r') / r'^2 dr' with r_out = 6 R200c.
+    r_out = 6.0 * r200c_h
+    # Mask integrand beyond r_out (work grid may extend further).
+    w_out = jnp.where(r_h <= r_out, 1.0, 0.0)
+    f_hse = w_out * (_G_KEV * rho_gas_arr * mdmb_arr / (r_h**2))
+    ptot_comoving = jnp.clip(_reverse_cumtrapz(f_hse, r_h), 1e-30) * h**2
 
-    mdmb_arr = jax.vmap(mdmb_to_r)(r_h)
-
-    def ptot_at(jr):
-        r = r_h[jr]
-        log_x = jnp.linspace(jnp.log(r), jnp.log(6.0 * r200c_h), n_int)
-        x = jnp.exp(log_x)
-        rho_g = rho_gas(x)
-        mdmb = jnp.exp(
-            jnp.interp(
-                log_x, jnp.log(r_h), jnp.log(jnp.maximum(mdmb_arr, 1e-30))
-            )
-        )
-        ptot = jnp.trapezoid((rho_g * mdmb * _G_KEV / x**2) * x, x=log_x)
-        return jnp.clip(ptot, 1e-30) * h**2
-
-    ptot_comoving = jax.vmap(ptot_at)(jnp.arange(r_h.shape[0]))
     a = 1.0 / (1.0 + z)
     ptot_phys = ptot_comoving / a**4
-
     fmax = 6.0 ** (-params["n_nt"]) / params["alpha_nt"]
     fz = jnp.minimum(
         (1.0 + z) ** params["beta_nt"],
@@ -425,7 +436,12 @@ def _m200c_c200c(halo_model, m, z, c200c_override):
 
 
 def _eval_field(halo_model, r, m, z, params, field, c200c_override=None):
-    """Evaluate a DMB scalar field on shape ``(Nr, Nm, Nz)``."""
+    """
+    Evaluate a DMB scalar field on shape ``(Nr, Nm, Nz)``.
+
+    Halos are evaluated in parallel with ``vmap`` over the flattened ``(M, z)``
+    grid (one JIT kernel; GPU-friendly).
+    """
     r = jnp.atleast_1d(r)
     m = jnp.atleast_1d(m)
     z = jnp.atleast_1d(z)
@@ -435,20 +451,20 @@ def _eval_field(halo_model, r, m, z, params, field, c200c_override=None):
     omega_m = cparams["Omega0_m"]
     m200c, c200c = _m200c_c200c(halo_model, m, z, c200c_override)
 
-    def one(m_i, z_j, c_ij):
+    nm, nz = m200c.shape[0], z.shape[0]
+    m_b = jnp.broadcast_to(m200c[:, None], (nm, nz)).reshape(-1)
+    z_b = jnp.broadcast_to(z[None, :], (nm, nz)).reshape(-1)
+    c_b = c200c.reshape(-1)
+
+    def one(m_i, z_i, c_i):
         q = dmb_halo_quantities(
-            m_i, z_j, c_ij, omega_b, omega_m, h, params
+            m_i, z_i, c_i, omega_b, omega_m, h, params
         )
         return _interp_log(r, q["r_comoving"], q[field])
 
-    # c200c: (Nm, Nz); m200c: (Nm,)
-    out = jax.vmap(
-        lambda m_i, c_i: jax.vmap(
-            lambda z_j, c_ij: one(m_i, z_j, c_ij), in_axes=(0, 0)
-        )(z, c_i),
-        in_axes=(0, 0),
-    )(m200c, c200c)
-    return jnp.moveaxis(out, -1, 0)  # (Nr, Nm, Nz)
+    # (Nm*Nz, Nr_query)
+    vals = jax.vmap(one)(m_b, z_b, c_b)
+    return jnp.moveaxis(vals.reshape(nm, nz, -1), -1, 0)
 
 
 def _r200c_grid(halo_model, m, z, c200c_override):
