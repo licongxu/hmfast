@@ -1,5 +1,5 @@
 import os
-import requests
+import urllib.request
 
 COSMOPOWER_MODELS = {
     "ede-v2": [
@@ -142,14 +142,14 @@ def download_file(url, local_path, skip_existing=True):
         #print(f"  Already exists: {local_path} (skipped)")
         return
     #print(f"  Downloading: {url} → {local_path}")
-    
-    headers = {"User-Agent": "python-requests/2.0"}  # GitHub sometimes needs this
-    response = requests.get(url, headers=headers)
-    response.raise_for_status()
-    
+
+    req = urllib.request.Request(url, headers={"User-Agent": "python-urllib/3.0"})
+    with urllib.request.urlopen(req) as response:
+        data = response.read()
+
     os.makedirs(os.path.dirname(local_path), exist_ok=True)
     with open(local_path, "wb") as f:
-        f.write(response.content)
+        f.write(data)
     #print(f"  Saved to {local_path}")
 
 def download_emulators(models="all", skip_existing=True):

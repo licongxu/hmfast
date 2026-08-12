@@ -79,7 +79,7 @@ def _simpson_nonuniform(y, x, axis=-1):
 
 from hmfast.halos.massfunc import T08HaloMass, TW10SubHaloMass
 from hmfast.halos.bias import T10HaloBias
-from hmfast.halos.concentration import D08Concentration, B13Concentration
+from hmfast.halos.concentration import D08Concentration
 from hmfast.halos.mass_definition import MassDefinition
 from hmfast.cosmology import Cosmology
 

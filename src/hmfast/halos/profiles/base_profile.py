@@ -5,7 +5,6 @@ import jax.numpy as jnp
 import mcfit
 import functools
 from jax.scipy.special import sici
-from jax.tree_util import register_pytree_node_class
 
 
 
