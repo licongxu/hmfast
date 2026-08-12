@@ -62,6 +62,7 @@ _PARAM_KEYS = (
     "alpha_nt",
     "beta_nt",
     "n_nt",
+    "n_nt_zcap",
     "gamma_rhogas",
     "delta_rhogas",
     "c200c",
@@ -95,6 +96,7 @@ _DEFAULTS = dict(
     alpha_nt=0.18,
     beta_nt=0.5,
     n_nt=0.3,
+    n_nt_zcap=None,
     gamma_rhogas=2.0,
     delta_rhogas=7.0,
     nfw_trunc=True,
@@ -205,6 +207,21 @@ class _DMBParamsMixin:
         return type(self)._tree_unflatten(
             (x_tuple, hankel, nfw_trunc, n_int), leaves
         )
+
+
+def _find_r_delta_from_mass(r_h, cum_mass, delta, rho_c_z_h):
+    """Find R_delta where M(<r) = delta * rho_c * 4pi/3 * r^3.
+
+    Interpolates in log space on the work grid. ``r_h`` and ``cum_mass``
+    are in GODMAX internal units (Mpc/h, Msun/h).
+    """
+    target = delta * rho_c_z_h * (4.0 * jnp.pi / 3.0)
+    # ratio = M(<r) / r^3; find where ratio == target
+    ratio = cum_mass / jnp.maximum(r_h**3, 1e-30)
+    log_r = jnp.log(r_h)
+    log_ratio = jnp.log(jnp.maximum(ratio, 1e-30))
+    log_target = jnp.log(target)
+    return jnp.exp(jnp.interp(log_target, log_ratio, log_r))
 
 
 def dmb_halo_quantities(
@@ -382,12 +399,29 @@ def dmb_halo_quantities(
 
     a = 1.0 / (1.0 + z)
     ptot_phys = ptot_comoving / a**4
-    fmax = 6.0 ** (-params["n_nt"]) / params["alpha_nt"]
-    fz = jnp.minimum(
-        (1.0 + z) ** params["beta_nt"],
-        (fmax - 1.0) * jnp.tanh(params["beta_nt"] * z) + 1.0,
-    )
-    pnt_fac = params["alpha_nt"] * fz * (r_work_over_r200**params["n_nt"])
+    n_nt_zcap = params["n_nt_zcap"]
+    if n_nt_zcap is not None:
+        # ACT eq. 2.12 (Dalal et al. 2026): radial index fixed at 0.8,
+        # redshift power fixed at 0.5, tanh slope fixed at 0.5, cap
+        # 4^{-n_nt/alpha_nt}. Radial part uses R_500c (not R_200c).
+        alpha_nt = params["alpha_nt"]
+        fz_act = jnp.minimum(
+            (1.0 + z) ** 0.5,
+            (4.0 ** (-n_nt_zcap / alpha_nt) - 1.0) * jnp.tanh(0.5 * z) + 1.0,
+        )
+        # Find R_500c from cumulative NFW mass: M(<r) = 500 * rho_c * 4pi/3 * r^3
+        # => M(<r) / r^3 = 500 * rho_c * 4pi/3.  Interpolate in log-log.
+        r500c_h = _find_r_delta_from_mass(r_h, Mnfw, 500.0, rho_c_z_h)
+        r_over_r500c = r_h / r500c_h
+        pnt_fac = alpha_nt * fz_act * (r_over_r500c**0.8)
+    else:
+        # GODMAX formula: n_nt is radial slope, beta_nt is redshift power.
+        fmax = 6.0 ** (-params["n_nt"]) / params["alpha_nt"]
+        fz = jnp.minimum(
+            (1.0 + z) ** params["beta_nt"],
+            (fmax - 1.0) * jnp.tanh(params["beta_nt"] * z) + 1.0,
+        )
+        pnt_fac = params["alpha_nt"] * fz * (r_work_over_r200**params["n_nt"])
     pe_ev = (ptot_phys * jnp.maximum(0.0, 1.0 - pnt_fac) / _PTH_TO_PE) * _PE_KEV_TO_EV
 
     rho_to_phys = h**2
@@ -398,6 +432,7 @@ def dmb_halo_quantities(
         rho_gas=rho_gas_arr * rho_to_phys,
         rho_cga=rho_cga_arr * rho_to_phys,
         rho_clm=rho_clm * rho_to_phys,
+        rho_nfw=rho_nfw_arr * rho_to_phys,
         rho_dmb=rho_dmb_arr * rho_to_phys,
         Pe=pe_ev,
         zeta=zeta_arr,
@@ -551,7 +586,14 @@ class DMBPressureProfile(_DMBParamsMixin, PressureProfile):
 
 
 class DMBMatterProfile(_DMBParamsMixin, MatterProfile):
-    """Total DMB matter profile ``rho_dmb / rho_m0`` for lensing / ``P(k)``."""
+    """Total DMB matter profile ``rho_dmb / rho_m0`` for lensing / ``P(k)``.
+
+    GODMAX normalizes both DMB and the gravity-only NFW by the same
+    ``Mtot = ∫_0^{16 R200} 4π r² ρ_nfw dr`` (not ``M200c``). Use
+    :class:`DMBNFWMatterProfile` as the NFW counterpart so ``u(k→0)`` matches.
+    """
+
+    _density_field = "rho_dmb"
 
     def __init__(self, x=None, **kwargs):
         self._init_dmb_params(**kwargs)
@@ -568,27 +610,40 @@ class DMBMatterProfile(_DMBParamsMixin, MatterProfile):
 
     @partial(jax.jit, static_argnums=(0,))
     def u_r(self, halo_model, r, m, z):
-        rho_dmb = _eval_field(
-            halo_model, r, m, z, _param_dict(self), "rho_dmb", self.c200c
+        rho = _eval_field(
+            halo_model, r, m, z, _param_dict(self), self._density_field, self.c200c
         )
         cparams = halo_model.cosmology._cosmo_params()
         rho_mean_0 = cparams["Rho_crit_0"] * cparams["Omega0_m"]
-        return rho_dmb / rho_mean_0
+        return rho / rho_mean_0
 
     @partial(jax.jit, static_argnums=(0,))
     def u_k(self, halo_model, k, m, z):
+        """
+        3D Fourier transform of ``rho_dmb / rho_m0``.
+
+        The Hankel grid is dimensionless ``x = r / R`` with
+        ``R = r_200c (1+z)`` (comoving). Converting the ``x``-space transform
+        to physical ``k`` therefore needs ``k_phys = k_x / R`` and amplitude
+        ``4π R³`` (same spherical-Bessel convention as the analytic NFW ``u_k``).
+        """
         k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
         r_delta = _r200c_grid(halo_model, m, z, self.c200c)
-        r = self.x[:, None, None] * r_delta[None, :, :] * (1.0 + z[None, None, :])
-        k_native, u_k_native = self._u_k_hankel(halo_model, self.x, r, m, z)
-        u_3d = u_k_native * jnp.sqrt(jnp.pi / (2.0 * k_native[:, None, None]))
+        R = r_delta * (1.0 + z[None, :])
+        r = self.x[:, None, None] * R[None, :, :]
+        k_x, u_k_x = self._u_k_hankel(halo_model, self.x, r, m, z)
+        u_x = u_k_x * jnp.sqrt(jnp.pi / (2.0 * k_x[:, None, None]))
+        u_3d = (4.0 * jnp.pi * R[None, :, :] ** 3) * u_x
+        k_phys = k_x[:, None, None] / R[None, :, :]
 
-        def for_m(u_m):
-            return jax.vmap(
-                lambda u_z: jnp.interp(k, k_native, u_z), in_axes=1, out_axes=1
-            )(u_m)
+        def interp_col(k_n, u_n):
+            return jnp.interp(k, k_n, u_n)
 
-        return jax.vmap(for_m, in_axes=1, out_axes=1)(u_3d)
+        return jax.vmap(
+            jax.vmap(interp_col, in_axes=(1, 1), out_axes=1),
+            in_axes=(2, 2),
+            out_axes=2,
+        )(k_phys, u_3d)
 
 
 class DMBGasDensityProfile(_DMBParamsMixin, DensityProfile):
@@ -640,6 +695,17 @@ class DMBGasDensityProfile(_DMBParamsMixin, DensityProfile):
         )
 
 
+class DMBNFWMatterProfile(DMBMatterProfile):
+    """GODMAX truncated NFW counterpart to :class:`DMBMatterProfile`.
+
+    Same ``Mtot`` and Hankel path as DMB (``setup_power_spectra_jit.uk_nfw``).
+    Do not use analytic :class:`~hmfast.halos.profiles.matter.NFWMatterProfile`
+    for ``P_DMB/P_NFW`` — that is ``M200c``, not GODMAX ``Mtot``.
+    """
+
+    _density_field = "rho_nfw"
+
+
 register_pytree_node(
     DMBPressureProfile,
     lambda obj: obj._tree_flatten(),
@@ -649,6 +715,11 @@ register_pytree_node(
     DMBMatterProfile,
     lambda obj: obj._tree_flatten(),
     lambda aux, children: DMBMatterProfile._tree_unflatten(aux, children),
+)
+register_pytree_node(
+    DMBNFWMatterProfile,
+    lambda obj: obj._tree_flatten(),
+    lambda aux, children: DMBNFWMatterProfile._tree_unflatten(aux, children),
 )
 register_pytree_node(
     DMBGasDensityProfile,

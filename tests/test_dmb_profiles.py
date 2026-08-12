@@ -17,6 +17,7 @@ from hmfast.halos import HaloModel
 from hmfast.halos.profiles import (
     DMBPressureProfile,
     DMBMatterProfile,
+    DMBNFWMatterProfile,
     DMBGasDensityProfile,
 )
 from hmfast.halos.profiles.dmb import dmb_halo_quantities, _DEFAULTS
@@ -226,6 +227,19 @@ def test_dmb_pressure_profile_ur_finite(halo_model):
     assert float(pe.max()) > 0.0
 
 
+def test_dmb_and_godmax_nfw_same_mtot_uk0(halo_model):
+    """GODMAX: both windows share Mtot, so u(k→0) must match."""
+    h = float(halo_model.cosmology._cosmo_params()["h"])
+    m = jnp.array([1e14 / h])
+    z = jnp.array([0.0])
+    k = jnp.array([1e-3, 3e-3, 1e-2])
+    dmb = DMBMatterProfile(c200c=4.0, num_points_trapz_int=48)
+    nfw = DMBNFWMatterProfile(c200c=4.0, num_points_trapz_int=48)
+    ud = np.asarray(dmb.u_k(halo_model, k, m, z))[:, 0, 0]
+    un = np.asarray(nfw.u_k(halo_model, k, m, z))[:, 0, 0]
+    np.testing.assert_allclose(ud, un, rtol=0.05)
+
+
 def test_dmb_matter_and_gas_profiles(halo_model):
     h = float(halo_model.cosmology._cosmo_params()["h"])
     m = jnp.array([1e14 / h])
@@ -280,3 +294,30 @@ def test_cl_to_xi_helpers():
     assert jnp.all(jnp.isfinite(xip))
     assert jnp.all(jnp.isfinite(xim))
     assert float(theta_to_arcmin(th2[0])) > 0.0
+
+
+def test_dmb_act_n_nt_zcap_mode(halo_model):
+    """ACT eq. 2.12: n_nt_zcap triggers redshift-cap formula with R_500c."""
+    h = float(halo_model.cosmology._cosmo_params()["h"])
+    m = jnp.array([1e14 / h])
+    z = jnp.array([0.0])
+    r = jnp.logspace(-2, 0.5, 12)
+
+    # GODMAX mode (n_nt_zcap=None): default
+    prof_godmax = DMBPressureProfile(
+        c200c=4.0, num_points_trapz_int=32, alpha_nt=0.2, n_nt=0.3
+    )
+    # ACT mode (n_nt_zcap set): radial index fixed at 0.8, uses R_500c
+    prof_act = DMBPressureProfile(
+        c200c=4.0, num_points_trapz_int=32, alpha_nt=0.2, n_nt=0.8, n_nt_zcap=0.8
+    )
+
+    pe_godmax = np.asarray(prof_godmax.u_r(halo_model, r, m, z))[:, 0, 0]
+    pe_act = np.asarray(prof_act.u_r(halo_model, r, m, z))[:, 0, 0]
+    assert jnp.all(jnp.isfinite(pe_act))
+    # ACT and GODMAX formulas differ → pressures should not be identical
+    assert not np.allclose(pe_act, pe_godmax, rtol=1e-3)
+
+    # Update should preserve n_nt_zcap
+    prof_act2 = prof_act.update(alpha_nt=0.3)
+    assert prof_act2.n_nt_zcap == 0.8
