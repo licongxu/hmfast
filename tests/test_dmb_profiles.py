@@ -20,7 +20,11 @@ from hmfast.halos.profiles import (
     DMBNFWMatterProfile,
     DMBGasDensityProfile,
 )
-from hmfast.halos.profiles.dmb import dmb_halo_quantities, _DEFAULTS
+from hmfast.halos.profiles.dmb import (
+    dmb_halo_quantities,
+    _DEFAULTS,
+    _find_r_delta_from_mass,
+)
 from hmfast.tracers import tSZTracer
 
 
@@ -321,3 +325,129 @@ def test_dmb_act_n_nt_zcap_mode(halo_model):
     # Update should preserve n_nt_zcap
     prof_act2 = prof_act.update(alpha_nt=0.3)
     assert prof_act2.n_nt_zcap == 0.8
+
+
+def test_find_r_delta_accounts_for_comoving_radius():
+    """R_delta uses physical ρ_c with comoving r: M = Δ ρ_c (4π/3) (r/(1+z))³.
+
+    Synthetic M(<r)=r² so M/r³=1/r decreases (JAX interp needs increasing xp).
+    """
+    r_h = jnp.logspace(-2.0, 1.0, 256)
+    cum_mass = r_h**2
+    delta = 200.0
+    rho_c = 0.01
+    target0 = delta * rho_c * (4.0 * np.pi / 3.0)
+
+    r0 = float(_find_r_delta_from_mass(r_h, cum_mass, delta, rho_c, z=0.0))
+    np.testing.assert_allclose(r0, 1.0 / target0, rtol=0.02)
+
+    r1 = float(_find_r_delta_from_mass(r_h, cum_mass, delta, rho_c, z=1.0))
+    np.testing.assert_allclose(r1, 1.0 / (target0 / 8.0), rtol=0.02)
+
+
+def test_literature_gas_outer_is_one_plus_v_not_v_gamma():
+    """To 3.4 / Dalal 2.4 print (1+v)^{(δ-β)/γ}; GODMAX uses (1+v^γ)^{(δ-β)/γ}."""
+    Ob0, Om0, h = 0.049, 0.3, 0.67
+    m_phys, z0, c0 = 1e14 / h, 0.2, 5.0
+    shared = {
+        **_DEFAULTS,
+        "num_points_trapz_int": 48,
+        "A_starcga": 0.09,
+        "gamma_rhogas": 2.0,
+        "delta_rhogas": 7.0,
+        "nfw_trunc": True,
+    }
+    q_g = dmb_halo_quantities(m_phys, z0, c0, Ob0, Om0, h, {**shared, "convention": "godmax"})
+    q_l = dmb_halo_quantities(
+        m_phys, z0, c0, Ob0, Om0, h, {**shared, "convention": "literature"}
+    )
+    x = np.asarray(q_g["r_over_r200"])
+    # Outer slope: GODMAX ~ v^{δ-β}, literature ~ v^{(δ-β)/γ}. Distinct at r ≫ r_ej.
+    outer = x > 6.0
+    rel = np.abs(np.asarray(q_l["rho_gas"])[outer] - np.asarray(q_g["rho_gas"])[outer])
+    rel /= np.maximum(np.asarray(q_g["rho_gas"])[outer], 1e-30)
+    assert float(np.median(rel)) > 0.2
+
+
+def test_literature_defaults_stellar_amplitude():
+    p = DMBPressureProfile(convention="literature")
+    assert p.convention == "literature"
+    assert p.A_starcga == 0.055
+    assert abs(p.log10_M1_starcga - np.log10(2.5e11)) < 1e-6
+    p_g = DMBPressureProfile()
+    assert p_g.convention == "godmax"
+    assert p_g.A_starcga == 0.09
+
+
+def test_literature_pnt_is_to2024_eq_312():
+    """To et al. 2024 eq. 3.12: (r/R_500c)^0.8 and cap 6^{-0.8}/α_nt."""
+    Ob0, Om0, h = 0.049, 0.3, 0.67
+    z0 = 0.5
+    m_phys = 1e14 / h
+    alpha = 0.2
+    q = dmb_halo_quantities(
+        m_phys,
+        z0,
+        4.0,
+        Ob0,
+        Om0,
+        h,
+        {
+            **_DEFAULTS,
+            "convention": "literature",
+            "alpha_nt": alpha,
+            "n_nt_zcap": None,
+            "num_points_trapz_int": 48,
+        },
+    )
+    fz = min((1.0 + z0) ** 0.5, (6.0 ** (-0.8) / alpha - 1.0) * np.tanh(0.5 * z0) + 1.0)
+    r500 = float(q["r500c_comoving"])
+    r = np.asarray(q["r_comoving"])
+    expected = alpha * fz * (r / r500) ** 0.8
+    mask = (r > 0.05 * r500) & (r < 1.5 * r500)
+    np.testing.assert_allclose(
+        np.asarray(q["pnt_fac"])[mask], expected[mask], rtol=0.05
+    )
+
+
+def test_dalal_n_nt_zcap_pnt_at_z05():
+    """Dalal et al. 2026 eq. 2.12 overlay: cap 4^{-n_nt/α_nt}, still R_500c."""
+    Ob0, Om0, h = 0.049, 0.3, 0.67
+    z0 = 0.5
+    m_phys = 1e14 / h
+    alpha = 0.2
+    ncap = 0.8
+    q = dmb_halo_quantities(
+        m_phys,
+        z0,
+        4.0,
+        Ob0,
+        Om0,
+        h,
+        {
+            **_DEFAULTS,
+            "convention": "godmax",
+            "alpha_nt": alpha,
+            "n_nt_zcap": ncap,
+            "num_points_trapz_int": 48,
+        },
+    )
+    fz = min(
+        (1.0 + z0) ** 0.5,
+        (4.0 ** (-ncap / alpha) - 1.0) * np.tanh(0.5 * z0) + 1.0,
+    )
+    r500 = float(q["r500c_comoving"])
+    r = np.asarray(q["r_comoving"])
+    expected = alpha * fz * (r / r500) ** 0.8
+    mask = (r > 0.05 * r500) & (r < 1.5 * r500)
+    np.testing.assert_allclose(
+        np.asarray(q["pnt_fac"])[mask], expected[mask], rtol=0.05
+    )
+
+
+def test_update_preserves_convention():
+    p = DMBPressureProfile(convention="literature", theta_ej_0=4.0)
+    p2 = p.update(theta_ej_0=6.0)
+    assert p2.convention == "literature"
+    assert p2.theta_ej_0 == 6.0
+    assert p2.A_starcga == 0.055

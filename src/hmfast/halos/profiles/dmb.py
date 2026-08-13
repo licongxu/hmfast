@@ -1,16 +1,23 @@
 """
-DMB (Dark Matter + Baryon) halo profiles from the GODMAX / Schneider–Giri BCM.
+DMB (Dark Matter + Baryon) halo profiles.
 
-Ports the multi-component model of ``BCM_18_wP`` in
-``ref_packages/GODMAX/src/get_BCMP_profile_jit.py`` into hmfast ``HaloProfile``
-subclasses usable with existing tracers.
+Two formula conventions (``convention=`` on the profile / in the param dict):
 
-Components: gas, central galaxy (CGA), collisionless matter (CLM) with
-adiabatic contraction, total ``rho_dmb``, and HSE electron pressure for tSZ.
+- ``"godmax"`` (default): ``BCM_18_wP`` in
+  ``ref_packages/GODMAX/src/get_BCMP_profile_jit.py`` — gas outer factor
+  ``(1+(r/r_ej)^γ)^{(δ-β)/γ}``, stellar amplitude ``A=0.09``, ``P_nt`` on
+  ``R_200c`` with slope ``n_nt``, HSE to ``6 R_200c``.
+- ``"literature"``: To et al. (2024) eqs. 3.1–3.13 / Dalal et al. (2026)
+  eqs. 2.1–2.11 — gas outer ``(1+r/r_ej)^{(δ-β)/γ}``, ``A=0.055``,
+  ``M1=2.5×10^{11} h^{-1} M_⊙``, ``P_nt`` To 3.12 on ``R_500c`` with index
+  ``0.8``, HSE to the work-grid edge (paper ``∞``).
 
-Internal mass/length units follow GODMAX (``Msun/h``, comoving ``Mpc/h``) and
-are converted at the hmfast boundary (physical ``Msun``, comoving ``Mpc``).
-Electron pressure is returned in ``eV/cm^3`` to match GNFW / B12.
+``n_nt_zcap`` overlays Dalal (2026) eq. 2.12 on either convention.
+``ρ_clm`` always includes the ``1/ζ^3`` Jacobian (GODMAX eq. 13); the
+printed To 3.7 / Dalal 2.7 omit it.
+
+Internal units: GODMAX (``Msun/h``, comoving ``Mpc/h``) at the kernel,
+physical ``Msun`` / comoving ``Mpc`` / ``eV/cm^3`` at the hmfast boundary.
 """
 
 from __future__ import annotations
@@ -68,7 +75,13 @@ _PARAM_KEYS = (
     "c200c",
 )
 
-_STATIC_KEYS = ("nfw_trunc", "num_points_trapz_int")
+_STATIC_KEYS = ("nfw_trunc", "num_points_trapz_int", "convention")
+
+# To 3.2 / Dalal 2.2: A=0.055, M1=2.5e11 h^{-1} M_⊙ (vs GODMAX A=0.09, log10 M1=11.4).
+_LITERATURE_DEFAULTS = dict(
+    A_starcga=0.055,
+    log10_M1_starcga=float(np.log10(2.5e11)),
+)
 
 _DEFAULTS = dict(
     theta_ej_0=4.0,
@@ -102,6 +115,7 @@ _DEFAULTS = dict(
     nfw_trunc=True,
     num_points_trapz_int=64,
     c200c=None,
+    convention="godmax",
 )
 
 
@@ -141,6 +155,7 @@ def _param_dict(obj):
     d = {k: getattr(obj, k) for k in _PARAM_KEYS}
     d["nfw_trunc"] = obj.nfw_trunc
     d["num_points_trapz_int"] = obj.num_points_trapz_int
+    d["convention"] = obj.convention
     return d
 
 
@@ -159,17 +174,25 @@ def _set_params(obj, leaves_or_dict, static=None):
         for k, v in zip(_PARAM_KEYS, leaves_or_dict):
             setattr(obj, k, v)
         if static is not None:
-            obj.nfw_trunc, obj.num_points_trapz_int = static
+            obj.nfw_trunc, obj.num_points_trapz_int, obj.convention = static
 
 
 class _DMBParamsMixin:
     """Shared DMB baryon-feedback parameters (GODMAX ``BCM_18_wP`` defaults)."""
 
     def _init_dmb_params(self, **kwargs):
+        convention = kwargs.get("convention", "godmax")
+        if convention not in ("godmax", "literature"):
+            raise ValueError(
+                f"convention must be 'godmax' or 'literature', got {convention!r}"
+            )
         merged = dict(_DEFAULTS)
+        if convention == "literature":
+            merged.update(_LITERATURE_DEFAULTS)
         for k, v in kwargs.items():
             if k in merged:
                 merged[k] = v
+        merged["convention"] = convention
         _set_params(self, merged)
 
     def _merged_update(self, **kwargs):
@@ -185,14 +208,15 @@ class _DMBParamsMixin:
             self._hankel,
             bool(self.nfw_trunc),
             int(self.num_points_trapz_int),
+            str(self.convention),
         )
         return (_param_leaves(self), aux)
 
     @classmethod
     def _tree_unflatten(cls, aux_data, leaves):
         obj = cls.__new__(cls)
-        x_tuple, hankel, nfw_trunc, n_int = aux_data
-        _set_params(obj, leaves, static=(nfw_trunc, n_int))
+        x_tuple, hankel, nfw_trunc, n_int, convention = aux_data
+        _set_params(obj, leaves, static=(nfw_trunc, n_int, convention))
         obj._x = np.array(x_tuple)
         obj._hankel = hankel
         return obj
@@ -201,27 +225,30 @@ class _DMBParamsMixin:
         merged = self._merged_update(**kwargs)
         leaves = tuple(merged[k] for k in _PARAM_KEYS)
         _, aux = self._tree_flatten()
-        x_tuple, hankel, nfw_trunc, n_int = aux
+        x_tuple, hankel, nfw_trunc, n_int, convention = aux
         nfw_trunc = bool(merged.get("nfw_trunc", nfw_trunc))
         n_int = int(merged.get("num_points_trapz_int", n_int))
+        convention = str(merged.get("convention", convention))
         return type(self)._tree_unflatten(
-            (x_tuple, hankel, nfw_trunc, n_int), leaves
+            (x_tuple, hankel, nfw_trunc, n_int, convention), leaves
         )
 
 
-def _find_r_delta_from_mass(r_h, cum_mass, delta, rho_c_z_h):
-    """Find R_delta where M(<r) = delta * rho_c * 4pi/3 * r^3.
+def _find_r_delta_from_mass(r_h, cum_mass, delta, rho_c_z_h, z=0.0):
+    """Comoving ``R_Δ`` from enclosed mass on the work grid.
 
-    Interpolates in log space on the work grid. ``r_h`` and ``cum_mass``
-    are in GODMAX internal units (Mpc/h, Msun/h).
+    Spherical-overdensity uses *physical* radius:
+    ``M = Δ ρ_c (4π/3) [r_comov/(1+z)]³``. ``r_h`` / ``cum_mass`` are
+    GODMAX internal (Mpc/h, Msun/h). Mean density falls with ``r``, so
+    the interpolant is reversed (JAX ``interp`` needs increasing ``xp``).
     """
-    target = delta * rho_c_z_h * (4.0 * jnp.pi / 3.0)
-    # ratio = M(<r) / r^3; find where ratio == target
+    a = 1.0 + z
+    target = delta * rho_c_z_h * (4.0 * jnp.pi / 3.0) / a**3
     ratio = cum_mass / jnp.maximum(r_h**3, 1e-30)
     log_r = jnp.log(r_h)
     log_ratio = jnp.log(jnp.maximum(ratio, 1e-30))
-    log_target = jnp.log(target)
-    return jnp.exp(jnp.interp(log_target, log_ratio, log_r))
+    log_target = jnp.log(jnp.maximum(target, 1e-30))
+    return jnp.exp(jnp.interp(log_target, log_ratio[::-1], log_r[::-1]))
 
 
 def dmb_halo_quantities(
@@ -266,6 +293,7 @@ def dmb_halo_quantities(
         ``r_comoving``, ``rho_gas``, ``rho_dmb``, ``Pe``, ``zeta``, …
     """
     n_int = int(params["num_points_trapz_int"])
+    convention = params.get("convention", "godmax")
     if r_work_over_r200 is None:
         # Extend slightly past 6 R200c so the HSE outer boundary matches GODMAX.
         r_work_over_r200 = jnp.logspace(-3.0, jnp.log10(16.0), 96)
@@ -328,6 +356,11 @@ def dmb_halo_quantities(
     def gas_unnorm(r):
         u = r / r_co
         v = r / r_ej
+        # To 3.4 / Dalal 2.4 print (1+v)^{(δ-β)/γ}; GODMAX uses (1+v^γ)^{(δ-β)/γ}.
+        if convention == "literature":
+            return 1.0 / (
+                (1.0 + u) ** beta * (1.0 + v) ** ((delta_g - beta) / gamma_g)
+            )
         return 1.0 / (
             (1.0 + u) ** beta
             * (1.0 + v**gamma_g) ** ((delta_g - beta) / gamma_g)
@@ -391,8 +424,8 @@ def dmb_halo_quantities(
     rho_dmb_arr = rho_gas_arr + rho_cga_arr + rho_clm
     mdmb_arr = _cum_mass(rho_dmb_arr, r_h)
 
-    # HSE: one reverse cumulative sweep, P(r)=∫_r^{6 R200c} G ρ_g M / r'^2 dr'
-    r_out = 6.0 * r200c_h
+    # HSE: GODMAX cuts at 6 R200c; papers integrate to ∞ → work-grid edge.
+    r_out = r_h[-1] if convention == "literature" else (6.0 * r200c_h)
     w_out = jnp.where(r_h <= r_out, 1.0, 0.0)
     f_hse = w_out * (_G_KEV * rho_gas_arr * mdmb_arr / (r_h**2))
     ptot_comoving = jnp.clip(_reverse_cumtrapz(f_hse, r_h), 1e-30) * h**2
@@ -400,22 +433,26 @@ def dmb_halo_quantities(
     a = 1.0 / (1.0 + z)
     ptot_phys = ptot_comoving / a**4
     n_nt_zcap = params["n_nt_zcap"]
+    r500c_h = _find_r_delta_from_mass(r_h, Mnfw, 500.0, rho_c_z_h, z)
+    r_over_r500c = r_h / r500c_h
     if n_nt_zcap is not None:
-        # ACT eq. 2.12 (Dalal et al. 2026): radial index fixed at 0.8,
-        # redshift power fixed at 0.5, tanh slope fixed at 0.5, cap
-        # 4^{-n_nt/alpha_nt}. Radial part uses R_500c (not R_200c).
+        # Dalal et al. 2026 eq. 2.12.
         alpha_nt = params["alpha_nt"]
         fz_act = jnp.minimum(
             (1.0 + z) ** 0.5,
             (4.0 ** (-n_nt_zcap / alpha_nt) - 1.0) * jnp.tanh(0.5 * z) + 1.0,
         )
-        # Find R_500c from cumulative NFW mass: M(<r) = 500 * rho_c * 4pi/3 * r^3
-        # => M(<r) / r^3 = 500 * rho_c * 4pi/3.  Interpolate in log-log.
-        r500c_h = _find_r_delta_from_mass(r_h, Mnfw, 500.0, rho_c_z_h)
-        r_over_r500c = r_h / r500c_h
         pnt_fac = alpha_nt * fz_act * (r_over_r500c**0.8)
+    elif convention == "literature":
+        # To et al. 2024 eq. 3.12.
+        alpha_nt = params["alpha_nt"]
+        fz_to = jnp.minimum(
+            (1.0 + z) ** 0.5,
+            (6.0 ** (-0.8) / alpha_nt - 1.0) * jnp.tanh(0.5 * z) + 1.0,
+        )
+        pnt_fac = alpha_nt * fz_to * (r_over_r500c**0.8)
     else:
-        # GODMAX formula: n_nt is radial slope, beta_nt is redshift power.
+        # GODMAX: n_nt is radial slope on R_200c, beta_nt is redshift power.
         fmax = 6.0 ** (-params["n_nt"]) / params["alpha_nt"]
         fz = jnp.minimum(
             (1.0 + z) ** params["beta_nt"],
@@ -436,6 +473,8 @@ def dmb_halo_quantities(
         rho_dmb=rho_dmb_arr * rho_to_phys,
         Pe=pe_ev,
         zeta=zeta_arr,
+        pnt_fac=pnt_fac,
+        r500c_comoving=r500c_h / h,
     )
 
 
@@ -548,7 +587,10 @@ def _hankel_interp_ell(profile, halo_model, k, m, z, r_delta, prefactor_fn):
 
 
 class DMBPressureProfile(_DMBParamsMixin, PressureProfile):
-    """Electron pressure from DMB HSE (GODMAX ``BCM_18_wP``)."""
+    """Electron pressure from DMB HSE.
+
+    ``convention="godmax"`` (default) or ``"literature"`` — see module docstring.
+    """
 
     def __init__(self, x=None, **kwargs):
         self._init_dmb_params(**kwargs)
