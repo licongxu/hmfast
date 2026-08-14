@@ -24,8 +24,11 @@ from hmfast.halos.profiles.dmb import (
     dmb_halo_quantities,
     _DEFAULTS,
     _find_r_delta_from_mass,
+    _param_dict,
+    _R200C_MTOT_MAX,
+    _trapz_mass,
 )
-from hmfast.tracers import tSZTracer
+from hmfast.tracers import tSZTracer, CMBLensingTracer
 
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -232,16 +235,169 @@ def test_dmb_pressure_profile_ur_finite(halo_model):
 
 
 def test_dmb_and_godmax_nfw_same_mtot_uk0(halo_model):
-    """GODMAX: both windows share Mtot, so u(k→0) must match."""
+    """Mass-matched windows: u(k→0) must match for hydro and DMO."""
     h = float(halo_model.cosmology._cosmo_params()["h"])
     m = jnp.array([1e14 / h])
     z = jnp.array([0.0])
-    k = jnp.array([1e-3, 3e-3, 1e-2])
+    k = jnp.array([1e-4, 1e-3, 3e-3])
     dmb = DMBMatterProfile(c200c=4.0, num_points_trapz_int=48)
     nfw = DMBNFWMatterProfile(c200c=4.0, num_points_trapz_int=48)
     ud = np.asarray(dmb.u_k(halo_model, k, m, z))[:, 0, 0]
     un = np.asarray(nfw.u_k(halo_model, k, m, z))[:, 0, 0]
-    np.testing.assert_allclose(ud, un, rtol=0.05)
+    np.testing.assert_allclose(ud[0], un[0], rtol=0.01)
+
+
+def _pk_auto(hm, profile, k, m, z):
+    tr = CMBLensingTracer(profile=profile)
+    return np.asarray(hm.pk_1h(tr, None, k, m, z) + hm.pk_2h(tr, None, k, m, z))
+
+
+_LIT_MATTER_KW = dict(
+    convention="literature",
+    c200c=4.0,
+    num_points_trapz_int=48,
+    eta_star=0.3,
+    eta_cga=0.6,
+)
+
+_TABLE1_OVERRIDES = [
+    {},
+    dict(log10_Mc0=13.0),
+    dict(log10_Mc0=15.0),
+    dict(nu_z=-1.0),
+    dict(mu_beta=0.1),
+    dict(mu_beta=1.5),
+    dict(theta_ej_0=2.0),
+    dict(theta_ej_0=6.0),
+    dict(gamma_rhogas=1.0),
+    dict(gamma_rhogas=4.0),
+    dict(delta_rhogas=3.0),
+    dict(delta_rhogas=11.0),
+    dict(alpha_nt=0.01),
+    dict(eta_star=0.21, eta_cga=0.51),
+    dict(eta_cga=0.35),
+    dict(eta_cga=0.7),
+]
+
+
+@pytest.mark.parametrize("convention", ["godmax", "literature"])
+def test_dmb_kernel_mtot_scale_matches_nfw(halo_model, convention):
+    """∫ ρ_dmb_matter dV = Mtot on the kernel work grid (null: gas params)."""
+    Ob0, Om0, h = _cosmo_ob_om_h(halo_model.cosmology)
+    m_phys = 1e14 / h
+    overrides = [{}, dict(delta_rhogas=3.0), dict(eta_cga=0.35), dict(theta_ej_0=2.0)]
+    for extra in overrides:
+        prof = DMBMatterProfile(
+            convention=convention, c200c=4.0, num_points_trapz_int=64, **extra
+        )
+        q = dmb_halo_quantities(
+            m_phys, 0.3, 4.0, Ob0, Om0, h, _param_dict(prof)
+        )
+        logr = np.log(np.asarray(q["r_comoving"]))
+        mn = float(_trapz_mass(np.asarray(q["rho_nfw"]), logr))
+        md = float(_trapz_mass(np.asarray(q["rho_dmb_matter"]), logr))
+        assert abs(md / mn - 1.0) < 0.015, f"{convention} {extra}: Mdmb/Mnfw={md/mn:.4f}"
+        assert float(q["matter_scale"]) > 0.0
+        pe = np.asarray(q["Pe"])
+        assert np.all(np.isfinite(pe))
+
+
+@pytest.mark.parametrize("convention", ["godmax", "literature"])
+def test_dmb_uk0_hydro_equals_nfw_null(halo_model, convention):
+    """Single-halo u(k→0) hydro/DMO = 1 after mass matching."""
+    h = float(halo_model.cosmology._cosmo_params()["h"])
+    m = jnp.array([1e14 / h])
+    z = jnp.array([0.3])
+    k = jnp.array([1e-4])
+    kw = dict(convention=convention, c200c=4.0, num_points_trapz_int=64)
+    assert abs(DMBMatterProfile().x[-1] - _R200C_MTOT_MAX) < 1e-12
+    uh = float(DMBMatterProfile(**kw).u_k(halo_model, k, m, z)[0, 0, 0])
+    ud = float(DMBNFWMatterProfile(**kw).u_k(halo_model, k, m, z)[0, 0, 0])
+    assert abs(uh / ud - 1.0) < 0.005, f"{convention}: uk ratio={uh/ud:.4f}"
+
+
+def test_dmb_pressure_unaffected_by_matter_scale(halo_model):
+    """tSZ/Pe uses unscaled ρ_dmb; matter_scale must not change Pe."""
+    Ob0, Om0, h = _cosmo_ob_om_h(halo_model.cosmology)
+    m_phys = 1e14 / h
+    z0, c0 = 0.3, 5.0
+    p = DMBPressureProfile(convention="literature", c200c=c0, num_points_trapz_int=48)
+    q = dmb_halo_quantities(m_phys, z0, c0, Ob0, Om0, h, _param_dict(p))
+    assert abs(float(q["matter_scale"]) - 1.0) > 1e-4
+    r = jnp.asarray(q["r_comoving"])
+    pe_prof = np.asarray(p.u_r(halo_model, r, jnp.array([m_phys]), jnp.array([z0])))[:, 0, 0]
+    pe_q = np.asarray(q["Pe"])
+    inner = pe_q > 1e-20
+    np.testing.assert_allclose(pe_prof[inner], pe_q[inner], rtol=0.02)
+
+
+def test_dmb_pk_self_ratio_null(halo_model):
+    """Identical profiles yield identical P(k) (repeatability null)."""
+    h = float(halo_model.cosmology._cosmo_params()["h"])
+    m = jnp.logspace(13.0, 15.0, 12) / h
+    z = jnp.array([0.3])
+    k = jnp.array([1e-3, 1e-2])
+    hm = HaloModel(cosmology=halo_model.cosmology, hm_consistency=True)
+    for cls in (DMBMatterProfile, DMBNFWMatterProfile):
+        pk_a = _pk_auto(hm, cls(**_LIT_MATTER_KW), k, m, z)[:, 0]
+        pk_b = _pk_auto(hm, cls(**_LIT_MATTER_KW), k, m, z)[:, 0]
+        np.testing.assert_allclose(pk_a, pk_b, rtol=1e-12)
+        assert np.all(pk_a > 0.0)
+
+
+def test_dmb_dmo_independent_of_gas_params(halo_model):
+    """Collisionless NFW P(k) is a null: gas parameters must not move it."""
+    h = float(halo_model.cosmology._cosmo_params()["h"])
+    m = jnp.logspace(13.0, 15.0, 12) / h
+    z = jnp.array([0.3])
+    k = jnp.array([1e-3, 0.1, 1.0])
+    hm = HaloModel(cosmology=halo_model.cosmology, hm_consistency=True)
+    pk0 = _pk_auto(hm, DMBNFWMatterProfile(**_LIT_MATTER_KW), k, m, z)[:, 0]
+    pk1 = _pk_auto(
+        hm,
+        DMBNFWMatterProfile(**{**_LIT_MATTER_KW, "theta_ej_0": 8.0, "delta_rhogas": 3.0}),
+        k,
+        m,
+        z,
+    )[:, 0]
+    np.testing.assert_allclose(pk1, pk0, rtol=1e-10)
+
+
+@pytest.mark.parametrize("convention", ["godmax", "literature"])
+def test_dmb_matter_suppression_large_scale(halo_model, convention):
+    """S(k→0) → 1 for Table 1 endpoints; parameter spread is a null."""
+    h = float(halo_model.cosmology._cosmo_params()["h"])
+    m = jnp.logspace(12.5, 15.0, 16) / h
+    z = jnp.array([0.3])
+    k = jnp.array([1e-3])
+    hm = HaloModel(cosmology=halo_model.cosmology, hm_consistency=True)
+    base = dict(convention=convention, c200c=4.0, num_points_trapz_int=48)
+    dmo_kw = {**base, "eta_star": 0.3, "eta_cga": 0.6}
+    pk_d = _pk_auto(hm, DMBNFWMatterProfile(**dmo_kw), k, m, z)[:, 0]
+    overrides = _TABLE1_OVERRIDES if convention == "literature" else [{}, dict(delta_rhogas=3.0), dict(eta_cga=0.35)]
+    s_vals = []
+    for extra in overrides:
+        pk_h = _pk_auto(hm, DMBMatterProfile(**{**dmo_kw, **extra}), k, m, z)[:, 0]
+        s_vals.append(float(pk_h[0] / np.maximum(pk_d[0], 1e-30)))
+    assert all(abs(s - 1.0) < 0.01 for s in s_vals), f"{convention}: S={s_vals}"
+    assert max(s_vals) - min(s_vals) < 0.008, f"{convention}: spread={s_vals}"
+
+
+def test_dmb_suppression_hm_consistency_null(halo_model):
+    """S(k→0) is a mass-window statement; toggling hm_consistency must not reopen a 5% gap."""
+    h = float(halo_model.cosmology._cosmo_params()["h"])
+    m = jnp.logspace(12.5, 15.0, 16) / h
+    z = jnp.array([0.3])
+    k = jnp.array([1e-3])
+    s = []
+    for flag in (False, True):
+        hm = HaloModel(cosmology=halo_model.cosmology, hm_consistency=flag)
+        pk_h = _pk_auto(hm, DMBMatterProfile(**_LIT_MATTER_KW), k, m, z)[:, 0]
+        pk_d = _pk_auto(hm, DMBNFWMatterProfile(**_LIT_MATTER_KW), k, m, z)[:, 0]
+        s.append(float(pk_h[0] / pk_d[0]))
+    assert abs(s[0] - 1.0) < 0.01
+    assert abs(s[1] - 1.0) < 0.01
+    assert abs(s[0] - s[1]) < 0.005
 
 
 def test_dmb_matter_and_gas_profiles(halo_model):

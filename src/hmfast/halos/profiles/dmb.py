@@ -118,6 +118,49 @@ _DEFAULTS = dict(
     convention="godmax",
 )
 
+# Truncated-NFW mass window for matter ``P(k)`` (``∫_0^{16 R200c}`` in the DMB kernel).
+_R200C_MTOT_MAX = 16.0
+_DEFAULT_MATTER_X = np.logspace(-4.0, np.log10(_R200C_MTOT_MAX), 256)
+
+
+def _enclosed_mass(rho, r):
+    """``∫ 4π r² ρ dr`` along the radius axis of a log-spaced grid."""
+    r = r[:, None, None] if r.ndim == 1 else r
+    return jnp.trapezoid(rho * 4.0 * jnp.pi * r**3, x=jnp.log(r), axis=0)
+
+
+def _matter_rho_over_mean(halo_model, r, m, z, params, field, c200c_override):
+    """Matter density ``ρ/ρ̄_m`` for ``P(k)``, truncated at ``16 R200c``.
+
+    ``rho_dmb_matter`` is scaled in :func:`dmb_halo_quantities` to kernel
+    ``Mtot``. If the query radius covers that window (Hankel ``u_k`` path),
+    scale again so hydro and DMO enclose the same mass on the *sampled*
+    grid — that is the mass the Fourier transform actually sees.
+    """
+    rho = _eval_field(halo_model, r, m, z, params, field, c200c_override)
+    z_arr = jnp.atleast_1d(z)
+    m_arr = jnp.atleast_1d(m)
+    r200c_comov = _r200c_grid(halo_model, m_arr, z_arr, c200c_override) * (
+        1.0 + z_arr[None, :]
+    )
+    r_grid = r[:, None, None] if r.ndim == 1 else r
+    r_max = _R200C_MTOT_MAX * r200c_comov
+    mask = (r_grid <= r_max[None, :, :]).astype(rho.dtype)
+    rho = rho * mask
+    if field == "rho_dmb_matter":
+        rho_nfw = (
+            _eval_field(halo_model, r, m, z_arr, params, "rho_nfw", c200c_override)
+            * mask
+        )
+        m_nfw = jnp.maximum(_enclosed_mass(rho_nfw, r_grid), 1e-30)
+        m_dmb = jnp.maximum(_enclosed_mass(rho, r_grid), 1e-30)
+        covers = r_grid[-1] >= (0.9 * r_max)[None, :, :]
+        scale = jnp.where(covers[0], m_nfw / m_dmb, 1.0)
+        rho = rho * scale[None, :, :]
+    cparams = halo_model.cosmology._cosmo_params()
+    rho_mean_0 = cparams["Rho_crit_0"] * cparams["Omega0_m"]
+    return rho / rho_mean_0
+
 
 def _trapz_mass(f_r, log_r):
     r = jnp.exp(log_r)
@@ -461,6 +504,11 @@ def dmb_halo_quantities(
         pnt_fac = params["alpha_nt"] * fz * (r_work_over_r200**params["n_nt"])
     pe_ev = (ptot_phys * jnp.maximum(0.0, 1.0 - pnt_fac) / _PTH_TO_PE) * _PE_KEV_TO_EV
 
+    mdmb_win = _trapz_mass(rho_dmb_arr, log_r_h)
+    mnfw_win = _trapz_mass(rho_nfw_arr, log_r_h)
+    matter_scale = mnfw_win / jnp.maximum(mdmb_win, 1e-30 * m_h)
+    rho_dmb_matter_arr = rho_dmb_arr * matter_scale
+
     rho_to_phys = h**2
     return dict(
         r_comoving=r_h / h,
@@ -471,10 +519,13 @@ def dmb_halo_quantities(
         rho_clm=rho_clm * rho_to_phys,
         rho_nfw=rho_nfw_arr * rho_to_phys,
         rho_dmb=rho_dmb_arr * rho_to_phys,
+        rho_dmb_matter=rho_dmb_matter_arr * rho_to_phys,
         Pe=pe_ev,
         zeta=zeta_arr,
         pnt_fac=pnt_fac,
         r500c_comoving=r500c_h / h,
+        Mtot=Mtot / h,
+        matter_scale=matter_scale,
     )
 
 
@@ -630,16 +681,22 @@ class DMBPressureProfile(_DMBParamsMixin, PressureProfile):
 class DMBMatterProfile(_DMBParamsMixin, MatterProfile):
     """Total DMB matter profile ``rho_dmb / rho_m0`` for lensing / ``P(k)``.
 
-    GODMAX normalizes both DMB and the gravity-only NFW by the same
-    ``Mtot = ∫_0^{16 R200} 4π r² ρ_nfw dr`` (not ``M200c``). Use
-    :class:`DMBNFWMatterProfile` as the NFW counterpart so ``u(k→0)`` matches.
+    Both hydro and DMO counterparts are normalized to the same truncated-NFW
+    ``Mtot = ∫_0^{16 R200c} 4π r² ρ_nfw dr`` (not ``M200c``). Use
+    :class:`DMBNFWMatterProfile` as the collisionless reference so ``u(k→0)``
+    matches for ``P_hydro/P_DMO``.
+
+    ``ρ_dmb`` is scaled to ``Mtot`` on the kernel ``Mtot`` quadrature (not the
+    Hankel sampling grid) so feedback parameters do not shift the large-scale
+    suppression ratio. Pressure / tSZ keep the unscaled hydro ``ρ_dmb``.
+    The Hankel grid ends at ``16 R200c``.
     """
 
-    _density_field = "rho_dmb"
+    _density_field = "rho_dmb_matter"
 
     def __init__(self, x=None, **kwargs):
         self._init_dmb_params(**kwargs)
-        self.x = x if x is not None else np.logspace(-4, 1.5, 256)
+        self.x = x if x is not None else _DEFAULT_MATTER_X.copy()
 
     @property
     def x(self):
@@ -652,12 +709,15 @@ class DMBMatterProfile(_DMBParamsMixin, MatterProfile):
 
     @partial(jax.jit, static_argnums=(0,))
     def u_r(self, halo_model, r, m, z):
-        rho = _eval_field(
-            halo_model, r, m, z, _param_dict(self), self._density_field, self.c200c
+        return _matter_rho_over_mean(
+            halo_model,
+            r,
+            m,
+            z,
+            _param_dict(self),
+            self._density_field,
+            self.c200c,
         )
-        cparams = halo_model.cosmology._cosmo_params()
-        rho_mean_0 = cparams["Rho_crit_0"] * cparams["Omega0_m"]
-        return rho / rho_mean_0
 
     @partial(jax.jit, static_argnums=(0,))
     def u_k(self, halo_model, k, m, z):
@@ -738,11 +798,11 @@ class DMBGasDensityProfile(_DMBParamsMixin, DensityProfile):
 
 
 class DMBNFWMatterProfile(DMBMatterProfile):
-    """GODMAX truncated NFW counterpart to :class:`DMBMatterProfile`.
+    """Truncated-NFW matter reference for :class:`DMBMatterProfile`.
 
-    Same ``Mtot`` and Hankel path as DMB (``setup_power_spectra_jit.uk_nfw``).
-    Do not use analytic :class:`~hmfast.halos.profiles.matter.NFWMatterProfile`
-    for ``P_DMB/P_NFW`` — that is ``M200c``, not GODMAX ``Mtot``.
+    Same ``Mtot`` window and Hankel path as DMB matter (``16 R200c``). Do not
+    use analytic :class:`~hmfast.halos.profiles.matter.NFWMatterProfile` for
+    ``P_hydro/P_DMO`` — that uses ``M200c``, not the DMB ``Mtot`` window.
     """
 
     _density_field = "rho_nfw"
