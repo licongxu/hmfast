@@ -8,6 +8,7 @@ import jax.scipy as jscipy
 from typing import Dict, Any, Optional, Callable
 from functools import partial
 from mcfit import TophatVar
+from hmfast.utils import log_interp1d_extrap
 
 
 def _simpson_nonuniform(y, x, axis=-1):
@@ -483,7 +484,7 @@ class HaloModel:
         
         # Reconstruct the legacy linear spectrum normalization used by the
         # current halo-model projection chain so outputs remain unchanged.
-        P_lin = jax.vmap(lambda zi: jnp.interp(k, *self.cosmology.pk(zi, linear=True)))(z).T
+        P_lin = jax.vmap(lambda zi: log_interp1d_extrap(k, *self.cosmology.pk(zi, linear=True)))(z).T
         
         return P_lin * I1 * I2
 
@@ -940,7 +941,7 @@ class HaloModel:
             # Linear power at k_ell, reusing the legacy (Mpc/h)^3 normalization
             # of pk_2h so the masked and unmasked
             # 2-halo paths share an identical projection convention.
-            p_lin = jnp.interp(ki, *self.cosmology.pk(zi, linear=True))
+            p_lin = log_interp1d_extrap(ki, *self.cosmology.pk(zi, linear=True))
             return p_lin * I1 * I2  # (Nl,)
 
         pk_grid = jax.vmap(slice_z)(jnp.arange(z.shape[0]))  # (Nz, Nl)
