@@ -454,8 +454,7 @@ class HaloModel:
             :math:`(N_k, N_z)`.
         """
         
-        cparams = self.cosmology._cosmo_params()
-        h, k, m, z = cparams["h"], jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
+        k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
         tracer2 = tracer1 if tracer2 is None else tracer2
     
         # Weights and Ingredients
@@ -489,11 +488,8 @@ class HaloModel:
         I1 = get_I(tracer1)
         I2 = I1 if tracer1 is tracer2 else get_I(tracer2)
         
-        # Reconstruct the legacy spectrum normalization used by the current
-        # halo-model projection chain so outputs remain unchanged. Uses the
-        # linear matter power spectrum by default; linear=False selects the
-        # nonlinear one.
-        P_m = jax.vmap(lambda zi: jnp.interp(h * k, *self.cosmology.pk(zi, linear=linear)))(z).T * h**6
+        # Cosmology.pk already returns physical k [Mpc^{-1}] and P [Mpc^3].
+        P_m = jax.vmap(lambda zi: jnp.interp(k, *self.cosmology.pk(zi, linear=linear)))(z).T
 
         return P_m * I1 * I2
 
@@ -1008,9 +1004,6 @@ class HaloModel:
         """
         tracer2 = tracer1 if tracer2 is None else tracer2
 
-        cparams = self.cosmology._cosmo_params()
-        h = cparams["h"]
-
         l = jnp.atleast_1d(l)
         m = jnp.atleast_1d(m)
         z = jnp.atleast_1d(z)
@@ -1038,10 +1031,7 @@ class HaloModel:
                 u2 = tracer2.profile.u_k(self, ki, m, jnp.atleast_1d(zi))[:, :, 0]
                 I2 = jnp.trapezoid(u2 * wz, x=logm, axis=-1)
 
-            # Linear power at k_ell, reusing the legacy (Mpc/h)^3 normalization
-            # of pk_2h (h*k lookup, then * h**6) so the masked and unmasked
-            # 2-halo paths share an identical projection convention.
-            p_lin = jnp.interp(h * ki, *self.cosmology.pk(zi, linear=True)) * h**6
+            p_lin = jnp.interp(ki, *self.cosmology.pk(zi, linear=True))
             return p_lin * I1 * I2  # (Nl,)
 
         pk_grid = jax.vmap(slice_z)(jnp.arange(z.shape[0]))  # (Nz, Nl)
