@@ -4,7 +4,7 @@ import jax.numpy as jnp
 from typing import Dict, Union
 from hmfast.emulator_load import EmulatorLoader, EmulatorLoaderPCA
 from hmfast.download import get_default_data_path
-from hmfast.utils import Const
+from hmfast.utils import Const, log_interp1d_extrap
 from functools import partial
 
 jax.config.update("jax_enable_x64", True)
@@ -461,8 +461,8 @@ class Cosmology:
 
         k0 = 1e-2
         z_grid_pk = self._z_grid_pk()
-        pk0_grid = jax.vmap(lambda zp: jnp.interp(k0, *self.pk(zp, linear=True)))(z_grid_pk)
-        D_grid = jnp.sqrt(pk0_grid / jnp.interp(k0, *self.pk(0.0, linear=True)))
+        pk0_grid = jax.vmap(lambda zp: log_interp1d_extrap(k0, *self.pk(zp, linear=True)))(z_grid_pk)
+        D_grid = jnp.sqrt(pk0_grid / log_interp1d_extrap(k0, *self.pk(0.0, linear=True)))
     
         return jnp.interp(z, z_grid_pk, D_grid)
 
@@ -523,7 +523,7 @@ class Cosmology:
         k_grid = jnp.geomspace(1e-5, 1e1, 1000)
         z_grid_pk = self._z_grid_pk()
 
-        P_grid = jax.vmap(lambda zp: jnp.interp(k_grid, *self.pk(zp, linear=True)))(z_grid_pk)
+        P_grid = jax.vmap(lambda zp: log_interp1d_extrap(k_grid, *self.pk(zp, linear=True)))(z_grid_pk)
     
         a_grid = 1.0 / (1.0 + z_grid_pk)
         H_grid = self.hubble_parameter(z_grid_pk)
