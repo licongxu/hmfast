@@ -144,8 +144,7 @@ class HaloModel:
 
         # Create TophatVar instance once to instantiate it
         dummy_k, _ = self.cosmology.pk(1., linear=True)
-        h = self.cosmology.H0 / 100.0
-        self._tophat_instance = partial(TophatVar(dummy_k / h, lowring=True, backend='jax'), extrap=True)
+        self._tophat_instance = partial(TophatVar(dummy_k, lowring=True, backend='jax'), extrap=True)
 
 
     def _tree_flatten(self):
@@ -484,7 +483,7 @@ class HaloModel:
         
         # Reconstruct the legacy linear spectrum normalization used by the
         # current halo-model projection chain so outputs remain unchanged.
-        P_lin = jax.vmap(lambda zi: jnp.interp(h * k, *self.cosmology.pk(zi, linear=True)))(z).T * h**6
+        P_lin = jax.vmap(lambda zi: jnp.interp(k, *self.cosmology.pk(zi, linear=True)))(z).T
         
         return P_lin * I1 * I2
 
@@ -939,9 +938,9 @@ class HaloModel:
                 I2 = jnp.trapezoid(u2 * wz, x=logm, axis=-1)
 
             # Linear power at k_ell, reusing the legacy (Mpc/h)^3 normalization
-            # of pk_2h (h*k lookup, then * h**6) so the masked and unmasked
+            # of pk_2h so the masked and unmasked
             # 2-halo paths share an identical projection convention.
-            p_lin = jnp.interp(h * ki, *self.cosmology.pk(zi, linear=True)) * h**6
+            p_lin = jnp.interp(ki, *self.cosmology.pk(zi, linear=True))
             return p_lin * I1 * I2  # (Nl,)
 
         pk_grid = jax.vmap(slice_z)(jnp.arange(z.shape[0]))  # (Nz, Nl)
