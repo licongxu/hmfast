@@ -349,6 +349,15 @@ class TestMassDefinition:
 # Power spectra (tSZ)
 # ---------------------------------------------------------------------------
 
+class TestMatterPk:
+    def test_pk_matches_emulator_native_grid(self, cosmology):
+        k, P = cosmology.pk(1.0, linear=True)
+        k_native, _ = cosmology._pk_grid()
+        assert jnp.allclose(k, k_native)
+        assert jnp.all(jnp.isfinite(P))
+        assert jnp.all(P > 0)
+
+
 class TesttSZPowerSpectra:
     def test_pk_1h_shape(self, halo_model, tsz_tracer):
         k = jnp.logspace(-3, 1, 50)
