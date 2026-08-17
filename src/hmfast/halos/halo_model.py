@@ -76,8 +76,7 @@ class HaloModel:
 
         # Create TophatVar instance once to instantiate it
         dummy_k, _ = self.cosmology.pk(1., linear=True)
-        h = self.cosmology.H0 / 100.0
-        self._tophat_instance = partial(TophatVar(dummy_k / h, lowring=True, backend='jax'), extrap=True)
+        self._tophat_instance = partial(TophatVar(dummy_k, lowring=True, backend='jax'), extrap=True)
 
 
     def _tree_flatten(self):
@@ -415,7 +414,7 @@ class HaloModel:
         
         # Reconstruct the legacy linear spectrum normalization used by the
         # current halo-model projection chain so outputs remain unchanged.
-        P_lin = jax.vmap(lambda zi: jnp.interp(h * k, *self.cosmology.pk(zi, linear=True)))(z).T * h**6
+        P_lin = jax.vmap(lambda zi: jnp.interp(k, *self.cosmology.pk(zi, linear=True)))(z).T
         
         return P_lin * I1 * I2
 
