@@ -144,8 +144,7 @@ class HaloModel:
 
         # Create TophatVar instance once to instantiate it
         dummy_k, _ = self.cosmology.pk(1., linear=True)
-        h = self.cosmology.H0 / 100.0
-        self._tophat_instance = partial(TophatVar(dummy_k / h, lowring=True, backend='jax'), extrap=True)
+        self._tophat_instance = partial(TophatVar(dummy_k, lowring=True, backend='jax'), extrap=True)
 
 
     def _tree_flatten(self):
