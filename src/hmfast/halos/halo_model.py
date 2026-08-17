@@ -8,6 +8,7 @@ import jax.scipy as jscipy
 from typing import Dict, Any, Optional, Callable
 from functools import partial
 from mcfit import TophatVar
+from hmfast.utils import log_interp1d_extrap
 
 from hmfast.halos.massfunc import T08HaloMass, TW10SubHaloMass
 from hmfast.halos.bias import T10HaloBias
@@ -415,7 +416,7 @@ class HaloModel:
         
         # Reconstruct the legacy linear spectrum normalization used by the
         # current halo-model projection chain so outputs remain unchanged.
-        P_lin = jax.vmap(lambda zi: jnp.interp(k, *self.cosmology.pk(zi, linear=True)))(z).T
+        P_lin = jax.vmap(lambda zi: log_interp1d_extrap(k, *self.cosmology.pk(zi, linear=True)))(z).T
         
         return P_lin * I1 * I2
 
