@@ -8,6 +8,7 @@ import jax.scipy as jscipy
 from typing import Dict, Any, Optional, Callable
 from functools import partial
 from mcfit import TophatVar
+from hmfast.utils import log_interp1d_extrap
 
 
 def _simpson_nonuniform(y, x, axis=-1):
@@ -488,7 +489,8 @@ class HaloModel:
         I2 = I1 if tracer1 is tracer2 else get_I(tracer2)
         
         # Cosmology.pk already returns physical k [Mpc^{-1}] and P [Mpc^3].
-        P_m = jax.vmap(lambda zi: jnp.interp(k, *self.cosmology.pk(zi, linear=linear)))(z).T
+        # Log-log interpolation matches official hmfast.Cosmology.pk(k, z).
+        P_m = jax.vmap(lambda zi: log_interp1d_extrap(k, *self.cosmology.pk(zi, linear=linear)))(z).T
 
         return P_m * I1 * I2
 
@@ -1030,7 +1032,7 @@ class HaloModel:
                 u2 = tracer2.profile.u_k(self, ki, m, jnp.atleast_1d(zi))[:, :, 0]
                 I2 = jnp.trapezoid(u2 * wz, x=logm, axis=-1)
 
-            p_lin = jnp.interp(ki, *self.cosmology.pk(zi, linear=True))
+            p_lin = log_interp1d_extrap(ki, *self.cosmology.pk(zi, linear=True))
             return p_lin * I1 * I2  # (Nl,)
 
         pk_grid = jax.vmap(slice_z)(jnp.arange(z.shape[0]))  # (Nz, Nl)

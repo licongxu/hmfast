@@ -14,6 +14,7 @@ jax.config.update("jax_enable_x64", True)
 
 from hmfast.cosmology import Cosmology
 from hmfast.halos import HaloModel
+from hmfast.utils import log_interp1d_extrap
 from hmfast.halos.mass_definition import MassDefinition
 from hmfast.halos.profiles import (
     GNFWPressureProfile, NFWMatterProfile, B12PressureProfile,
@@ -146,7 +147,7 @@ class TestPhysicsLimits:
         z = jnp.array([0.5])
         pk2h = halo_model.pk_2h(cmb_lensing_tracer, cmb_lensing_tracer, k=k, m=m, z=z)
         pk_lin = halo_model.cosmology.pk(z[0], linear=True)[1]
-        pk_lin_interp = jnp.interp(k, halo_model.cosmology.pk(z[0], linear=True)[0], pk_lin)
+        pk_lin_interp = log_interp1d_extrap(k, halo_model.cosmology.pk(z[0], linear=True)[0], pk_lin)
         # At very large scales, P_2h should be close to P_lin (within factor ~2 given approximations)
         ratio = pk2h[:, 0] / pk_lin_interp
         # The ratio should be order unity (within factor 3, allowing for bias and profile effects)
@@ -356,6 +357,11 @@ class TestMatterPk:
         assert jnp.allclose(k, k_native)
         assert jnp.all(jnp.isfinite(P))
         assert jnp.all(P > 0)
+
+    def test_pk_log_interp_recovers_grid(self, cosmology):
+        k, P = cosmology.pk(1.0, linear=True)
+        sl = slice(None, None, 11)
+        assert jnp.allclose(log_interp1d_extrap(k[sl], k, P), P[sl], rtol=1e-12, atol=0.0)
 
 
 class TesttSZPowerSpectra:
