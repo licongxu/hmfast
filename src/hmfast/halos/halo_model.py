@@ -82,6 +82,18 @@ from hmfast.halos.massfunc import T08HaloMass, TW10SubHaloMass
 from hmfast.halos.bias import T10HaloBias
 from hmfast.halos.concentration import D08Concentration, B13Concentration
 from hmfast.halos.mass_definition import MassDefinition
+from hmfast.halos.periodic import (
+    cubic_lattice_shells,
+    cubic_lattice_vectors,
+    gaussian_cl_variance,
+    interpolate_kz,
+    integrate_radial_bessel,
+    lattice_Q_ell,
+    lattice_gaussian_cl_cov,
+    lattice_wavenumbers,
+    multipole_bin_weights,
+    n_max_for_kmax,
+)
 from hmfast.cosmology import Cosmology
 
 jax.config.update("jax_enable_x64", True)
@@ -1042,6 +1054,548 @@ class HaloModel:
         comov_vol = self.cosmology.comoving_volume_element(z)
         integrand = pk_grid * (comov_vol * kernel1 * kernel2)[:, None]
         return jnp.trapezoid(integrand, x=z, axis=0)
+
+
+    def bias_weighted_I(self, tracer, k, m, z):
+        """Bias-weighted halo integral :math:`I_1(k, z)` used by the 2-halo term.
+
+        .. math::
+
+            I_1(k, z) = \\int d\\ln M \\, \\frac{dn}{d\\ln M}\\, b_1(M, z)\\,
+                u(k \\mid M, z)
+
+        plus the same halo-model consistency counterterm as :meth:`pk_2h`.
+        The profile :math:`u` is the existing Fourier-space tracer profile
+        (for tSZ this is the implemented angular :math:`y_\\ell` evaluated at
+        :math:`\\ell = k\\chi-1/2`).
+
+        Parameters
+        ----------
+        tracer : Tracer
+            Tracer whose profile enters the integral.
+        k : array-like
+            Wavenumber grid in :math:`\\mathrm{Mpc}^{-1}`.
+        m : array
+            Halo-mass grid in physical :math:`M_\\odot`.
+        z : array-like
+            Redshift grid.
+
+        Returns
+        -------
+        I : array
+            :math:`I_1(k, z)` with shape :math:`(N_k, N_z)`.
+        """
+        k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
+        logm = jnp.log(m)
+        dm = jnp.diff(logm)
+        w = jnp.concatenate([jnp.array([dm[0]]), dm[:-1] + dm[1:], jnp.array([dm[-1]])]) * 0.5
+
+        dndlnm = self.halo_mass_function.halo_mass_function(self, m, z)
+        bias = self.halo_bias.halo_bias(self, m, z)
+        total_weights = dndlnm * bias * w[:, None]
+
+        uk = tracer.profile.u_k(self, k, m, z)
+        integral = jnp.sum(uk * total_weights[None, :, :], axis=1)
+
+        n_min, b1_min, _ = self._counter_terms(m, z)
+        correction = b1_min[None, :] * n_min[None, :] * uk[:, 0, :]
+        return integral + self.hm_consistency * correction
+
+
+    def _emulator_pk(self, k, z, linear=True):
+        r"""Matter :math:`P(k,z)` from :meth:`Cosmology.pk` (physical Mpc, no \(h\) rescaling)."""
+        k, z = jnp.atleast_1d(k), jnp.atleast_1d(z)
+        return jax.vmap(
+            lambda zi: log_interp1d_extrap(
+                k, *self.cosmology.pk(zi, linear=linear)
+            )
+        )(z).T
+
+
+    def radial_transfer_R_ell(self, tracer, l, k, m, z, linear=True, n_chi=None,
+                              I=None, P_m=None):
+        r"""Non-Limber radial transfer :math:`R_\ell(k)` in existing :math:`C_\ell` units.
+
+        The PDF defines
+        :math:`R_\ell(k)=\int d\chi\, W_y(\chi)\, I_{11}(k,z)\sqrt{P_{\mathrm{lin}}}\,
+        j_\ell(k\chi)`. Mapped onto this repo's Limber measure
+        :math:`\int dz\,(dV/dz\,d\Omega)\, W(z)^2 P_m I_1^2` with
+        :math:`P_m` from :meth:`Cosmology.pk` that becomes
+
+        .. math::
+
+            R_\ell(k) = \int dz\, \frac{dV}{dz\,d\Omega}\, W(z)\,
+                I_1(k, z)\, \sqrt{P_m(k, z)}\, j_\ell\bigl(k\,\chi(z)\bigr)
+
+        with the same :math:`I_1` as :meth:`pk_2h` and :math:`P_m` from
+        :meth:`Cosmology.pk`. This is **not** a Limber evaluation at
+        :math:`k=(\ell+1/2)/\chi`.
+
+        The slow weight is evaluated on the supplied :math:`(k,z)` grid and
+        interpolated onto a finer radial mesh (``n_chi``) so :math:`j_\ell`
+        is resolved. At large :math:`L` or high :math:`\ell` (small scales)
+        the lattice sum of these :math:`R_\ell` approaches the usual Limber
+        2-halo term.
+
+        Parameters
+        ----------
+        tracer : Tracer
+            Line-of-sight kernel and halo profile.
+        l : array-like
+            Multipoles :math:`\ell` (integer values are expected).
+        k : array-like
+            Three-dimensional wavenumbers in :math:`\mathrm{Mpc}^{-1}`
+            (lattice magnitudes :math:`k_s`, not Limber :math:`k_\ell`).
+        m : array
+            Halo-mass grid in physical :math:`M_\odot`.
+        z : array
+            Redshift grid on which :math:`I_1` and :math:`P_m` are computed.
+        linear : bool, optional
+            If True (default) use the linear matter power spectrum.
+        n_chi : int, optional
+            Number of radial samples for the Bessel integral. ``None``
+            chooses a grid that resolves :math:`k_{\\max}\\chi`.
+        I, P_m : array, optional
+            Precomputed :math:`I_1(k,z)` and :math:`P_m(k,z)` with shape
+            :math:`(N_k, N_z)`. Used to avoid repeating the mass integral.
+
+        Returns
+        -------
+        R : array
+            :math:`R_\ell(k)` with shape :math:`(N_\ell, N_k)`.
+        """
+        import numpy as np
+
+        l = jnp.atleast_1d(l)
+        k = jnp.atleast_1d(k)
+        m = jnp.atleast_1d(m)
+        z = jnp.atleast_1d(z)
+
+        if I is None:
+            I = self.bias_weighted_I(tracer, k, m, z)
+        if P_m is None:
+            P_m = self._emulator_pk(k, z, linear=linear)
+        sqrtP = jnp.sqrt(jnp.clip(jnp.asarray(P_m), 0.0, None))
+
+        chi = self.cosmology.angular_diameter_distance(z) * (1.0 + z)
+        comov_vol = self.cosmology.comoving_volume_element(z)
+        W = tracer.kernel(self.cosmology, z)
+        weight = (comov_vol * W)[None, :] * jnp.asarray(I) * sqrtP
+
+        R = integrate_radial_bessel(l, k, z, chi, weight, n_chi=n_chi)
+        return jnp.asarray(R)
+
+
+    def cl_2h_periodic(self, tracer1, tracer2, l, m, z, L, n_max=None, s_max=None,
+                       s=None, g=None, linear=True, k_max=None, n_k=None, n_chi=None):
+        r"""Exact non-Limber periodic-universe 2-halo angular spectrum.
+
+        .. math::
+
+            C_{\ell,L}^{2h} = \frac{4\pi}{L^3}\sum_{s\ge 1} g_s\,
+                R_\ell(k_s)\, R'_\ell(k_s),
+            \qquad k_s = \frac{2\pi}{L}\sqrt{s}
+
+        with :math:`R_\ell` from :meth:`radial_transfer_R_ell` (PDF eqs. 36–41
+        and 105–106). The DC mode :math:`p=0` is excluded. This is **not**
+        the coarse-grained Limber cutoff :math:`\Theta(k_\ell-2\pi/L)`.
+
+        The existing :meth:`cl_1h` path is unchanged. :math:`P_m` is
+        :meth:`Cosmology.pk` in physical :math:`\\mathrm{Mpc}^3` (same
+        convention as :meth:`pk_1h` / :meth:`pk_2h`). At large :math:`L`
+        or high :math:`\\ell` this approaches Limber :meth:`cl_2h`,
+        provided the lattice extends to :math:`k \\gtrsim k_\\ell`.
+
+        Parameters
+        ----------
+        tracer1 : Tracer
+            First tracer.
+        tracer2 : Tracer or None
+            Second tracer (``None`` means auto-spectrum).
+        l : array-like
+            Multipole grid.
+        m : array
+            Halo-mass grid in physical :math:`M_\odot`.
+        z : array
+            Redshift grid.
+        L : float
+            Periodic box side length in physical :math:`\mathrm{Mpc}`.
+        n_max : int, optional
+            Keep lattice vectors with :math:`|p_i|\le n_{\max}`.
+        s_max : int, optional
+            Keep shells with :math:`s\le s_{\max}`. Required together with
+            ``n_max`` unless ``s`` and ``g`` are supplied.
+        s, g : array-like, optional
+            Precomputed shells and multiplicities from
+            :func:`hmfast.halos.periodic.cubic_lattice_shells`.
+        linear : bool, optional
+            Forwarded to the matter power spectrum (default linear).
+        k_max : float, optional
+            If ``s`` is not supplied, drop shells with
+            :math:`k_s > k_{\\max}` (sets ``n_max`` if it is omitted).
+        n_k : int, optional
+            If set and smaller than the number of shells, evaluate
+            :math:`I_1` on this many log-\:math:`k` nodes and interpolate
+            onto each :math:`k_s` (cheaper for a large box).
+        n_chi : int, optional
+            Radial samples for :math:`j_\\ell`; see
+            :meth:`radial_transfer_R_ell`.
+
+        Returns
+        -------
+        cl : array
+            Periodic 2-halo :math:`C_\ell` with shape :math:`(N_\ell,)`.
+        """
+        import numpy as np
+
+        tracer2 = tracer1 if tracer2 is None else tracer2
+        L = float(L)
+        if not np.isfinite(L) or L <= 0.0:
+            raise ValueError("L must be a positive finite box side in Mpc.")
+        if s is None:
+            if k_max is not None:
+                n_from_k = n_max_for_kmax(L, k_max)
+                n_max = n_from_k if n_max is None else min(int(n_max), n_from_k)
+            s, g = cubic_lattice_shells(s_max=s_max, n_max=n_max)
+        s_np = np.asarray(s)
+        g_np = np.asarray(g)
+        k_s = lattice_wavenumbers(L, s_np)
+        if k_max is not None:
+            keep = k_s <= float(k_max) + 1.0e-15
+            s_np, g_np, k_s = s_np[keep], g_np[keep], k_s[keep]
+
+        I1 = self._I1_on_lattice(tracer1, k_s, m, z, n_k=n_k)
+        P_m = self._emulator_pk(k_s, z, linear=linear)
+
+        R1 = self.radial_transfer_R_ell(
+            tracer1, l, k_s, m, z, linear=linear, n_chi=n_chi, I=I1, P_m=P_m
+        )
+        if tracer1 is tracer2:
+            R2 = R1
+        else:
+            I2 = self._I1_on_lattice(tracer2, k_s, m, z, n_k=n_k)
+            R2 = self.radial_transfer_R_ell(
+                tracer2, l, k_s, m, z, linear=linear, n_chi=n_chi, I=I2, P_m=P_m
+            )
+        g = jnp.asarray(g_np)
+        return (4.0 * jnp.pi / L**3) * jnp.sum(g[None, :] * R1 * R2, axis=-1)
+
+
+    def _I1_on_lattice(self, tracer, k_s, m, z, n_k=None):
+        """:math:`I_1(k_s,z)`, optionally interpolated from a log-k grid."""
+        import numpy as np
+
+        k_s = np.asarray(k_s, dtype=float)
+        if n_k is None or int(n_k) >= k_s.size:
+            return np.asarray(self.bias_weighted_I(tracer, k_s, m, z))
+        k_grid = np.geomspace(float(np.min(k_s)), float(np.max(k_s)), int(n_k))
+        I_grid = np.asarray(self.bias_weighted_I(tracer, k_grid, m, z))
+        return interpolate_kz(k_grid, I_grid, k_s)
+
+
+    def connected_1h_cl_variance(self, tracer1, tracer2, l, m, z, k_damp=0.0):
+        r"""Full-sky 1-halo connected contribution to \(\mathrm{Var}(\hat C_\ell)\).
+
+        Reuses :meth:`trispectrum_1h` on the diagonal and applies the PDF
+        \(1/4\pi\) factor (eq. 97) so the result shares units with
+        \(2C_\ell^2/(2\ell+1)\):
+
+        .. math::
+
+            \mathrm{Var}^{1h}(\hat C_\ell)
+                = T^{1h}_{\ell\ell} / (4\pi).
+
+        The same number is used for the usual and periodic universes.
+        """
+        l = jnp.atleast_1d(l)
+        T = self.connected_1h_cl_covariance(tracer1, tracer2, l, m, z, k_damp=k_damp)
+        return jnp.diag(T)
+
+    def connected_1h_cl_covariance(self, tracer1, tracer2, l, m, z, k_damp=0.0):
+        r"""Full-sky 1-halo connected \(\mathrm{Cov}(\hat C_\ell,\hat C_{\ell'})\).
+
+        .. math::
+
+            \mathrm{Cov}^{1h}_{\ell\ell'} = T^{1h}_{\ell\ell'} / (4\pi)
+
+        using the existing :meth:`trispectrum_1h` (PDF eq. 97).
+        """
+        l = jnp.atleast_1d(l)
+        T = self.trispectrum_1h(tracer1, tracer2, l, l, m, z, k_damp=k_damp)
+        return T / (4.0 * jnp.pi)
+
+
+    def var_cl(self, tracer1, tracer2, l, m, z, k_damp=0.0, linear=True):
+        r"""Usual-universe full-sky \(\mathrm{Var}(\hat C_\ell)\).
+
+        .. math::
+
+            \mathrm{Var}(\hat C_\ell)
+                = \frac{2 C_\ell^2}{2\ell+1}
+                + \frac{T^{1h}_{\ell\ell}}{4\pi},
+            \qquad C_\ell = C_\ell^{1h} + C_\ell^{2h}
+
+        with Limber :meth:`cl_1h` / :meth:`cl_2h` and the existing
+        :meth:`trispectrum_1h`.
+
+        Returns
+        -------
+        result : dict of arrays
+            ``cl``, ``cl_1h``, ``cl_2h``, ``var_gaussian``, ``var_1h``,
+            ``var_total``, each shape :math:`(N_\ell,)`.
+        """
+        import numpy as np
+
+        tracer2 = tracer1 if tracer2 is None else tracer2
+        l = jnp.atleast_1d(l)
+        cl_1h = np.asarray(self.cl_1h(tracer1, tracer2, l, m, z))
+        cl_2h = np.asarray(self.cl_2h(tracer1, tracer2, l, m, z, linear=linear))
+        cl = cl_1h + cl_2h
+        var_g = gaussian_cl_variance(cl, l)
+        var_c = np.asarray(
+            self.connected_1h_cl_variance(tracer1, tracer2, l, m, z, k_damp=k_damp)
+        )
+        return {
+            "cl": cl,
+            "cl_1h": cl_1h,
+            "cl_2h": cl_2h,
+            "var_gaussian": var_g,
+            "var_1h": var_c,
+            "var_total": var_g + var_c,
+        }
+
+
+    def _periodic_mode_amplitudes(
+        self, tracer1, tracer2, l, m, z, L, n_max=None, s_max=None,
+        k_max=None, n_k=None, n_chi=None, linear=True, n_max_aniso=None,
+    ):
+        """Per-mode :math:`R_\\ell(k_p)` and the periodic 2-halo mean.
+
+        The mean :math:`C_{\\ell,L}^{2h}` is always the full-lattice shell sum.
+        ``n_max_aniso`` keeps only a low-:math:`n` cube of directions for
+        :math:`Q_\\ell`; leftover high-:math:`k` power is returned as
+        ``A_iso`` and treated as isotropic in :func:`lattice_Q_ell`.
+        """
+        import numpy as np
+
+        tracer2 = tracer1 if tracer2 is None else tracer2
+        L = float(L)
+        if k_max is not None:
+            n_from_k = n_max_for_kmax(L, k_max)
+            n_max = n_from_k if n_max is None else min(int(n_max), n_from_k)
+        if n_max is None and s_max is None:
+            if n_max_aniso is None:
+                raise ValueError("Provide n_max, s_max, k_max, or n_max_aniso.")
+            n_max = int(n_max_aniso)
+
+        s_u, g_u = cubic_lattice_shells(s_max=s_max, n_max=n_max)
+        k_u = lattice_wavenumbers(L, s_u)
+        if k_max is not None:
+            keep = k_u <= float(k_max) + 1.0e-15
+            s_u, g_u, k_u = s_u[keep], g_u[keep], k_u[keep]
+
+        I1 = self._I1_on_lattice(tracer1, k_u, m, z, n_k=n_k)
+        P_m = self._emulator_pk(k_u, z, linear=linear)
+        R1 = np.asarray(
+            self.radial_transfer_R_ell(
+                tracer1, l, k_u, m, z, linear=linear, n_chi=n_chi, I=I1, P_m=P_m
+            )
+        )
+        if tracer1 is tracer2:
+            R2 = R1
+        else:
+            I2 = self._I1_on_lattice(tracer2, k_u, m, z, n_k=n_k)
+            R2 = np.asarray(
+                self.radial_transfer_R_ell(
+                    tracer2, l, k_u, m, z, linear=linear, n_chi=n_chi, I=I2, P_m=P_m
+                )
+            )
+        cl_2h = (4.0 * np.pi / L**3) * np.sum(
+            np.asarray(g_u)[None, :] * R1 * R2, axis=1
+        )
+
+        n_full = int(n_max) if n_max is not None else int(np.floor(np.sqrt(s_max)))
+        n_ex = n_full if n_max_aniso is None else min(int(n_max_aniso), n_full)
+        p = cubic_lattice_vectors(s_max=s_max, n_max=n_ex)
+        s_p = np.sum(p * p, axis=1)
+        if k_max is not None:
+            keep = lattice_wavenumbers(L, s_p) <= float(k_max) + 1.0e-15
+            p, s_p = p[keep], s_p[keep]
+        inv = np.searchsorted(s_u, s_p)
+        R1_mode = R1[:, inv] if p.shape[0] else np.zeros((R1.shape[0], 0))
+        R2_mode = R2[:, inv] if p.shape[0] else np.zeros((R2.shape[0], 0))
+        A_ex = np.sum(R1_mode * R2_mode, axis=1)
+        A_tot = cl_2h * (L**3 / (4.0 * np.pi))
+        A_iso = np.clip(A_tot - A_ex, 0.0, None)
+        return p, R1_mode, R2_mode, cl_2h, A_iso
+
+
+    def var_cl_periodic(
+        self, tracer1, tracer2, l, m, z, L, n_max=None, s_max=None,
+        k_max=None, n_k=None, n_chi=None, linear=True, k_damp=0.0,
+        n_max_aniso=None,
+    ):
+        r"""Periodic-universe full-sky \(\mathrm{Var}(\hat C_\ell)\).
+
+        .. math::
+
+            \mathrm{Var}^G_L(\hat C_\ell) = 2 C_{\ell,L}^2 Q_\ell,
+            \qquad
+            Q_\ell = \sum_{p,q\neq 0} w_{\ell p} w_{\ell q} P_\ell^2(\mu_{pq}),
+
+        with \(C_{\ell,L}=C_\ell^{1h}+C_{\ell,L}^{2h}\) (existing Limber
+        1-halo plus shipped non-Limber periodic 2-halo) and the **same**
+        1-halo connected piece as :meth:`var_cl`:
+
+        .. math::
+
+            \mathrm{Var}_L = \mathrm{Var}^G_L + T^{1h}_{\ell\ell}/(4\pi).
+
+        As \(L\to\infty\) or at high \(\ell\), many lattice directions
+        contribute and \(Q_\ell\to 1/(2\ell+1)\), so the Gaussian piece
+        approaches the usual \(2C_\ell^2/(2\ell+1)\).  ``n_max_aniso``
+        evaluates the pair sum on a low-\(n\) cube and treats leftover
+        high-\(k\) power as isotropic (required for a large box).
+
+        Returns
+        -------
+        result : dict of arrays
+            ``cl``, ``cl_1h``, ``cl_2h``, ``Q``, ``A_iso``,
+            ``var_gaussian``, ``var_1h``, ``var_total``.
+        """
+        import numpy as np
+
+        tracer2 = tracer1 if tracer2 is None else tracer2
+        l = jnp.atleast_1d(l)
+        cl_1h = np.asarray(self.cl_1h(tracer1, tracer2, l, m, z))
+        p, R1_mode, R2_mode, cl_2h, A_iso = self._periodic_mode_amplitudes(
+            tracer1, tracer2, l, m, z, L, n_max=n_max, s_max=s_max,
+            k_max=k_max, n_k=n_k, n_chi=n_chi, linear=linear,
+            n_max_aniso=n_max_aniso,
+        )
+        cl = cl_1h + cl_2h
+        Q = lattice_Q_ell(l, p, R1_mode * R2_mode, A_iso=A_iso)
+        var_g = 2.0 * cl * cl * Q
+        var_c = np.asarray(
+            self.connected_1h_cl_variance(tracer1, tracer2, l, m, z, k_damp=k_damp)
+        )
+        return {
+            "cl": cl,
+            "cl_1h": cl_1h,
+            "cl_2h": cl_2h,
+            "Q": Q,
+            "A_iso": A_iso,
+            "var_gaussian": var_g,
+            "var_1h": var_c,
+            "var_total": var_g + var_c,
+        }
+
+
+    def var_cl_binned(
+        self, tracer1, tracer2, l, m, z, ell_edges, k_damp=0.0, linear=True,
+    ):
+        r"""Usual-universe binned \(\mathrm{Var}(\hat C_b)\) (PDF §7).
+
+        \(\hat C_b=\sum_\ell W_{b\ell}\hat C_\ell\) with uniform
+        \(W_{b\ell}=1/N_b\). The Gaussian piece is diagonal in \(\ell\);
+        the 1-halo piece uses the full \(T^{1h}_{\ell\ell'}/4\pi\).
+        """
+        import numpy as np
+
+        tracer2 = tracer1 if tracer2 is None else tracer2
+        l = jnp.atleast_1d(l)
+        W, ell_eff, n_ell = multipole_bin_weights(l, ell_edges)
+        unb = self.var_cl(tracer1, tracer2, l, m, z, k_damp=k_damp, linear=linear)
+        cov_g = np.diag(unb["var_gaussian"])
+        cov_1h = np.asarray(
+            self.connected_1h_cl_covariance(tracer1, tracer2, l, m, z, k_damp=k_damp)
+        )
+        cov_tot = cov_g + cov_1h
+        cl_b = W @ unb["cl"]
+        var_g = np.einsum("bi,ij,bj->b", W, cov_g, W)
+        var_c = np.einsum("bi,ij,bj->b", W, cov_1h, W)
+        ell_f = np.asarray(l, dtype=float)
+        f = ell_f * (ell_f + 1.0) / (2.0 * np.pi)
+        WD = W * f
+        return {
+            "ell_eff": ell_eff,
+            "n_ell": n_ell,
+            "weights": W,
+            "cl": cl_b,
+            "cl_1h": W @ unb["cl_1h"],
+            "cl_2h": W @ unb["cl_2h"],
+            "var_gaussian": var_g,
+            "var_1h": var_c,
+            "var_total": var_g + var_c,
+            "cov_gaussian": W @ cov_g @ W.T,
+            "cov_1h": W @ cov_1h @ W.T,
+            "cov_total": W @ cov_tot @ W.T,
+            "dell": WD @ unb["cl"],
+            "var_dell_gaussian": np.einsum("bi,ij,bj->b", WD, cov_g, WD),
+            "var_dell_1h": np.einsum("bi,ij,bj->b", WD, cov_1h, WD),
+            "var_dell": np.einsum("bi,ij,bj->b", WD, cov_tot, WD),
+        }
+
+
+    def var_cl_periodic_binned(
+        self, tracer1, tracer2, l, m, z, L, ell_edges, n_max=None, s_max=None,
+        k_max=None, n_k=None, n_chi=None, linear=True, k_damp=0.0,
+        n_max_aniso=None,
+    ):
+        r"""Periodic-universe binned \(\mathrm{Var}(\hat C_b)\) (PDF §7).
+
+        Projects the lattice Gaussian covariance (eq. 107), rescaled to the
+        total \(C_{\ell,L}=C_\ell^{1h}+C_{\ell,L}^{2h}\) so a one-multipole
+        bin recovers :meth:`var_cl_periodic`, plus the same 1-halo
+        \(T^{1h}/4\pi\) as :meth:`var_cl_binned`.
+        """
+        import numpy as np
+
+        tracer2 = tracer1 if tracer2 is None else tracer2
+        l = jnp.atleast_1d(l)
+        W, ell_eff, n_ell = multipole_bin_weights(l, ell_edges)
+        cl_1h = np.asarray(self.cl_1h(tracer1, tracer2, l, m, z))
+        p, R1_mode, R2_mode, cl_2h, A_iso = self._periodic_mode_amplitudes(
+            tracer1, tracer2, l, m, z, L, n_max=n_max, s_max=s_max,
+            k_max=k_max, n_k=n_k, n_chi=n_chi, linear=linear,
+            n_max_aniso=n_max_aniso,
+        )
+        cl = cl_1h + cl_2h
+        cov_2h = lattice_gaussian_cl_cov(l, p, R1_mode, float(L))
+        # Isotropic remainder of Q contributes only on the diagonal.
+        if np.any(np.asarray(A_iso) > 0.0):
+            Q = lattice_Q_ell(l, p, R1_mode * R2_mode, A_iso=A_iso)
+            var_diag = 2.0 * cl_2h * cl_2h * Q
+            np.fill_diagonal(cov_2h, var_diag)
+        scale = np.divide(cl, cl_2h, out=np.ones_like(cl), where=cl_2h > 0.0)
+        cov_g = cov_2h * scale[:, None] * scale[None, :]
+        cov_1h = np.asarray(
+            self.connected_1h_cl_covariance(tracer1, tracer2, l, m, z, k_damp=k_damp)
+        )
+        cov_tot = cov_g + cov_1h
+        var_g = np.einsum("bi,ij,bj->b", W, cov_g, W)
+        var_c = np.einsum("bi,ij,bj->b", W, cov_1h, W)
+        ell_f = np.asarray(l, dtype=float)
+        f = ell_f * (ell_f + 1.0) / (2.0 * np.pi)
+        WD = W * f
+        return {
+            "ell_eff": ell_eff,
+            "n_ell": n_ell,
+            "weights": W,
+            "cl": W @ cl,
+            "cl_1h": W @ cl_1h,
+            "cl_2h": W @ cl_2h,
+            "var_gaussian": var_g,
+            "var_1h": var_c,
+            "var_total": var_g + var_c,
+            "cov_gaussian": W @ cov_g @ W.T,
+            "cov_1h": W @ cov_1h @ W.T,
+            "cov_total": W @ cov_tot @ W.T,
+            "dell": WD @ cl,
+            "var_dell_gaussian": np.einsum("bi,ij,bj->b", WD, cov_g, WD),
+            "var_dell_1h": np.einsum("bi,ij,bj->b", WD, cov_1h, WD),
+            "var_dell": np.einsum("bi,ij,bj->b", WD, cov_tot, WD),
+        }
 
 
 jax.tree_util.register_pytree_node(
