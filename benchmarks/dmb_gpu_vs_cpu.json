@@ -1,0 +1,23 @@
+{
+  "mem_fraction": 0.1,
+  "grid": {
+    "nM": 32,
+    "nz": 20,
+    "nell": 40
+  },
+  "gpu": {
+    "warm_gnfw_s": 0.004531905986368656,
+    "warm_dmb_s": 0.005071450024843216,
+    "ratio": 1.1190545523445177,
+    "backend": "gpu"
+  },
+  "cpu": {
+    "warm_gnfw_s": 0.02523317001760006,
+    "warm_dmb_s": 0.09328677295707166,
+    "ratio": 3.6969898309251046,
+    "backend": "cpu"
+  },
+  "speedup_gpu_over_cpu_dmb_warm": 18.394497135945972,
+  "speedup_gpu_over_cpu_gnfw_warm": 5.5678935294549206,
+  "note": "After vectorized zeta-HSE; correctness gated by tests/test_dmb_profiles.py"
+}

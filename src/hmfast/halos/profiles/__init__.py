@@ -11,6 +11,12 @@ from .pressure import (
     TruncatedParametricGNFWPressureProfile,
     B12PressureProfile,
 )
+from .dmb import (
+    DMBPressureProfile,
+    DMBMatterProfile,
+    DMBNFWMatterProfile,
+    DMBGasDensityProfile,
+)
 
 __all__ = [
     "HaloProfile",
@@ -22,4 +28,8 @@ __all__ = [
     "PressureProfile", "GNFWPressureProfile", "ParametricGNFWPressureProfile",
     "TruncatedGNFWPressureProfile", "TruncatedParametricGNFWPressureProfile",
     "B12PressureProfile",
+    "DMBPressureProfile",
+    "DMBMatterProfile",
+    "DMBNFWMatterProfile",
+    "DMBGasDensityProfile",
 ]

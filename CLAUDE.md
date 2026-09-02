@@ -1,44 +1,87 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Project context and behavioral guidelines for agents working in this repo.
 
-## Project purpose
+## Project context
 
-**hmfast** is a research Python package (alpha, v0.1.0) for **fast, differentiable halo-model predictions** used in cosmology. It combines **JAX** for autodiff and JIT, **neural emulators** for background and linear power (see `src/hmfast/cosmology.py`, `emulator_load.py`), **mcfit** (pinned to `0.0.22`) for correlation-function transforms, and a modular split between **halos** (`HaloModel`, mass function, bias, concentration, profiles under `src/hmfast/halos/`) and **observable tracers** (`src/hmfast/tracers/`). Importing the package **may download emulator weights** (`download_emulators` in `src/hmfast/__init__.py`); keep that in mind for CI, air-gapped machines, or cold starts.
+- **Python environment:** Before anything else — running Python, tests, benchmarks, or notebooks — activate:
+  ```bash
+  source /scratch/scratch-lxu/venv/cmbagent_env/bin/activate
+  ```
+- **Reference papers:** `ref_papers/` contains key literature for baryonic feedback / DMB work. Read and cite these when relevant to paper drafts, methods, or validation.
+  - `ref_papers/dmb_galclusters.pdf` — To et al. (2024), *Deciphering baryonic feedback with galaxy clusters*
+  - `ref_papers/dmb_galclusters_act.pdf` — Dalal et al. (2026), *Deciphering Baryonic Feedback from ACT tSZ Galaxy Clusters*
+  - `ref_papers/GODMAX.pdf` — GODMAX paper (*Gas thermODynamics and Matter distribution using jAX*)
+- **Reference packages:** `ref_packages/` contains reference implementations to consult, compare against, or port ideas from. Do not modify these in place; treat them as read-only baselines.
+  - `ref_packages/GODMAX/` — JAX halo-model code for jointly analyzing shear 2-pt and shear–y correlations (GPU-ready, differentiable likelihood / HMC). Upstream: https://github.com/shivampcosmo/GODMAX
+    - `src/` — core profiles, power spectra, correlation functions (`get_BCMP_profile_jit.py`, `get_power_spectra_jit.py`, etc.)
+    - `notebooks/` — analysis and paper-figure notebooks (incl. `ACTxDES/`)
+    - `data/` — DES×ACT FITS data products for tests and comparisons
 
-For deeper conventions (JAX pytrees, JIT static arguments, emulator loading boundaries, tracer–profile pairing), read `.claude/rules/` and the skills under `.claude/skills/` before large edits.
+---
 
-## Working style
+## Behavioral guidelines
 
-- **Understand before editing.** Trace the call path (e.g. `Cosmology` → `HaloModel` → tracer → profile) and note where JIT boundaries and emulator loads occur; do not move heavy I/O or emulator initialization inside jitted functions.
-- **Prefer small, reviewable changes** over broad refactors unless explicitly requested.
-- **Justify non-trivial edits** with a clear scientific or numerical reason (units, limits, stability, correctness of the halo-model ingredients).
-- **Be explicit about uncertainty.** If something is unclear from the code or literature, say so and suggest a **minimal** check (unit test, finite-difference derivative, comparison to a reference limit, shape/finite checks).
-- **Preserve existing behavior and code** unless fixing a documented bug or implementing an agreed change. Add or adjust code in a way that keeps current APIs and semantics intact; avoid drive-by rewrites, mass reformatting, or overwriting logic you are not asked to change.
-- **Validate changes.** Run `pytest` from the repository root after substantive edits; for numerical work, add or extend tests that assert shapes, finiteness, and regressions where feasible.
+Guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
 
-## Environment
+**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
 
-Main working directory:
+### 1. Think Before Coding
 
-- `/home/lxu/scratch/compute_packages/hmfast`
+**Don't assume. Don't hide confusion. Surface tradeoffs.**
 
-Important data/output locations:
+Before implementing:
+- State your assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them - don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
 
-- `/scratch/scratch-lxu/...` for working outputs
-- `/rds/rds-lxu/...` for large or persistent outputs
+### 2. Simplicity First
 
-Python environment:
+**Minimum code that solves the problem. Nothing speculative.**
 
-Activate with:
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
 
-```bash
-source /scratch/scratch-lxu/venv/cmbagent_env/bin/activate
+Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+
+### 3. Surgical Changes
+
+**Touch only what you must. Clean up only your own mess.**
+
+When editing existing code:
+- Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor things that aren't broken.
+- Match existing style, even if you'd do it differently.
+- If you notice unrelated dead code, mention it - don't delete it.
+
+When your changes create orphans:
+- Remove imports/variables/functions that YOUR changes made unused.
+- Don't remove pre-existing dead code unless asked.
+
+The test: Every changed line should trace directly to the user's request.
+
+### 4. Goal-Driven Execution
+
+**Define success criteria. Loop until verified.**
+
+Transform tasks into verifiable goals:
+- "Add validation" → "Write tests for invalid inputs, then make them pass"
+- "Fix the bug" → "Write a test that reproduces it, then make it pass"
+- "Refactor X" → "Ensure tests pass before and after"
+
+For multi-step tasks, state a brief plan:
+```
+1. [Step] → verify: [check]
+2. [Step] → verify: [check]
+3. [Step] → verify: [check]
 ```
 
-Development install and tests (from the repo root, after activating the environment):
+Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
 
-```bash
-pip install -e ".[dev]"
-pytest
-```
+---
+
+**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
