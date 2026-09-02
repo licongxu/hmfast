@@ -1186,6 +1186,115 @@ class HaloModel:
         return jnp.asarray(R)
 
 
+    def cl_2h_nonlimber(
+        self,
+        tracer1,
+        tracer2,
+        l,
+        m,
+        z,
+        l_limber=0.0,
+        k=None,
+        n_k=128,
+        n_chi=None,
+        linear=True,
+    ):
+        r"""Continuum non-Limber 2-halo spectrum with a Limber switch.
+
+        This exposes the same l_limber convention as upstream hmfast:
+        multipoles below the threshold use the exact radial-Bessel projection,
+        while multipoles at or above it use the existing Limber method. The default
+        l_limber=0 therefore preserves the existing Limber result exactly.
+
+        The exact continuum projection is
+
+        .. math::
+
+            C_\ell^{2h} = \frac{2}{\pi}\int dk\,k^2
+                R_\ell^{(1)}(k)R_\ell^{(2)}(k),
+
+        using the same transfer function as the periodic 2-halo method. If k is
+        omitted, n_k logarithmic samples span the cosmology's native
+        power-spectrum grid.
+        """
+        import numpy as np
+
+        tracer2 = tracer1 if tracer2 is None else tracer2
+        ell = np.atleast_1d(np.asarray(l, dtype=float))
+        low = ell < float(l_limber)
+        result = np.empty(ell.size, dtype=float)
+
+        if np.any(~low):
+            result[~low] = np.asarray(
+                self.cl_2h(
+                    tracer1,
+                    tracer2,
+                    jnp.asarray(ell[~low]),
+                    m,
+                    z,
+                    linear=linear,
+                )
+            )
+        if not np.any(low):
+            return jnp.asarray(result)
+
+        if k is None:
+            n_k = int(n_k)
+            if n_k < 2:
+                raise ValueError("n_k must be >= 2")
+            k_native, _ = self.cosmology.pk(jnp.atleast_1d(z)[0], linear=linear)
+            k = np.geomspace(float(k_native[0]), float(k_native[-1]), n_k)
+        else:
+            k = np.atleast_1d(np.asarray(k, dtype=float))
+            if k.size < 2 or np.any(~np.isfinite(k)) or np.any(k <= 0.0):
+                raise ValueError("k must contain at least two positive finite values.")
+            if np.any(np.diff(k) <= 0.0):
+                raise ValueError("k must be strictly increasing.")
+
+        z = jnp.atleast_1d(z)
+        m = jnp.atleast_1d(m)
+        I1 = self.bias_weighted_I(tracer1, k, m, z)
+        P_m = self._emulator_pk(k, z, linear=linear)
+        R1 = np.asarray(
+            self.radial_transfer_R_ell(
+                tracer1,
+                ell[low],
+                k,
+                m,
+                z,
+                linear=linear,
+                n_chi=n_chi,
+                I=I1,
+                P_m=P_m,
+            )
+        )
+        if tracer1 is tracer2:
+            R2 = R1
+        else:
+            I2 = self.bias_weighted_I(tracer2, k, m, z)
+            R2 = np.asarray(
+                self.radial_transfer_R_ell(
+                    tracer2,
+                    ell[low],
+                    k,
+                    m,
+                    z,
+                    linear=linear,
+                    n_chi=n_chi,
+                    I=I2,
+                    P_m=P_m,
+                )
+            )
+
+        k = np.asarray(k)
+        result[low] = (2.0 / np.pi) * np.trapezoid(
+            k[:, None] ** 3 * R1.T * R2.T,
+            x=np.log(k),
+            axis=0,
+        )
+        return jnp.asarray(result)
+
+
     def cl_2h_periodic(self, tracer1, tracer2, l, m, z, L, n_max=None, s_max=None,
                        s=None, g=None, linear=True, k_max=None, n_k=None, n_chi=None):
         r"""Exact non-Limber periodic-universe 2-halo angular spectrum.

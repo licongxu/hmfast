@@ -145,6 +145,40 @@ class TestPeriodicTwoHalo:
         assert np.all(np.isfinite(cl_limber))
         assert np.all(np.isfinite(cl_per))
 
+    def test_nonlimber_default_is_exact_limber_fallback(self, halo_model, tsz_tracer):
+        cl_limber = np.asarray(halo_model.cl_2h(tsz_tracer, None, _ELL, _M, _Z))
+        cl_hybrid = np.asarray(
+            halo_model.cl_2h_nonlimber(tsz_tracer, None, _ELL, _M, _Z)
+        )
+        np.testing.assert_array_equal(cl_hybrid, cl_limber)
+
+    def test_nonlimber_ratio_matches_upstream_swiftcl(self, halo_model, tsz_tracer):
+        ell = jnp.array([2.0, 8.0, 32.0])
+        m = jnp.logspace(12.0, 14.5, 12)
+        z = jnp.linspace(0.05, 1.0, 48)
+        k = jnp.geomspace(1.0e-3, 3.0, 96)
+        cl_limber = np.asarray(halo_model.cl_2h(tsz_tracer, None, ell, m, z))
+        cl_hybrid = np.asarray(
+            halo_model.cl_2h_nonlimber(
+                tsz_tracer,
+                None,
+                ell,
+                m,
+                z,
+                l_limber=16.0,
+                k=k,
+                n_chi=512,
+            )
+        )
+
+        # hmfast/hmfast@243f744 on this grid gives these SwiftCl/Limber ratios.
+        # Absolute amplitudes differ after its profile-unit refactor, so the
+        # projection ratio is the portable parity quantity.
+        upstream_ratio = np.array([0.97713996, 1.01324944, 1.0])
+        np.testing.assert_allclose(
+            cl_hybrid / cl_limber, upstream_ratio, rtol=0.05, atol=0.0
+        )
+
     def test_high_ell_large_L_approaches_limber(self, halo_model, tsz_tracer):
         """At high ℓ and large L the lattice 2h meets Limber cl_2h (same physical P(k))."""
         L = 1000.0
