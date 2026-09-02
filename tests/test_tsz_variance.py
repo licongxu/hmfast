@@ -89,6 +89,30 @@ class TestLatticeQ:
 
 
 class TestUsualVariance:
+    def test_k_damp_is_used_for_mean(self, halo_model, tsz_tracer):
+        k_damp = 0.02
+        expected = np.asarray(
+            halo_model.cl_1h(tsz_tracer, None, _ELL, _M, _Z, k_damp=k_damp)
+        )
+        out = halo_model.var_cl(
+            tsz_tracer, None, _ELL, _M, _Z, k_damp=k_damp
+        )
+        np.testing.assert_allclose(out["cl_1h"], expected, rtol=0.0, atol=0.0)
+
+    def test_mixed_tracer_gaussian_uses_both_auto_spectra(
+        self, halo_model, tsz_tracer
+    ):
+        other = tSZTracer(profile=GNFWPressureProfile(P0=6.0, beta=5.0))
+        out = halo_model.var_cl(tsz_tracer, other, _ELL, _M, _Z)
+        auto_1 = halo_model.var_cl(tsz_tracer, None, _ELL, _M, _Z)["cl"]
+        auto_2 = halo_model.var_cl(other, None, _ELL, _M, _Z)["cl"]
+        expected = (auto_1 * auto_2 + out["cl"] ** 2) / (
+            2.0 * np.asarray(_ELL) + 1.0
+        )
+        np.testing.assert_allclose(
+            out["var_gaussian"], expected, rtol=1e-12, atol=0.0
+        )
+
     def test_gaussian_is_2c2_over_2l1(self, halo_model, tsz_tracer):
         out = halo_model.var_cl(tsz_tracer, None, _ELL, _M, _Z)
         cl = out["cl"]
@@ -127,6 +151,23 @@ class TestUsualVariance:
 
 
 class TestPeriodicVariance:
+    def test_k_damp_is_used_for_mean(self, halo_model, tsz_tracer):
+        k_damp = 0.02
+        expected = np.asarray(
+            halo_model.cl_1h(tsz_tracer, None, _ELL, _M, _Z, k_damp=k_damp)
+        )
+        out = halo_model.var_cl_periodic(
+            tsz_tracer,
+            None,
+            _ELL,
+            _M,
+            _Z,
+            L=_L,
+            n_max=_NMAX,
+            k_damp=k_damp,
+        )
+        np.testing.assert_allclose(out["cl_1h"], expected, rtol=0.0, atol=0.0)
+
     def test_Q_and_gaussian_bound(self, halo_model, tsz_tracer):
         out = halo_model.var_cl_periodic(
             tsz_tracer, None, _ELL, _M, _Z, L=_L, n_max=_NMAX
@@ -185,6 +226,51 @@ class TestPeriodicVariance:
 
 
 class TestBinnedVariance:
+    def test_periodic_k_damp_is_used_for_binned_mean(
+        self, halo_model, tsz_tracer
+    ):
+        k_damp = 0.02
+        expected = np.asarray(
+            halo_model.cl_1h(tsz_tracer, None, _ELL, _M, _Z, k_damp=k_damp)
+        )
+        out = halo_model.var_cl_periodic_binned(
+            tsz_tracer,
+            None,
+            _ELL,
+            _M,
+            _Z,
+            L=_L,
+            ell_edges=[2, 4, 4],
+            n_max=_NMAX,
+            k_damp=k_damp,
+        )
+        np.testing.assert_allclose(out["cl_1h"], expected, rtol=0.0, atol=0.0)
+
+    def test_mixed_tracer_single_ell_bins_recover_unbinned(
+        self, halo_model, tsz_tracer
+    ):
+        other = tSZTracer(profile=GNFWPressureProfile(P0=6.0))
+        edges = [2, 4, 4]
+        unbinned = halo_model.var_cl_periodic(
+            tsz_tracer, other, _ELL, _M, _Z, L=_L, n_max=_NMAX
+        )
+        binned = halo_model.var_cl_periodic_binned(
+            tsz_tracer,
+            other,
+            _ELL,
+            _M,
+            _Z,
+            L=_L,
+            ell_edges=edges,
+            n_max=_NMAX,
+        )
+        np.testing.assert_allclose(
+            binned["var_gaussian"],
+            unbinned["var_gaussian"],
+            rtol=1e-10,
+            atol=0.0,
+        )
+
     def test_single_ell_bins_recover_unbinned(self, halo_model, tsz_tracer):
         edges = [2, 4, 4]
         usual_u = halo_model.var_cl(tsz_tracer, None, _ELL, _M, _Z)

@@ -10,6 +10,7 @@ See ``ref_derivation/Periodic_Universe_Halo_Model_tSZ.pdf`` §§4.4, 6.1, 10.
 """
 
 import numpy as np
+from scipy.integrate import trapezoid
 
 
 def _resolve_lattice_cut(s_max=None, n_max=None):
@@ -163,7 +164,7 @@ def integrate_radial_bessel(ell, k, z, chi, weight, n_chi=None):
     R = np.empty((ell.size, k.size), dtype=float)
     for i, ell_i in enumerate(ell):
         jl = spherical_jn(ell_i, x)
-        R[i] = np.trapezoid(w_f * jl, x=z_f, axis=-1)
+        R[i] = trapezoid(w_f * jl, x=z_f, axis=-1)
     return R
 
 
@@ -276,7 +277,7 @@ def multipole_bin_weights(ell, ell_edges):
     return W, ell_eff, n_ell
 
 
-def lattice_gaussian_cl_cov(ell, p, R, L):
+def lattice_gaussian_cl_cov(ell, p, R, L, R2=None):
     """Periodic 2-halo Gaussian covariance (PDF eq. 107).
 
     .. math::
@@ -284,23 +285,27 @@ def lattice_gaussian_cl_cov(ell, p, R, L):
         \\mathrm{Cov}^G_L(\\hat C_\\ell,\\hat C_{\\ell'})
             = \\frac{2(4\\pi)^2}{L^6}
               \\sum_{p,q\\neq0}
-              R_\\ell(k_p)R_{\\ell'}(k_p)
-              R_\\ell(k_q)R_{\\ell'}(k_q)
+              R^1_\\ell(k_p)R^2_{\\ell'}(k_p)
+              R^2_\\ell(k_q)R^1_{\\ell'}(k_q)
               P_\\ell(\\mu_{pq})P_{\\ell'}(\\mu_{pq})
 
-    ``R`` has shape ``(N_\\ell, N_{\\mathrm{modes}})``. The diagonal equals
-    :math:`2(C_\\ell^{2h})^2 Q_\\ell`.
+    ``R`` and optional ``R2`` have shape ``(N_\\ell, N_{\\mathrm{modes}})``.
+    Omitting ``R2`` computes an auto-spectrum covariance. The diagonal equals
+    :math:`2(C_\\ell^{2h})^2 Q_\\ell` for both auto- and cross-spectra.
     """
     from scipy.special import eval_legendre
 
     ell = np.atleast_1d(np.asarray(ell, dtype=float))
     p = np.asarray(p, dtype=float)
     R = np.atleast_2d(np.asarray(R, dtype=float))
+    R2 = R if R2 is None else np.atleast_2d(np.asarray(R2, dtype=float))
     L = float(L)
     if p.ndim != 2 or p.shape[1] != 3:
         raise ValueError("p must have shape (N, 3)")
     if R.shape[1] != p.shape[0]:
         raise ValueError("R must have shape (N_ell, N_modes)")
+    if R2.shape != R.shape:
+        raise ValueError("R2 must have the same shape as R")
 
     pref = 2.0 * (4.0 * np.pi / L**3) ** 2
     nrm = np.linalg.norm(p, axis=1)
@@ -312,8 +317,11 @@ def lattice_gaussian_cl_cov(ell, p, R, L):
     cov = np.empty((n_ell, n_ell), dtype=float)
     for i in range(n_ell):
         for j in range(i, n_ell):
-            v = R[i] * R[j]
-            val = pref * float(np.einsum("p,q,pq->", v, v, Pl[i] * Pl[j]))
+            v12 = R[i] * R2[j]
+            v21 = R2[i] * R[j]
+            val = pref * float(
+                np.einsum("p,q,pq->", v12, v21, Pl[i] * Pl[j])
+            )
             cov[i, j] = val
             cov[j, i] = val
     return cov

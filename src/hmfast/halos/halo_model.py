@@ -5,6 +5,7 @@ Core halo model implementation using JAX for differentiability.
 import jax
 import jax.numpy as jnp
 import jax.scipy as jscipy
+from scipy.integrate import trapezoid
 from typing import Dict, Any, Optional, Callable
 from functools import partial
 from mcfit import TophatVar
@@ -1287,7 +1288,7 @@ class HaloModel:
             )
 
         k = np.asarray(k)
-        result[low] = (2.0 / np.pi) * np.trapezoid(
+        result[low] = (2.0 / np.pi) * trapezoid(
             k[:, None] ** 3 * R1.T * R2.T,
             x=np.log(k),
             axis=0,
@@ -1439,8 +1440,8 @@ class HaloModel:
 
         .. math::
 
-            \mathrm{Var}(\hat C_\ell)
-                = \frac{2 C_\ell^2}{2\ell+1}
+            \mathrm{Var}(\hat C_\ell^{12})
+                = \frac{C_\ell^{11}C_\ell^{22} + (C_\ell^{12})^2}{2\ell+1}
                 + \frac{T^{1h}_{\ell\ell}}{4\pi},
             \qquad C_\ell = C_\ell^{1h} + C_\ell^{2h}
 
@@ -1457,10 +1458,23 @@ class HaloModel:
 
         tracer2 = tracer1 if tracer2 is None else tracer2
         l = jnp.atleast_1d(l)
-        cl_1h = np.asarray(self.cl_1h(tracer1, tracer2, l, m, z))
+        cl_1h = np.asarray(
+            self.cl_1h(tracer1, tracer2, l, m, z, k_damp=k_damp)
+        )
         cl_2h = np.asarray(self.cl_2h(tracer1, tracer2, l, m, z, linear=linear))
         cl = cl_1h + cl_2h
-        var_g = gaussian_cl_variance(cl, l)
+        if tracer1 is tracer2:
+            var_g = gaussian_cl_variance(cl, l)
+        else:
+            cl_11 = np.asarray(
+                self.cl_1h(tracer1, tracer1, l, m, z, k_damp=k_damp)
+                + self.cl_2h(tracer1, tracer1, l, m, z, linear=linear)
+            )
+            cl_22 = np.asarray(
+                self.cl_1h(tracer2, tracer2, l, m, z, k_damp=k_damp)
+                + self.cl_2h(tracer2, tracer2, l, m, z, linear=linear)
+            )
+            var_g = (cl_11 * cl_22 + cl * cl) / (2.0 * np.asarray(l) + 1.0)
         var_c = np.asarray(
             self.connected_1h_cl_variance(tracer1, tracer2, l, m, z, k_damp=k_damp)
         )
@@ -1576,7 +1590,9 @@ class HaloModel:
 
         tracer2 = tracer1 if tracer2 is None else tracer2
         l = jnp.atleast_1d(l)
-        cl_1h = np.asarray(self.cl_1h(tracer1, tracer2, l, m, z))
+        cl_1h = np.asarray(
+            self.cl_1h(tracer1, tracer2, l, m, z, k_damp=k_damp)
+        )
         p, R1_mode, R2_mode, cl_2h, A_iso = self._periodic_mode_amplitudes(
             tracer1, tracer2, l, m, z, L, n_max=n_max, s_max=s_max,
             k_max=k_max, n_k=n_k, n_chi=n_chi, linear=linear,
@@ -1663,14 +1679,18 @@ class HaloModel:
         tracer2 = tracer1 if tracer2 is None else tracer2
         l = jnp.atleast_1d(l)
         W, ell_eff, n_ell = multipole_bin_weights(l, ell_edges)
-        cl_1h = np.asarray(self.cl_1h(tracer1, tracer2, l, m, z))
+        cl_1h = np.asarray(
+            self.cl_1h(tracer1, tracer2, l, m, z, k_damp=k_damp)
+        )
         p, R1_mode, R2_mode, cl_2h, A_iso = self._periodic_mode_amplitudes(
             tracer1, tracer2, l, m, z, L, n_max=n_max, s_max=s_max,
             k_max=k_max, n_k=n_k, n_chi=n_chi, linear=linear,
             n_max_aniso=n_max_aniso,
         )
         cl = cl_1h + cl_2h
-        cov_2h = lattice_gaussian_cl_cov(l, p, R1_mode, float(L))
+        cov_2h = lattice_gaussian_cl_cov(
+            l, p, R1_mode, float(L), R2=R2_mode
+        )
         # Isotropic remainder of Q contributes only on the diagonal.
         if np.any(np.asarray(A_iso) > 0.0):
             Q = lattice_Q_ell(l, p, R1_mode * R2_mode, A_iso=A_iso)
