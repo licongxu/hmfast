@@ -14,8 +14,10 @@ jax.config.update("jax_enable_x64", True)
 from hmfast.cosmology import Cosmology
 from hmfast.halos import (
     HaloModel,
+    cubic_lattice_vectors,
     gaussian_cl_variance,
     lattice_Q_ell,
+    lattice_gaussian_cl_cov,
     multipole_bin_weights,
 )
 from hmfast.halos.profiles import GNFWPressureProfile
@@ -86,6 +88,48 @@ class TestLatticeQ:
         Qinf = lattice_Q_ell(ell, p, A, A_iso=1.0e12)
         np.testing.assert_allclose(Qinf, floor, rtol=0.0, atol=1e-12)
         assert np.all(Q0 > Qinf + 1e-12)
+
+
+class TestLatticeGaussianCov:
+    def test_auto_pairings_coincide(self):
+        p = cubic_lattice_vectors(n_max=1)
+        ell = np.array([2.0, 3.0])
+        rng = np.random.default_rng(0)
+        R = rng.normal(size=(2, p.shape[0]))
+        L = 100.0
+        cov = lattice_gaussian_cl_cov(ell, p, R, L)
+        np.testing.assert_allclose(
+            cov, lattice_gaussian_cl_cov(ell, p, R, L, R2=R), rtol=0.0, atol=1e-15
+        )
+        np.testing.assert_allclose(cov, cov.T, rtol=0.0, atol=1e-15)
+        assert np.all(np.isfinite(cov))
+
+    def test_mixed_sums_both_wick_pairings(self):
+        from scipy.special import eval_legendre
+
+        p = cubic_lattice_vectors(n_max=1)
+        ell = np.array([2.0])
+        rng = np.random.default_rng(1)
+        R1 = rng.normal(size=(1, p.shape[0]))
+        R2 = rng.normal(size=(1, p.shape[0]))
+        L = 100.0
+        cov = lattice_gaussian_cl_cov(ell, p, R1, L, R2=R2)
+        nrm = np.linalg.norm(p, axis=1)
+        mu = np.clip((p @ p.T) / (nrm[:, None] * nrm[None, :]), -1.0, 1.0)
+        Pl = eval_legendre(2.0, mu)
+        Pl2 = Pl * Pl
+        pref = (4.0 * np.pi / L**3) ** 2
+        v11 = R1[0] * R1[0]
+        v22 = R2[0] * R2[0]
+        v12 = R1[0] * R2[0]
+        v21 = R2[0] * R1[0]
+        expected = pref * (
+            float(np.einsum("p,q,pq->", v11, v22, Pl2))
+            + float(np.einsum("p,q,pq->", v12, v21, Pl2))
+        )
+        np.testing.assert_allclose(cov[0, 0], expected, rtol=1e-12, atol=0.0)
+        twice_c12 = 2.0 * pref * float(np.einsum("p,q,pq->", v12, v21, Pl2))
+        assert not np.isclose(cov[0, 0], twice_c12, rtol=1e-6, atol=0.0)
 
 
 class TestUsualVariance:
@@ -179,6 +223,30 @@ class TestPeriodicVariance:
         assert np.all(Q >= floor - 1e-12)
         bound = 2.0 * out["cl"] ** 2 * floor
         assert np.all(out["var_gaussian"] >= bound - 1e-30)
+        np.testing.assert_allclose(
+            out["var_gaussian"],
+            2.0 * out["cl"] ** 2 * Q,
+            rtol=1e-12,
+            atol=0.0,
+        )
+
+    def test_mixed_tracer_gaussian_uses_both_auto_spectra(
+        self, halo_model, tsz_tracer
+    ):
+        other = tSZTracer(profile=GNFWPressureProfile(P0=6.0, beta=5.0))
+        out = halo_model.var_cl_periodic(
+            tsz_tracer, other, _ELL, _M, _Z, L=_L, n_max=_NMAX
+        )
+        auto_1 = halo_model.var_cl_periodic(
+            tsz_tracer, None, _ELL, _M, _Z, L=_L, n_max=_NMAX
+        )["cl"]
+        auto_2 = halo_model.var_cl_periodic(
+            other, None, _ELL, _M, _Z, L=_L, n_max=_NMAX
+        )["cl"]
+        expected = (auto_1 * auto_2 + out["cl"] ** 2) * out["Q"]
+        np.testing.assert_allclose(
+            out["var_gaussian"], expected, rtol=1e-10, atol=0.0
+        )
 
     def test_1h_same_as_usual(self, halo_model, tsz_tracer):
         usual = halo_model.var_cl(tsz_tracer, None, _ELL, _M, _Z)
@@ -249,7 +317,7 @@ class TestBinnedVariance:
     def test_mixed_tracer_single_ell_bins_recover_unbinned(
         self, halo_model, tsz_tracer
     ):
-        other = tSZTracer(profile=GNFWPressureProfile(P0=6.0))
+        other = tSZTracer(profile=GNFWPressureProfile(P0=6.0, beta=5.0))
         edges = [2, 4, 4]
         unbinned = halo_model.var_cl_periodic(
             tsz_tracer, other, _ELL, _M, _Z, L=_L, n_max=_NMAX

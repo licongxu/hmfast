@@ -280,18 +280,25 @@ def multipole_bin_weights(ell, ell_edges):
 def lattice_gaussian_cl_cov(ell, p, R, L, R2=None):
     """Periodic 2-halo Gaussian covariance (PDF eq. 107).
 
+    Both Wick pairings are summed with no extra factor of two:
+
     .. math::
 
-        \\mathrm{Cov}^G_L(\\hat C_\\ell,\\hat C_{\\ell'})
-            = \\frac{2(4\\pi)^2}{L^6}
+        \\mathrm{Cov}^G_L(\\hat C_\\ell^{12},\\hat C_{\\ell'}^{12})
+            = \\frac{(4\\pi)^2}{L^6}
               \\sum_{p,q\\neq0}
+              \\Big[
+              R^1_\\ell(k_p)R^1_{\\ell'}(k_p)
+              R^2_\\ell(k_q)R^2_{\\ell'}(k_q)
+              +
               R^1_\\ell(k_p)R^2_{\\ell'}(k_p)
               R^2_\\ell(k_q)R^1_{\\ell'}(k_q)
+              \\Big]
               P_\\ell(\\mu_{pq})P_{\\ell'}(\\mu_{pq})
 
     ``R`` and optional ``R2`` have shape ``(N_\\ell, N_{\\mathrm{modes}})``.
-    Omitting ``R2`` computes an auto-spectrum covariance. The diagonal equals
-    :math:`2(C_\\ell^{2h})^2 Q_\\ell` for both auto- and cross-spectra.
+    Omitting ``R2`` computes an auto-spectrum covariance, for which the two
+    pairings coincide and the diagonal is :math:`2(C_\\ell^{2h})^2 Q_\\ell`.
     """
     from scipy.special import eval_legendre
 
@@ -307,7 +314,7 @@ def lattice_gaussian_cl_cov(ell, p, R, L, R2=None):
     if R2.shape != R.shape:
         raise ValueError("R2 must have the same shape as R")
 
-    pref = 2.0 * (4.0 * np.pi / L**3) ** 2
+    pref = (4.0 * np.pi / L**3) ** 2
     nrm = np.linalg.norm(p, axis=1)
     mu = (p @ p.T) / (nrm[:, None] * nrm[None, :])
     mu = np.clip(mu, -1.0, 1.0)
@@ -317,10 +324,14 @@ def lattice_gaussian_cl_cov(ell, p, R, L, R2=None):
     cov = np.empty((n_ell, n_ell), dtype=float)
     for i in range(n_ell):
         for j in range(i, n_ell):
+            Pl_ij = Pl[i] * Pl[j]
+            v11 = R[i] * R[j]
+            v22 = R2[i] * R2[j]
             v12 = R[i] * R2[j]
             v21 = R2[i] * R[j]
             val = pref * float(
-                np.einsum("p,q,pq->", v12, v21, Pl[i] * Pl[j])
+                np.einsum("p,q,pq->", v11, v22, Pl_ij)
+                + np.einsum("p,q,pq->", v12, v21, Pl_ij)
             )
             cov[i, j] = val
             cov[j, i] = val

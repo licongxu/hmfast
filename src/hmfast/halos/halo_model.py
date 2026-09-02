@@ -1488,6 +1488,23 @@ class HaloModel:
         }
 
 
+    def _periodic_knox_gaussian(
+        self, tracer1, tracer2, l, m, z, cl, Q, cl_2h_11, cl_2h_22, k_damp,
+    ):
+        """Periodic Knox Gaussian variance: (C11 C22 + C12^2) Q."""
+        import numpy as np
+
+        if tracer1 is tracer2:
+            return 2.0 * cl * cl * Q
+        cl_11 = np.asarray(
+            self.cl_1h(tracer1, tracer1, l, m, z, k_damp=k_damp)
+        ) + cl_2h_11
+        cl_22 = np.asarray(
+            self.cl_1h(tracer2, tracer2, l, m, z, k_damp=k_damp)
+        ) + cl_2h_22
+        return (cl_11 * cl_22 + cl * cl) * Q
+
+
     def _periodic_mode_amplitudes(
         self, tracer1, tracer2, l, m, z, L, n_max=None, s_max=None,
         k_max=None, n_k=None, n_chi=None, linear=True, n_max_aniso=None,
@@ -1533,9 +1550,11 @@ class HaloModel:
                     tracer2, l, k_u, m, z, linear=linear, n_chi=n_chi, I=I2, P_m=P_m
                 )
             )
-        cl_2h = (4.0 * np.pi / L**3) * np.sum(
-            np.asarray(g_u)[None, :] * R1 * R2, axis=1
-        )
+        g = np.asarray(g_u)[None, :]
+        pref = 4.0 * np.pi / L**3
+        cl_2h_11 = pref * np.sum(g * R1 * R1, axis=1)
+        cl_2h_22 = pref * np.sum(g * R2 * R2, axis=1)
+        cl_2h = pref * np.sum(g * R1 * R2, axis=1)
 
         n_full = int(n_max) if n_max is not None else int(np.floor(np.sqrt(s_max)))
         n_ex = n_full if n_max_aniso is None else min(int(n_max_aniso), n_full)
@@ -1550,7 +1569,7 @@ class HaloModel:
         A_ex = np.sum(R1_mode * R2_mode, axis=1)
         A_tot = cl_2h * (L**3 / (4.0 * np.pi))
         A_iso = np.clip(A_tot - A_ex, 0.0, None)
-        return p, R1_mode, R2_mode, cl_2h, A_iso
+        return p, R1_mode, R2_mode, cl_2h, A_iso, cl_2h_11, cl_2h_22
 
 
     def var_cl_periodic(
@@ -1562,13 +1581,16 @@ class HaloModel:
 
         .. math::
 
-            \mathrm{Var}^G_L(\hat C_\ell) = 2 C_{\ell,L}^2 Q_\ell,
+            \mathrm{Var}^G_L(\hat C_\ell^{12})
+                = \big(C_{\ell,L}^{11}C_{\ell,L}^{22} + (C_{\ell,L}^{12})^2\big)
+                  Q_\ell,
             \qquad
             Q_\ell = \sum_{p,q\neq 0} w_{\ell p} w_{\ell q} P_\ell^2(\mu_{pq}),
 
-        with \(C_{\ell,L}=C_\ell^{1h}+C_{\ell,L}^{2h}\) (existing Limber
-        1-halo plus shipped non-Limber periodic 2-halo) and the **same**
-        1-halo connected piece as :meth:`var_cl`:
+        which reduces to \(2 C_{\ell,L}^2 Q_\ell\) for auto-spectra.  Each
+        \(C_{\ell,L}=C_\ell^{1h}+C_{\ell,L}^{2h}\) (existing Limber 1-halo
+        plus shipped non-Limber periodic 2-halo), and the **same** 1-halo
+        connected piece as :meth:`var_cl`:
 
         .. math::
 
@@ -1576,9 +1598,11 @@ class HaloModel:
 
         As \(L\to\infty\) or at high \(\ell\), many lattice directions
         contribute and \(Q_\ell\to 1/(2\ell+1)\), so the Gaussian piece
-        approaches the usual \(2C_\ell^2/(2\ell+1)\).  ``n_max_aniso``
-        evaluates the pair sum on a low-\(n\) cube and treats leftover
-        high-\(k\) power as isotropic (required for a large box).
+        approaches the usual
+        \((C_\ell^{11}C_\ell^{22}+(C_\ell^{12})^2)/(2\ell+1)\).
+        ``n_max_aniso`` evaluates the pair sum on a low-\(n\) cube and
+        treats leftover high-\(k\) power as isotropic (required for a
+        large box).
 
         Returns
         -------
@@ -1593,14 +1617,18 @@ class HaloModel:
         cl_1h = np.asarray(
             self.cl_1h(tracer1, tracer2, l, m, z, k_damp=k_damp)
         )
-        p, R1_mode, R2_mode, cl_2h, A_iso = self._periodic_mode_amplitudes(
-            tracer1, tracer2, l, m, z, L, n_max=n_max, s_max=s_max,
-            k_max=k_max, n_k=n_k, n_chi=n_chi, linear=linear,
-            n_max_aniso=n_max_aniso,
+        p, R1_mode, R2_mode, cl_2h, A_iso, cl_2h_11, cl_2h_22 = (
+            self._periodic_mode_amplitudes(
+                tracer1, tracer2, l, m, z, L, n_max=n_max, s_max=s_max,
+                k_max=k_max, n_k=n_k, n_chi=n_chi, linear=linear,
+                n_max_aniso=n_max_aniso,
+            )
         )
         cl = cl_1h + cl_2h
         Q = lattice_Q_ell(l, p, R1_mode * R2_mode, A_iso=A_iso)
-        var_g = 2.0 * cl * cl * Q
+        var_g = self._periodic_knox_gaussian(
+            tracer1, tracer2, l, m, z, cl, Q, cl_2h_11, cl_2h_22, k_damp,
+        )
         var_c = np.asarray(
             self.connected_1h_cl_variance(tracer1, tracer2, l, m, z, k_damp=k_damp)
         )
@@ -1682,22 +1710,26 @@ class HaloModel:
         cl_1h = np.asarray(
             self.cl_1h(tracer1, tracer2, l, m, z, k_damp=k_damp)
         )
-        p, R1_mode, R2_mode, cl_2h, A_iso = self._periodic_mode_amplitudes(
-            tracer1, tracer2, l, m, z, L, n_max=n_max, s_max=s_max,
-            k_max=k_max, n_k=n_k, n_chi=n_chi, linear=linear,
-            n_max_aniso=n_max_aniso,
+        p, R1_mode, R2_mode, cl_2h, A_iso, cl_2h_11, cl_2h_22 = (
+            self._periodic_mode_amplitudes(
+                tracer1, tracer2, l, m, z, L, n_max=n_max, s_max=s_max,
+                k_max=k_max, n_k=n_k, n_chi=n_chi, linear=linear,
+                n_max_aniso=n_max_aniso,
+            )
         )
         cl = cl_1h + cl_2h
         cov_2h = lattice_gaussian_cl_cov(
             l, p, R1_mode, float(L), R2=R2_mode
         )
-        # Isotropic remainder of Q contributes only on the diagonal.
-        if np.any(np.asarray(A_iso) > 0.0):
-            Q = lattice_Q_ell(l, p, R1_mode * R2_mode, A_iso=A_iso)
-            var_diag = 2.0 * cl_2h * cl_2h * Q
-            np.fill_diagonal(cov_2h, var_diag)
         scale = np.divide(cl, cl_2h, out=np.ones_like(cl), where=cl_2h > 0.0)
         cov_g = cov_2h * scale[:, None] * scale[None, :]
+        Q = lattice_Q_ell(l, p, R1_mode * R2_mode, A_iso=A_iso)
+        np.fill_diagonal(
+            cov_g,
+            self._periodic_knox_gaussian(
+                tracer1, tracer2, l, m, z, cl, Q, cl_2h_11, cl_2h_22, k_damp,
+            ),
+        )
         cov_1h = np.asarray(
             self.connected_1h_cl_covariance(tracer1, tracer2, l, m, z, k_damp=k_damp)
         )
