@@ -51,6 +51,22 @@ Z = np.geomspace(0.008, 3.0, 48)
 M = np.geomspace(1.0e12, 1.0e16, 42)
 
 # Figure groups. Keys are stable ids; labels are the LaTeX row tags.
+# One color per tracer pair. Linestyle encodes the multipole on the same axes.
+TRACER_COLORS = [
+    ("yy", r"$yy$", "#d62728"),
+    ("yk", r"$y\kappa$", "#ff7f0e"),
+    ("ygam", r"$y\gamma$", "#e377c2"),
+    ("yg", r"$yg$", "#8c564b"),
+    ("kk", r"$\kappa\kappa$", "#1f77b4"),
+    ("kgam", r"$\kappa\gamma$", "#17becf"),
+    ("kg", r"$\kappa g$", "#9467bd"),
+    ("gamgam", r"$\gamma\gamma$", "#2ca02c"),
+    ("gamg", r"$\gamma g$", "#bcbd22"),
+    ("gg", r"$gg$", "#7f7f7f"),
+]
+ELL_LINESTYLE = {100.0: "--", 1000.0: "-", 5000.0: ":"}
+
+
 LENSING_ROWS = [
     ("yy", r"$C_\ell^{yy}$"),
     ("yk", r"$C_\ell^{y\kappa}$"),
@@ -357,6 +373,99 @@ def plot_masked(path, kernels_full, kernels_masked, z, m_plot, ell, y500):
     print(f"wrote {path}", flush=True)
 
 
+def plot_overlay(path, kernels, z, m_plot, ell, y500, h):
+    """Every tracer pair on one axes. Color is the pair; linestyle is ell."""
+    _setup_style()
+    fig, ax = plt.subplots(figsize=(7.4, 6.6))
+
+    logy = np.log10(np.clip(y500, 1e-30, None))
+    ax.contour(
+        z,
+        m_plot,
+        logy,
+        levels=[-6.0, -5.0, -4.0],
+        colors="0.35",
+        linewidths=0.7,
+        linestyles=["--", "-", "-."],
+        zorder=1,
+    )
+
+    for key, _label, color in TRACER_COLORS:
+        field = kernels[key]
+        for j, ell_j in enumerate(ell):
+            data = np.array(field[:, j, :], dtype=np.float64)
+            data = np.where(np.isfinite(data) & (data > 0), data, 0.0)
+            peak = float(np.max(data))
+            if peak <= 0:
+                continue
+            level = data / peak
+            ls = ELL_LINESTYLE[float(ell_j)]
+            lw = 2.0 if float(ell_j) == 1000.0 else 1.15
+            if float(ell_j) == 1000.0:
+                ax.contourf(
+                    z,
+                    m_plot,
+                    level.T,
+                    levels=[0.5, 1.01],
+                    colors=[color],
+                    alpha=0.18,
+                    zorder=2,
+                )
+            ax.contour(
+                z,
+                m_plot,
+                level.T,
+                levels=[0.5],
+                colors=[color],
+                linestyles=[ls],
+                linewidths=[lw],
+                zorder=3,
+            )
+
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlim(z[0], z[-1])
+    ax.set_ylim(m_plot[0], m_plot[-1])
+    ax.set_xlabel(r"$z$")
+    ax.set_ylabel(r"$M_{200\mathrm{c}}\,[h^{-1}M_\odot]$")
+    ax.set_title(
+        r"Half-peak of $\mathrm{d}^{2}C_\ell/(\mathrm{d}\ln z\,\mathrm{d}\ln M)$"
+        + rf" ($h={h:.2f}$)"
+    )
+
+    tracer_handles = [
+        Line2D([0], [0], color=color, lw=2.0, label=label)
+        for _key, label, color in TRACER_COLORS
+    ]
+    style_handles = [
+        Line2D([0], [0], color="k", lw=1.15, ls="--", label=r"$\ell=100$"),
+        Line2D([0], [0], color="k", lw=2.0, ls="-", label=r"$\ell=1000$"),
+        Line2D([0], [0], color="k", lw=1.15, ls=":", label=r"$\ell=5000$"),
+        Line2D([0], [0], color="0.35", lw=0.7, ls="--", label=r"$\log_{10}(Y_{500}/\mathrm{Mpc}^{2})=-6$"),
+        Line2D([0], [0], color="0.35", lw=0.7, ls="-", label=r"$\log_{10}(Y_{500}/\mathrm{Mpc}^{2})=-5$"),
+        Line2D([0], [0], color="0.35", lw=0.7, ls="-.", label=r"$\log_{10}(Y_{500}/\mathrm{Mpc}^{2})=-4$"),
+    ]
+    leg1 = ax.legend(
+        handles=tracer_handles,
+        loc="upper left",
+        frameon=True,
+        fontsize=8,
+        ncol=2,
+        title=r"tracer pair",
+    )
+    ax.add_artist(leg1)
+    ax.legend(
+        handles=style_handles,
+        loc="lower right",
+        frameon=True,
+        fontsize=7.5,
+    )
+    fig.tight_layout()
+    fig.savefig(path, dpi=300, bbox_inches="tight", pad_inches=0.12)
+    plt.close(fig)
+    print(f"wrote {path}", flush=True)
+
+
 def report_peaks(kernels, z, m_plot, ell):
     print("\nPeak of d^2 C / (d ln z d ln M)")
     print(f"{'spectrum':10s} {'ell':8s} {'z':8s} {'M_200c/h':12s}")
@@ -402,21 +511,9 @@ def main():
         **kernels,
     )
 
-    caption = (
-        r"1-halo Limber weight $\mathrm{d}^{2}C_\ell/(\mathrm{d}\ln z\,\mathrm{d}\ln M_{200\mathrm{c}})$"
-        r" on the default $\Lambda$CDM emulator ($h=%.2f$)" % h
-    )
-    paths = []
-    for name, rows in (
-        ("mz_kernels_tsz_lensing.png", LENSING_ROWS),
-        ("mz_kernels_galaxies.png", GALAXY_ROWS),
-    ):
-        path = os.path.join(out_dir, name)
-        plot_group(path, rows, kernels, Z, m_plot, ELL, y500, caption)
-        paths.append(path)
-    masked_path = os.path.join(out_dir, "mz_kernels_yy_masked.png")
-    plot_masked(masked_path, kernels, kernels["yy_masked"], Z, m_plot, ELL, y500)
-    paths.append(masked_path)
+    path = os.path.join(out_dir, "mz_kernels_overlay.png")
+    plot_overlay(path, kernels, Z, m_plot, ELL, y500, h)
+    paths = [path]
 
     for path in paths:
         dest = os.path.join(art_dir, os.path.basename(path))
