@@ -44,27 +44,18 @@ from hmfast.tracers import CMBLensingTracer, GalaxyHODTracer, GalaxyLensingTrace
 from hmfast.utils import Const
 
 
-ELL = np.array([100.0, 1000.0, 5000.0])
+ELL = np.array([500.0])
 # Cluster and group scales. Low-z floor avoids the chi->0 Limber pole.
 # Low-z floor has to sit below the ell=100 yy peak; 0.03 clips that blob.
 Z = np.geomspace(0.008, 3.0, 48)
 M = np.geomspace(1.0e12, 1.0e16, 42)
 
-# Figure groups. Keys are stable ids; labels are the LaTeX row tags.
-# One color per tracer pair. Linestyle encodes the multipole on the same axes.
+# One color per tracer pair drawn on the single overlay.
 TRACER_COLORS = [
     ("yy", r"$yy$", "#d62728"),
-    ("yk", r"$y\kappa$", "#ff7f0e"),
     ("ygam", r"$y\gamma$", "#e377c2"),
-    ("yg", r"$yg$", "#8c564b"),
-    ("kk", r"$\kappa\kappa$", "#1f77b4"),
-    ("kgam", r"$\kappa\gamma$", "#17becf"),
-    ("kg", r"$\kappa g$", "#9467bd"),
     ("gamgam", r"$\gamma\gamma$", "#2ca02c"),
-    ("gamg", r"$\gamma g$", "#bcbd22"),
-    ("gg", r"$gg$", "#7f7f7f"),
 ]
-ELL_LINESTYLE = {100.0: "--", 1000.0: "-", 5000.0: ":"}
 
 
 LENSING_ROWS = [
@@ -162,7 +153,7 @@ def d2_dlnz_dlnm(integrand_dz, z):
     return np.asarray(integrand_dz) * np.asarray(z)[:, None, None]
 
 
-def compute_kernels(hm, tracers, z, m, ell):
+def compute_kernels(hm, tracers, z, m, ell, keys=None):
     pairs = {
         "yy": ("y", "y"),
         "yk": ("y", "k"),
@@ -175,6 +166,8 @@ def compute_kernels(hm, tracers, z, m, ell):
         "gamg": ("gam", "g"),
         "gg": ("g", "g"),
     }
+    if keys is not None:
+        pairs = {key: pairs[key] for key in keys}
     z_j = jnp.asarray(z)
     m_j = jnp.asarray(m)
     ell_j = jnp.asarray(ell)
@@ -374,7 +367,7 @@ def plot_masked(path, kernels_full, kernels_masked, z, m_plot, ell, y500):
 
 
 def plot_overlay(path, kernels, z, m_plot, ell, y500, h):
-    """Every tracer pair on one axes. Color is the pair; linestyle is ell."""
+    """yy, y-gamma, and gamma-gamma half-peaks on one axes at a single ell."""
     _setup_style()
     fig, ax = plt.subplots(figsize=(7.4, 6.6))
 
@@ -384,7 +377,7 @@ def plot_overlay(path, kernels, z, m_plot, ell, y500, h):
         m_plot,
         logy,
         levels=[-6.0, -5.0, -4.0],
-        colors="0.35",
+        colors="0.45",
         linewidths=0.7,
         linestyles=["--", "-", "-."],
         zorder=1,
@@ -392,35 +385,30 @@ def plot_overlay(path, kernels, z, m_plot, ell, y500, h):
 
     for key, _label, color in TRACER_COLORS:
         field = kernels[key]
-        for j, ell_j in enumerate(ell):
-            data = np.array(field[:, j, :], dtype=np.float64)
-            data = np.where(np.isfinite(data) & (data > 0), data, 0.0)
-            peak = float(np.max(data))
-            if peak <= 0:
-                continue
-            level = data / peak
-            ls = ELL_LINESTYLE[float(ell_j)]
-            lw = 2.0 if float(ell_j) == 1000.0 else 1.15
-            if float(ell_j) == 1000.0:
-                ax.contourf(
-                    z,
-                    m_plot,
-                    level.T,
-                    levels=[0.5, 1.01],
-                    colors=[color],
-                    alpha=0.18,
-                    zorder=2,
-                )
-            ax.contour(
-                z,
-                m_plot,
-                level.T,
-                levels=[0.5],
-                colors=[color],
-                linestyles=[ls],
-                linewidths=[lw],
-                zorder=3,
-            )
+        data = np.array(field[:, 0, :], dtype=np.float64)
+        data = np.where(np.isfinite(data) & (data > 0), data, 0.0)
+        peak = float(np.max(data))
+        if peak <= 0:
+            continue
+        level = data / peak
+        ax.contourf(
+            z,
+            m_plot,
+            level.T,
+            levels=[0.5, 1.01],
+            colors=[color],
+            alpha=0.22,
+            zorder=2,
+        )
+        ax.contour(
+            z,
+            m_plot,
+            level.T,
+            levels=[0.5],
+            colors=[color],
+            linewidths=[2.0],
+            zorder=3,
+        )
 
     ax.set_xscale("log")
     ax.set_yscale("log")
@@ -429,37 +417,21 @@ def plot_overlay(path, kernels, z, m_plot, ell, y500, h):
     ax.set_xlabel(r"$z$")
     ax.set_ylabel(r"$M_{200\mathrm{c}}\,[h^{-1}M_\odot]$")
     ax.set_title(
-        r"Half-peak of $\mathrm{d}^{2}C_\ell/(\mathrm{d}\ln z\,\mathrm{d}\ln M)$"
+        rf"Half-peak of $\mathrm{{d}}^{{2}}C_{{\ell={int(ell[0])}}}"
+        r"/(\mathrm{d}\ln z\,\mathrm{d}\ln M)$"
         + rf" ($h={h:.2f}$)"
     )
 
-    tracer_handles = [
+    handles = [
         Line2D([0], [0], color=color, lw=2.0, label=label)
         for _key, label, color in TRACER_COLORS
     ]
-    style_handles = [
-        Line2D([0], [0], color="k", lw=1.15, ls="--", label=r"$\ell=100$"),
-        Line2D([0], [0], color="k", lw=2.0, ls="-", label=r"$\ell=1000$"),
-        Line2D([0], [0], color="k", lw=1.15, ls=":", label=r"$\ell=5000$"),
-        Line2D([0], [0], color="0.35", lw=0.7, ls="--", label=r"$\log_{10}(Y_{500}/\mathrm{Mpc}^{2})=-6$"),
-        Line2D([0], [0], color="0.35", lw=0.7, ls="-", label=r"$\log_{10}(Y_{500}/\mathrm{Mpc}^{2})=-5$"),
-        Line2D([0], [0], color="0.35", lw=0.7, ls="-.", label=r"$\log_{10}(Y_{500}/\mathrm{Mpc}^{2})=-4$"),
+    handles += [
+        Line2D([0], [0], color="0.45", lw=0.7, ls="--", label=r"$\log_{10}(Y_{500}/\mathrm{Mpc}^{2})=-6$"),
+        Line2D([0], [0], color="0.45", lw=0.7, ls="-", label=r"$\log_{10}(Y_{500}/\mathrm{Mpc}^{2})=-5$"),
+        Line2D([0], [0], color="0.45", lw=0.7, ls="-.", label=r"$\log_{10}(Y_{500}/\mathrm{Mpc}^{2})=-4$"),
     ]
-    leg1 = ax.legend(
-        handles=tracer_handles,
-        loc="upper left",
-        frameon=True,
-        fontsize=8,
-        ncol=2,
-        title=r"tracer pair",
-    )
-    ax.add_artist(leg1)
-    ax.legend(
-        handles=style_handles,
-        loc="lower right",
-        frameon=True,
-        fontsize=7.5,
-    )
+    ax.legend(handles=handles, loc="upper left", frameon=True, fontsize=8)
     fig.tight_layout()
     fig.savefig(path, dpi=300, bbox_inches="tight", pad_inches=0.12)
     plt.close(fig)
@@ -498,8 +470,8 @@ def main():
         flush=True,
     )
 
-    kernels = compute_kernels(hm, tracers, Z, M, ELL)
-    kernels["yy_masked"], _mask = compute_masked_yy(hm, tracers, Z, M, ELL, y500)
+    keys = [key for key, _label, _color in TRACER_COLORS]
+    kernels = compute_kernels(hm, tracers, Z, M, ELL, keys=keys)
 
     np.savez(
         os.path.join(out_dir, "mz_kernels.npz"),
