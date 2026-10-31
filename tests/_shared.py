@@ -7,13 +7,13 @@ compile separately. Building them through `shared` gives every test the same obj
 compiled kernels be reused across tests.
 """
 
+import copy
 import functools
 
 import jax.numpy as jnp
 import numpy as np
 
 from hmfast.cosmology import CosmoPowerCosmology
-from hmfast.cosmology.cosmopower import _EMULATOR_SETS, _Z_BG
 from hmfast.halos import HaloModel
 from hmfast.halos.bias import T10HaloBias
 from hmfast.halos.concentration import D08Concentration
@@ -58,12 +58,12 @@ FIXED_COSMOLOGY = CosmoPowerCosmology(
 
 def emulator_z_max_bg(cosmology):
     """Top of a CosmoPowerCosmology's emulated background."""
-    return float(_Z_BG[-1])
+    return 20.0  # documented top of every set's emulated background
 
 
 def emulator_z_max_pk(cosmology):
     """Top of a CosmoPowerCosmology's emulated P(k) and growth."""
-    return float(_EMULATOR_SETS[cosmology.emulator_set]["z_max_pk"])
+    return float(cosmology.z_max_pk)
 
 
 def emulator_z_grid_pk(cosmology):
@@ -127,11 +127,13 @@ CIB = S12CIBProfile(nu=100.0)
 M21 = M21CIBProfile(nu=100.0)
 
 Z_BIAS = jnp.linspace(0.0, 2.0, 5)
-TSZ_TRACER = tSZTracer(profile=GNFW, z_max=2.0)
-KSZ_TRACER = kSZTracer(profile=B16, z_max=2.0)
-GAL_TRACER = GalaxyTracer(profile=HOD)
-GAL_TRACER_BIASED = GalaxyTracer(profile=HOD, bias=(Z_BIAS, 1.0 + 0.5 * Z_BIAS))
-GLENS_TRACER = GalaxyLensingTracer(profile=NFW)
+TSZ_TRACER = tSZTracer(profile=GNFW, z_range=(0.0, 2.0))
+KSZ_TRACER = kSZTracer(profile=B16, z_range=(0.0, 2.0))
+Z_DNDZ = jnp.linspace(0.01, 2.0, 50)
+DNDZ = (Z_DNDZ, jnp.exp(-0.5 * ((Z_DNDZ - 0.8) / 0.3) ** 2))
+GAL_TRACER = GalaxyTracer(profile=HOD, dndz=DNDZ)
+GAL_TRACER_BIASED = GalaxyTracer(profile=HOD, dndz=DNDZ, bias=(Z_BIAS, 1.0 + 0.5 * Z_BIAS))
+GLENS_TRACER = GalaxyLensingTracer(profile=NFW, dndz=DNDZ)
 # Source plane at last scattering; chi(z_star) lies beyond the emulated background, so kernels there need extrapolate_z.
 Z_STAR = float(FIXED_COSMOLOGY.derived_parameters()["z_star"])
 CMBLENS_TRACER = CMBLensingTracer(profile=NFW, z_source=Z_STAR)
@@ -158,11 +160,12 @@ def stats_halo_model(p=PARAMS, mass_def=MD_200M):
 # ---------------------------------------------------------------------------------------------------------------------
 
 
-def ccl_cosmology(cosmology, *, pk_linear=False, pk_nonlin=False, **kwargs):
+def ccl_cosmology(cosmology, *, pk_linear=False, pk_nonlin=False, growth=False, **kwargs):
     """
     pyccl cosmology with `cosmology`'s neutrino masses, w0 and N_eff. With `pk_linear=True` it is a CosmologyCalculator
     fed hmfast's own P_lin on the emulator's (k, z) nodes, so halo-model comparisons test formulas rather than
-    Boltzmann codes, and with `pk_nonlin=True` also hmfast's nonlinear P(k); otherwise CCL runs CLASS itself. Extra
+    Boltzmann codes, and with `pk_nonlin=True` also hmfast's nonlinear P(k); with `growth=True` it is a
+    CosmologyCalculator fed hmfast's own D(z) and f(z) on the same z nodes; otherwise CCL runs CLASS itself. Extra
     keyword arguments go to the pyccl constructor.
     """
     import pyccl
@@ -175,18 +178,28 @@ def ccl_cosmology(cosmology, *, pk_linear=False, pk_nonlin=False, **kwargs):
         A_s=float(cosmology.A_s), n_s=float(cosmology.n_s), m_nu=m_nu, mass_split="list",
         w0=float(cosmology.w0), Neff=float(cosmology.derived_parameters()["Neff"]), **kwargs,
     )
-    if not pk_linear:
+    if not (pk_linear or growth):
         return pyccl.Cosmology(**{"transfer_function": "boltzmann_class", **params})
-    k, z = cosmology._pk_grid(), emulator_z_grid_pk(cosmology)
+    k, z = np.geomspace(*cosmology.k_range, cosmology.n_k), emulator_z_grid_pk(cosmology)
     a = np.asarray(1.0 / (1.0 + z))[::-1]
 
     def table(linear):
         pk = np.asarray(cosmology.pk(k, z, linear=linear)).T[::-1]  # (N_a, N_k) with a increasing, as CCL expects
         return {"a": a, "k": np.asarray(k), "delta_matter:delta_matter": pk}
 
-    if pk_nonlin:
-        params["pk_nonlin"] = table(False)
-    return pyccl.CosmologyCalculator(pk_linear=table(True), **params)
+    if growth:
+        # CCL tabulates sigma(M) far above z_max_pk, so the nodes there take hmfast's extrapolated growth.
+        z_high = np.geomspace(z[-1], 1.0 / pyccl.spline_params.A_SPLINE_MINLOG_SM - 1.0, 50)[1:]
+        extrapolated = cosmology.update(extrapolate_z=True)
+        D, f = (np.concatenate([np.asarray(fn(z)), np.asarray(fn_ext(z_high))])[::-1]
+                for fn, fn_ext in [(cosmology.growth_factor, extrapolated.growth_factor),
+                                   (cosmology.growth_rate, extrapolated.growth_rate)])
+        params["growth"] = {"a": np.concatenate([1.0 / (1.0 + z_high[::-1]), a]), "growth_factor": D, "growth_rate": f}
+    if pk_linear:
+        params["pk_linear"] = table(True)
+        if pk_nonlin:
+            params["pk_nonlin"] = table(False)
+    return pyccl.CosmologyCalculator(**params)
 
 
 def ccl_profile2pt_hod():
@@ -195,15 +208,11 @@ def ccl_profile2pt_hod():
 
     class Profile2ptHODhmfast(pyccl.halos.Profile2pt):
         def fourier_2pt(self, cosmo, k, M, a, prof, *, prof2=None, diag=True):
-            M_use, k_use = np.atleast_1d(M), np.atleast_1d(k)
-            n_cen, n_sat = prof._Nc(M_use, a)[:, None], prof._Ns(M_use, a)[:, None]
-            sat = n_cen * n_sat * prof._usat_fourier(cosmo, k_use, M_use, a)
-            out = 2 * sat + sat**2
-            if np.ndim(k) == 0:
-                out = np.squeeze(out, axis=-1)
-            if np.ndim(M) == 0:
-                out = np.squeeze(out, axis=0)
-            return out
+            # With no central fraction the HOD Fourier profile is N_c N_s u_sat
+            sat_only = copy.deepcopy(prof)
+            sat_only.update_parameters(fc_0=0.0, fc_p=0.0, ns_independent=False)
+            sat = sat_only.fourier(cosmo, k, M, a)
+            return 2 * sat + sat**2
 
     return Profile2ptHODhmfast()
 

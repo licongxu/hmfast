@@ -171,14 +171,9 @@ class T10HaloBias(HaloBias):
         zz = jnp.broadcast_to(z[:, None], sigma_M.shape)
 
         # Handle delta values
-        delta_numeric = mass_def._delta_numeric(cosmology, z)
-        delta_mean = mass_def._convert_reference(
-            cosmology,
-            z,
-            delta_numeric,
-            from_ref=mass_def.reference,
-            to_ref='mean',
-        )
+        # Δ relative to mean matter density: the enclosed density within r_Δ over ρ̄_m(z)
+        r_1 = mass_def.r_delta(cosmology, 1.0, z)
+        delta_mean = jnp.reshape(3.0 / (4.0 * jnp.pi * r_1**3 * cosmology.critical_density(z) * cosmology.omega_m(z)), jnp.shape(z))
         
         # Ensure delta_mean is 1D before indexing
         delta_mean = jnp.atleast_1d(delta_mean)

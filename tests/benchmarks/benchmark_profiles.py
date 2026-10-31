@@ -1,7 +1,8 @@
 """
 Benchmarks for hmfast.halos.profiles against external ground truth: CCL for NFW, GNFW, HOD and Shang12 CIB, class_sz
 for B16 and B12, inlined transcriptions of class_sz's C source for the Maniyar+2021 CIB Mdot/SFR, and, for the generic
-Hankel-transform path (GNFW, B12, B16), the analytic truncated-NFW transform and quad integrals of the truncated GNFW.
+Hankel-transform path (GNFW, B12, B16), the analytic truncated-NFW transform (through a GNFW with NFW slopes) and quad
+integrals of the truncated GNFW.
 
 CCL comparisons run hmfast with ncdm_mode="m" against a CCL CosmologyCalculator with the same neutrino masses and fed
 hmfast's own P_lin, so residuals measure the profile formulas. Each profile is checked at three (M, z) points spanning
@@ -23,6 +24,7 @@ import mcfit
 import numpy as np
 import pytest
 from scipy.integrate import quad
+from scipy.interpolate import RegularGridInterpolator
 
 from hmfast.halos.concentration import ConstantConcentration, D08Concentration
 from hmfast.halos.massdef import MassDefinition
@@ -35,8 +37,6 @@ from hmfast.halos.profiles import (
     S12CIBProfile,
     Z07GalaxyHODProfile,
 )
-from hmfast.halos.profiles.base_profile import HaloProfile, HankelTransform
-from hmfast.halos.profiles.profiles_2pt import _fourier_2pt
 
 from .._shared import ccl_cosmology, peak_err, rel_err, shared
 from .._shared import halo_model as shared_halo_model
@@ -173,7 +173,8 @@ class TestHODProfileCCL:
 
     # The 1-halo Fourier 2-point term against CCL's Profile2ptHOD (measured 1.0e-4 at 1e14). hmfast's sat-sat term is
     # n_sat^2 u^2 = N_c^2 N_s^2 u^2; Poisson satellites that require a central give <N_s(N_s-1)> = N_c N_s^2
-    # (1.7% / 1.5% at 1e12 / 5e12, where N_c < 1).
+    # (1.7% / 1.5% at 1e12 / 5e12, where N_c < 1). It is read off HaloModel.mass_integral with a single Gauss-Legendre
+    # node at m, whose weight is the ln M width, divided by dn/dlnM there; ng_bar of that model cancels exactly.
     @pytest.mark.parametrize("m,z", [
         pytest.param(1e12, 0.0, marks=pytest.mark.xfail(strict=True, reason="sat-sat term carries N_c^2, not N_c")),
         pytest.param(5e12, 0.5, marks=pytest.mark.xfail(strict=True, reason="sat-sat term carries N_c^2, not N_c")),
@@ -181,11 +182,15 @@ class TestHODProfileCCL:
     ])
     def test_fourier_2pt(self, cosmo, cosmo_ccl, m, z):
         md = shared(MassDefinition, 200, "critical")
-        hm = halo_model(cosmo, md)
+        half_width = 0.01
+        hm = halo_model(cosmo, md, m_range=(m * np.exp(-half_width), m * np.exp(half_width)), n_m=1,
+                        hm_consistency=False)
         hod, hod_ccl = _hod_pair(md)
         ngbar = float(hod.ng_bar(hm, z))
         want = pyccl.halos.Profile2ptHOD().fourier_2pt(cosmo_ccl, K_GRID, m, 1.0 / (1.0 + z), hod_ccl, prof2=hod_ccl)
-        got = np.asarray(_fourier_2pt(hm, hod, hod, jnp.asarray(K_GRID), m, z)) * ngbar**2
+        dndlnm = float(jnp.squeeze(hm.halo_mass_function.dndlnm(cosmo, jnp.atleast_1d(m), jnp.atleast_1d(z), md)))
+        moment = np.asarray(hm.mass_integral(jnp.asarray(K_GRID), z, (hod, hod)))
+        got = moment / (dndlnm * 2 * half_width) * ngbar**2
         assert rel_err(got, want) < 2e-4
 
     # ng_bar(z) and galaxy_bias(z) against CCL's HMCalculator mass integrals. Both run on fine grids from 1e8, where
@@ -299,8 +304,10 @@ def _ref_sfr(m, z, Om0, Ode0, f_b, eta_max, M_eff, sigma2_LM, tau, z_c):
 
 
 class TestManiyarMdotSFR:
-    # Against the inlined class_sz transcriptions above, which use the analytic flat-LCDM E(z) where hmfast uses the
-    # emulated H(z)/H0, the source of the residual (measured 3.6e-4 / 3.6e-4).
+    # l_gal = 4 pi S_nu(z) SFR(M, z) (1+z) chi^2 against the inlined class_sz SFR (which contains Mdot), with S_nu
+    # interpolated from the profile's own template as hmfast does, so the residual is the Mdot/SFR model. The
+    # transcriptions use the analytic flat-LCDM E(z) where hmfast uses the emulated H(z)/H0, the source of the residual
+    # (measured 3.6e-4 for Mdot and SFR separately).
     def test_mdot_and_sfr(self, cosmo):
         hm = halo_model(cosmo, shared(MassDefinition, 200, "critical"))
         m21 = M21CIBProfile(nu=100)
@@ -308,14 +315,18 @@ class TestManiyarMdotSFR:
         z = np.array([0.0, 0.5, 1.0, 2.0])
         Om0 = float(cosmo.omega_x(0.0, "matter"))
         f_b = float(cosmo.omega_b / (cosmo.H0 / 100.0) ** 2 / Om0)
-        assert rel_err(m21._m_dot(hm, jnp.asarray(m), jnp.asarray(z)), _ref_mdot(m, z, Om0, 1.0 - Om0)) < 7e-4
-        want = _ref_sfr(m, z, Om0, 1.0 - Om0, f_b, m21.eta_max, m21.M_eff, m21.sigma2_LM, m21.tau, m21.z_c)
-        assert rel_err(m21._sfr(hm, jnp.asarray(m), jnp.asarray(z)), want) < 7e-4
+        sfr = _ref_sfr(m, z, Om0, 1.0 - Om0, f_b, m21.eta_max, m21.M_eff, m21.sigma2_LM, m21.tau, m21.z_c)
+        z_tab, nu_tab, s_tab = (np.asarray(a) for a in m21.s_nu)
+        s_nu = np.exp(RegularGridInterpolator((np.log1p(z_tab), np.log(nu_tab)), np.log(s_tab))(
+            np.stack([np.log1p(z), np.full_like(z, np.log(m21.nu))], axis=-1)))
+        chi = np.asarray(cosmo.angular_diameter_distance(jnp.asarray(z))) * (1 + z)
+        want = 4 * np.pi * s_nu * sfr * (1 + z) * chi**2
+        assert rel_err(m21.l_gal(hm, jnp.asarray(m), jnp.asarray(z)), want) < 7e-4
 
 
 # ---------------------------------------------------------------------------------------------------------------------
-# Numerical accuracy of the generic Hankel path, HaloProfile._fourier_via_hankel_transform (GNFW, B12, B16), against
-# the analytic truncated-NFW transform or a quad integral of the truncated GNFW. Errors are the maximum absolute error
+# Numerical accuracy of the generic Hankel path behind GNFW, B12 and B16 fourier(), against the analytic truncated-NFW
+# transform (a GNFW with NFW slopes) or a quad integral of the truncated GNFW. Errors are the maximum absolute error
 # over the targets divided by u(q -> 0).
 # ---------------------------------------------------------------------------------------------------------------------
 
@@ -338,8 +349,8 @@ def hm500c(cosmo):
     return shared_halo_model(cosmology=cosmo, mass_def=shared(MassDefinition, 500, "critical"))
 
 
-def _gnfw_shape(x):
-    c, a, b, g = GNFW_SHAPE["c500"], GNFW_SHAPE["alpha"], GNFW_SHAPE["beta"], GNFW_SHAPE["gamma"]
+def _gnfw_shape(x, shape=GNFW_SHAPE):
+    c, a, b, g = shape["c500"], shape["alpha"], shape["beta"], shape["gamma"]
     return (c * x) ** -g * (1.0 + (c * x) ** a) ** ((g - b) / a)
 
 
@@ -357,16 +368,15 @@ def _gnfw_truth(x_out, which="Q"):
     return _gnfw_truth_at(0.0, x_out), np.array([_gnfw_truth_at(q, x_out) for q in qs])
 
 
-def _gnfw(n_x, x_out, B=1.0):
-    return GNFWPressureProfile(x_range=(X_MIN, X_MAX), n_x=n_x, B=B, x_out=x_out, **GNFW_SHAPE)
+def _gnfw(n_x, x_out, B=1.0, x_max=X_MAX, shape=GNFW_SHAPE):
+    return GNFWPressureProfile(x_range=(X_MIN, x_max), n_x=n_x, B=B, x_out=x_out, **shape)
 
 
-def _gnfw_u(hm, n_x, x_out, q, m=1e14, z=0.0):
+def _gnfw_u(hm, n_x, x_out, q, m=1e14, z=0.0, x_max=X_MAX, shape=GNFW_SHAPE):
     """hmfast's GNFW transform at q, divided by its constant prefactor so it compares to the truth."""
-    p = _gnfw(n_x, x_out)
-    m1, z1 = jnp.atleast_1d(m), jnp.atleast_1d(z)
-    rs = float(jnp.squeeze(p._fourier_radius_scale(hm, m1, z1)))
-    amp = float(jnp.squeeze(p.real(hm, jnp.array([0.5 * rs * (1 + z)]), m, z))) / _gnfw_shape(0.5)
+    p = _gnfw(n_x, x_out, x_max=x_max, shape=shape)
+    rs = float(jnp.squeeze(hm.mass_def.r_delta(hm.cosmology, jnp.atleast_1d(m / p.B), jnp.atleast_1d(z))))
+    amp = float(jnp.squeeze(p.real(hm, jnp.array([0.5 * rs * (1 + z)]), m, z))) / _gnfw_shape(0.5, shape)
     u = np.asarray(p.fourier(hm, jnp.asarray(q / (rs * (1 + z))), m, z))
     return u / (4 * np.pi * (rs * (1 + z)) ** 3 * amp)
 
@@ -394,15 +404,15 @@ def mcfit_ideal_error(n_x, pad_decades=2.0):
 
 
 def nfw_error(hm, n_x, x_max, m, z):
-    """Truncated NFW pushed through the generic Hankel path, against its analytic transform."""
-    nfw = NFWMatterProfile()
-    x = jnp.logspace(np.log10(X_MIN), np.log10(x_max), n_x)
-    nfw._hankel, nfw.x_grid, nfw.x_out = HankelTransform(x, nu=0.5), x, 1.0  # x = r / r_delta, truncated at r_delta
-    m1, z1 = jnp.atleast_1d(m), jnp.atleast_1d(z)
-    r_delta = jnp.reshape(hm.mass_def.r_delta(hm.cosmology, m1, z1), (1, 1))
-    k = jnp.asarray(Q) / (r_delta[0, 0] * (1 + z))
-    u_hankel = np.asarray(HaloProfile._fourier_via_hankel_transform(nfw, hm, k, m1, z1, r_delta))
-    u_exact = np.asarray(nfw.fourier(hm, k, m, z))
+    """Truncated NFW, as a GNFW with NFW slopes and the halo's concentration, against its analytic transform."""
+    c = float(jnp.squeeze(hm.concentration.c_delta(hm.cosmology, jnp.atleast_1d(m), jnp.atleast_1d(z),
+                                                   mass_def=hm.mass_def)))
+    shape = dict(c500=c, alpha=1.0, beta=3.0, gamma=1.0)
+    # x = r / r_delta, truncated at r_delta; dividing by the analytic int_0^1 x^2 f(x) dx normalizes u(q -> 0) to 1
+    u_hankel = _gnfw_u(hm, n_x, 1.0, Q, m=m, z=z, x_max=x_max, shape=shape) * c**3 / (np.log1p(c) - c / (1 + c))
+    r_delta = float(jnp.squeeze(hm.mass_def.r_delta(hm.cosmology, jnp.atleast_1d(m), jnp.atleast_1d(z))))
+    k = jnp.asarray(Q) / (r_delta * (1 + z))
+    u_exact = np.asarray(NFWMatterProfile().fourier(hm, k, m, z)) * float(hm.cosmology.rho_x(0.0, "matter")) / m
     return np.max(np.abs(u_hankel - u_exact)) / np.max(np.abs(u_exact))
 
 

@@ -8,6 +8,7 @@ tests/benchmarks/benchmark_hankel.py for the Hankel-transform accuracy checks.
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 from hmfast.halos.concentration import (
@@ -26,7 +27,6 @@ from hmfast.halos.profiles import (
     Z07GalaxyHODProfile,
 )
 from hmfast.halos.profiles.base_profile import HankelTransform
-from hmfast.halos.profiles.profiles_2pt import _fourier_2pt
 from hmfast.utils import gauss_legendre_nodes_weights
 
 from .._shared import halo_model, shared
@@ -38,6 +38,49 @@ def _m_grid(hm):
     """Reconstruct a halo model's internal Gauss-Legendre mass-integral nodes."""
     logm, _ = gauss_legendre_nodes_weights(jnp.log(hm.m_range[0]), jnp.log(hm.m_range[1]), hm.n_m)
     return jnp.exp(logm)
+
+
+def _gl_mass_integral(hm, u, z):
+    """Hand-built Gauss-Legendre mass integral of u (N_k, N_m, N_z) over hm's grid, no counterterm."""
+    logm, w = gauss_legendre_nodes_weights(jnp.log(hm.m_range[0]), jnp.log(hm.m_range[1]), hm.n_m)
+    dndlnm = jnp.reshape(hm.halo_mass_function.dndlnm(hm.cosmology, jnp.exp(logm), z, hm.mass_def), (hm.n_m, -1))
+    return jnp.squeeze(jnp.sum(u * (dndlnm * w[:, None])[None, :, :], axis=-2))
+
+
+def _unit_mass_nfw_fourier(hm, k, m, z):
+    """Unit-mass NFW Fourier profile, shape (N_k, N_m, N_z), from the public mass-weighted one."""
+    rho_mean_0 = hm.cosmology.rho_x(0.0, "matter")
+    u = jnp.reshape(NFWMatterProfile().fourier(hm, k, m, z), (len(k), len(m), len(z)))
+    return u * rho_mean_0 / m[None, :, None]
+
+
+# Published calibration presets that calibrate() must reproduce.
+B16_PRESETS = {
+    "agn": dict(
+        A_rho0=4000.0, A_alpha=0.88, A_beta=3.83,
+        alpha_m_rho0=0.29, alpha_m_alpha=-0.03, alpha_m_beta=0.04,
+        alpha_z_rho0=-0.66, alpha_z_alpha=0.19, alpha_z_beta=-0.025,
+    ),
+    "shock": dict(
+        A_rho0=1.9e4, A_alpha=0.70, A_beta=4.43,
+        alpha_m_rho0=0.09, alpha_m_alpha=-0.017, alpha_m_beta=0.005,
+        alpha_z_rho0=-0.95, alpha_z_alpha=0.27, alpha_z_beta=0.037,
+    ),
+}
+B12_PRESETS = {
+    "agn": dict(
+        A_P0=18.1, A_xc=0.497, A_beta=4.35,
+        alpha_m_P0=0.154, alpha_m_xc=-0.00865, alpha_m_beta=0.0393,
+        alpha_z_P0=-0.758, alpha_z_xc=0.731, alpha_z_beta=0.415,
+    ),
+}
+
+
+def _same_pytree(a, b):
+    """True if a and b have the same treedef and bitwise-equal leaves."""
+    leaves_a, treedef_a = jax.tree_util.tree_flatten(a)
+    leaves_b, treedef_b = jax.tree_util.tree_flatten(b)
+    return treedef_a == treedef_b and all(jnp.array_equal(x, y) for x, y in zip(leaves_a, leaves_b))
 
 
 @pytest.fixture
@@ -101,17 +144,29 @@ SHAPE_MATRIX_2D = [
 ]
 # z only, used by ng_bar/galaxy_bias/mean_emissivity (mass integral is internal).
 Z_ONLY_CASES = [("scalar", ()), ("array1", ()), ("arrayM", (4,))]
+# k x z only (mass integrated out), used by HaloModel.mass_integral.
+SHAPE_MATRIX_KZ = [
+    ("scalar", "scalar", ()),
+    ("array1", "array1", ()),
+    ("arrayN", "scalar", (4,)),
+    ("scalar", "arrayM", (4,)),
+    ("arrayN", "arrayM", (4, 4)),
+]
 
 
 class TestHaloProfileBase:
-    # HankelTransform.transform()'s output covers the input grid plus its zero padding.
-    def test_hankel_transform_shape(self):
+    # HankelTransform.transform()'s output grid is the input grid plus pad_decades of extra log-spaced nodes, and matches it unpadded.
+    @pytest.mark.parametrize("pad_decades", [2.0, 0.7])
+    def test_hankel_transform_shape(self, pad_decades):
         x_grid = jnp.logspace(-4, 1, 64)
         f_theta = jnp.exp(-x_grid)
-        ht = HankelTransform(x_grid, nu=0.5)
-        k, y_k = ht.transform(f_theta)
-        assert k.shape == (x_grid.shape[0] + ht._n_pad,)
+        k, y_k = HankelTransform(x_grid, nu=0.5, pad_decades=pad_decades).transform(f_theta)
+        n_pad = int(np.ceil(pad_decades * np.log(10.0) / np.log(float(x_grid[1] / x_grid[0]))))
+        assert k.shape == (x_grid.shape[0] + n_pad,)
         assert y_k.shape == k.shape
+        k0, y_k0 = HankelTransform(x_grid, nu=0.5, pad_decades=0.0).transform(f_theta)
+        assert k0.shape == x_grid.shape
+        assert y_k0.shape == k0.shape
 
     # HankelTransform stores whatever x it's given verbatim -- no internal sorting.
     def test_hankel_transform_requires_presorted_x(self):
@@ -119,98 +174,65 @@ class TestHaloProfileBase:
         ht = HankelTransform(x_unsorted, nu=0.5)
         assert jnp.array_equal(ht.x, x_unsorted)
 
-    # _u_r_nfw's output shape follows the (r, m, z) broadcast-then-squeeze convention.
-    @pytest.mark.parametrize("r_key,m_key,z_key,expected_shape", SHAPE_MATRIX_3D)
-    def test_u_r_nfw_shape_matrix(self, hm200c, r_key, m_key, z_key, expected_shape):
-        nfw = NFWMatterProfile()
-        out = jax.eval_shape(lambda: nfw._u_r_nfw(hm200c, R_VALS[r_key], M_VALS[m_key], Z_VALS[z_key]))
-        assert out.shape == expected_shape
 
-    # _u_k_nfw's output shape follows the (k, m, z) broadcast-then-squeeze convention.
-    @pytest.mark.parametrize("r_key,m_key,z_key,expected_shape", SHAPE_MATRIX_3D)
-    def test_u_k_nfw_shape_matrix(self, hm200c, r_key, m_key, z_key, expected_shape):
-        nfw = NFWMatterProfile()
-        _, out = jax.eval_shape(lambda: nfw._u_k_nfw(hm200c, R_VALS[r_key], M_VALS[m_key], Z_VALS[z_key]))
-        assert out.shape == expected_shape
-
-    # The unit-mass NFW profile vanishes outside r_delta*(1+z) and is positive just inside.
-    def test_u_r_nfw_zero_beyond_r_delta(self, hm200c):
-        nfw = NFWMatterProfile()
-        m, z = jnp.array(1e13), jnp.array(0.5)
-        r_delta = hm200c.mass_def.r_delta(hm200c.cosmology, m, z)
-        r_edge = r_delta * (1.0 + z)
-        assert nfw._u_r_nfw(hm200c, r_edge * 1.5, m, z) == 0.0
-        assert nfw._u_r_nfw(hm200c, r_edge * 0.5, m, z) > 0.0
-
-    # The unit-mass NFW Fourier profile approaches 1 (its unit-mass normalization) as k -> 0.
-    def test_u_k_nfw_unity_at_k_zero(self, hm200c):
-        nfw = NFWMatterProfile()
-        m, z = jnp.array(1e13), jnp.array(0.5)
-        _, u_k = nfw._u_k_nfw(hm200c, jnp.array(1e-6), m, z)
-        assert jnp.isclose(u_k, 1.0, atol=1e-3)
-
-
-class TestFourier2pt:
-    # HOD x HOD dispatch matches the hand-built central/satellite second-moment formula.
-    def test_dispatch_hod_hod_matches_manual_formula(self, hm200c):
+class TestMassIntegral2pt:
+    # HOD x HOD at a shared k matches the hand-built central/satellite second-moment formula.
+    def test_hod_hod_matches_manual_formula(self, hm200c):
+        hm = hm200c.update(hm_consistency=False)
         hod1 = Z07GalaxyHODProfile(M_min=10**12.0)
         hod2 = Z07GalaxyHODProfile(M_min=10**12.3)
-        k, m, z = (
-            jnp.geomspace(0.1, 5.0, 4),
-            jnp.geomspace(1e11, 1e14, 5),
-            jnp.array([0.3, 1.0]),
-        )
+        k, z = jnp.geomspace(0.1, 5.0, 4), jnp.array([0.3, 1.0])
+        m = _m_grid(hm)
 
-        ns1, ns2 = hod1.n_sat(hm200c, m), hod2.n_sat(hm200c, m)
-        ng1, ng2 = hod1.ng_bar(hm200c, z), hod2.ng_bar(hm200c, z)
-        _, u1 = hod1._u_k_nfw(hm200c, k, m, z)
-        _, u2 = hod2._u_k_nfw(hm200c, k, m, z)
-        expected = (
-            ns1[None, :, None] * ns2[None, :, None] * u1 * u2
-            + ns1[None, :, None] * u1
-            + ns2[None, :, None] * u2
+        ns1, ns2 = hod1.n_sat(hm, m), hod2.n_sat(hm, m)
+        ng1, ng2 = hod1.ng_bar(hm, z), hod2.ng_bar(hm, z)
+        u = _unit_mass_nfw_fourier(hm, k, m, z)
+        second_moment = (
+            ns1[None, :, None] * ns2[None, :, None] * u * u
+            + ns1[None, :, None] * u
+            + ns2[None, :, None] * u
         ) / (ng1[None, None, :] * ng2[None, None, :])
-        actual = _fourier_2pt(hm200c, hod1, hod2, k, m, z)
-        assert jnp.allclose(actual, jnp.squeeze(expected))
-
-    # CIB x CIB dispatch matches the hand-built central/satellite second-moment formula.
-    def test_dispatch_cib_cib_matches_manual_formula(self, hm200c):
-        cib1 = S12CIBProfile(nu=100)
-        cib2 = S12CIBProfile(nu=250)
-        k, m, z = (
-            jnp.geomspace(0.1, 5.0, 4),
-            jnp.geomspace(1e11, 1e14, 5),
-            jnp.array([0.3, 1.0]),
-        )
-
-        ls1, lc1 = cib1.l_sat(hm200c, m, z), cib1.l_cen(hm200c, m, z)
-        ls2, lc2 = cib2.l_sat(hm200c, m, z), cib2.l_cen(hm200c, m, z)
-        _, u1 = cib1._u_k_nfw(hm200c, k, m, z)
-        _, u2 = cib2._u_k_nfw(hm200c, k, m, z)
-        expected = (1.0 / (4.0 * jnp.pi) ** 2) * (
-            ls1[None, :, :] * ls2[None, :, :] * u1 * u2
-            + ls1[None, :, :] * lc2[None, :, :] * u1
-            + ls2[None, :, :] * lc1[None, :, :] * u2
-        )
-        actual = _fourier_2pt(hm200c, cib1, cib2, k, m, z)
-        assert jnp.allclose(actual, jnp.squeeze(expected))
-
-    # Mixed profile-family pairs (no special-cased dispatch) fall back to the product of fouriers.
-    def test_dispatch_mixed_types_falls_back_to_product_of_fouriers(self, hm200c):
-        hod = Z07GalaxyHODProfile()
-        nfw = NFWMatterProfile()
-        k, m, z = jnp.array([0.1, 1.0]), jnp.array([1e13, 1e14]), jnp.array(0.5)
-        actual = _fourier_2pt(hm200c, hod, nfw, k, m, z)
-        expected = hod.fourier(hm200c, k, m, z) * nfw.fourier(hm200c, k, m, z)
+        expected = _gl_mass_integral(hm, second_moment, z)
+        actual = hm.mass_integral(k, z, (hod1, hod2))
         assert jnp.allclose(actual, expected)
 
-    # _fourier_2pt's output shape follows the (k, m, z) broadcast-then-squeeze convention.
-    @pytest.mark.parametrize("r_key,m_key,z_key,expected_shape", SHAPE_MATRIX_3D)
-    def test_shape_matrix(self, hm200c, r_key, m_key, z_key, expected_shape):
+    # CIB x CIB at a shared k matches the hand-built central/satellite second-moment formula.
+    def test_cib_cib_matches_manual_formula(self, hm200c):
+        hm = hm200c.update(hm_consistency=False)
+        cib1 = S12CIBProfile(nu=100)
+        cib2 = S12CIBProfile(nu=250)
+        k, z = jnp.geomspace(0.1, 5.0, 4), jnp.array([0.3, 1.0])
+        m = _m_grid(hm)
+
+        ls1, lc1 = cib1.l_sat(hm, m, z), cib1.l_cen(hm, m, z)
+        ls2, lc2 = cib2.l_sat(hm, m, z), cib2.l_cen(hm, m, z)
+        u = _unit_mass_nfw_fourier(hm, k, m, z)
+        second_moment = (1.0 / (4.0 * jnp.pi) ** 2) * (
+            ls1[None, :, :] * ls2[None, :, :] * u * u
+            + ls1[None, :, :] * lc2[None, :, :] * u
+            + ls2[None, :, :] * lc1[None, :, :] * u
+        )
+        expected = _gl_mass_integral(hm, second_moment, z)
+        actual = hm.mass_integral(k, z, (cib1, cib2))
+        assert jnp.allclose(actual, expected)
+
+    # Mixed profile-family pairs (no special-cased second moment) fall back to the product of fouriers.
+    def test_mixed_types_falls_back_to_product_of_fouriers(self, hm200c):
+        hm = hm200c.update(hm_consistency=False)
+        hod = Z07GalaxyHODProfile()
+        nfw = NFWMatterProfile()
+        k, z = jnp.array([0.1, 1.0]), jnp.array([0.5])
+        m = _m_grid(hm)
+        product = jnp.reshape(hod.fourier(hm, k, m, z) * nfw.fourier(hm, k, m, z), (len(k), len(m), len(z)))
+        expected = _gl_mass_integral(hm, product, z)
+        actual = hm.mass_integral(k, z, (hod, nfw))
+        assert jnp.allclose(actual, expected)
+
+    # The 2-leg shared-k mass integral's output shape follows the (k, z) broadcast-then-squeeze convention.
+    @pytest.mark.parametrize("k_key,z_key,expected_shape", SHAPE_MATRIX_KZ)
+    def test_shape_matrix(self, hm200c, k_key, z_key, expected_shape):
         hod1, hod2 = Z07GalaxyHODProfile(), Z07GalaxyHODProfile(alpha_s=1.5)
-        out = jax.eval_shape(lambda: _fourier_2pt(
-            hm200c, hod1, hod2, R_VALS[r_key], M_VALS[m_key], Z_VALS[z_key]
-        ))
+        out = jax.eval_shape(lambda: hm200c.mass_integral(R_VALS[k_key], Z_VALS[z_key], (hod1, hod2)))
         assert out.shape == expected_shape
 
 
@@ -237,11 +259,28 @@ class TestNFWMatterProfile:
         assert jnp.all(rho > 0)
         assert jnp.all(jnp.diff(rho) <= 0)
 
+    # The NFW profile vanishes outside r_delta*(1+z) and is positive just inside.
+    def test_real_zero_beyond_r_delta(self, hm200c):
+        nfw = NFWMatterProfile()
+        m, z = jnp.array(1e13), jnp.array(0.5)
+        r_delta = hm200c.mass_def.r_delta(hm200c.cosmology, m, z)
+        r_edge = r_delta * (1.0 + z)
+        assert nfw.real(hm200c, r_edge * 1.5, m, z) == 0.0
+        assert nfw.real(hm200c, r_edge * 0.5, m, z) > 0.0
+
+    # The Fourier profile approaches m / rho_mean_0 (unit-mass normalization) as k -> 0.
+    def test_fourier_unit_mass_normalization_at_k_zero(self, hm200c):
+        nfw = NFWMatterProfile()
+        m, z = jnp.array(1e13), jnp.array(0.5)
+        rho_mean_0 = hm200c.cosmology.rho_x(0.0, "matter")
+        u_k = nfw.fourier(hm200c, jnp.array(1e-6), m, z) * rho_mean_0 / m
+        assert jnp.isclose(u_k, 1.0, atol=1e-3)
+
     # NFWMatterProfile has no parameters -- it is a trivially empty pytree that still round-trips.
     def test_pytree_roundtrip_empty_leaves(self, hm200c):
         nfw = NFWMatterProfile()
-        assert nfw._tree_flatten() == ((), None)
         leaves, treedef = jax.tree_util.tree_flatten(nfw)
+        assert leaves == []
         rt = jax.tree_util.tree_unflatten(treedef, leaves)
         assert jnp.allclose(
             rt.real(hm200c, 0.1, 1e13, 0.5), nfw.real(hm200c, 0.1, 1e13, 0.5)
@@ -376,13 +415,15 @@ class TestZ07GalaxyHODProfile:
         default_m = _m_grid(hm200c)
         real_default_m = hod.real(hm200c, r, default_m, z)
         real_other_m = hod.real(hm200c, r, other_m, z)
+        rho_mean_0 = hm200c.cosmology.rho_x(0.0, "matter")
+        nfw = NFWMatterProfile()
         ns_default, nc_default = hod.n_sat(hm200c, default_m), hod.n_cen(
             hm200c, default_m
         )
-        u_default = hod._u_r_nfw(hm200c, r, default_m, z)
+        u_default = nfw.real(hm200c, r, default_m, z) * rho_mean_0 / default_m
         implied_ng_default = (nc_default + ns_default * u_default) / real_default_m
         ns_other, nc_other = hod.n_sat(hm200c, other_m), hod.n_cen(hm200c, other_m)
-        u_other = hod._u_r_nfw(hm200c, r, other_m, z)
+        u_other = nfw.real(hm200c, r, other_m, z) * rho_mean_0 / other_m
         implied_ng_other = (nc_other + ns_other * u_other) / real_other_m
         assert jnp.allclose(implied_ng_default, ng_from_hm_grid, rtol=1e-6)
         assert jnp.allclose(implied_ng_other, ng_from_hm_grid, rtol=1e-6)
@@ -660,13 +701,16 @@ class TestM21CIBProfile:
         cib2 = cib.update(nu=150.0)
         assert cib2.s_nu is cib.s_nu
 
-    # _s_nu_interp is rebuilt fresh from self.s_nu on every call -- no persistent, staleness-prone cache.
-    def test_s_nu_interp_stateless_across_calls(self):
+    # l_gal follows each instance's own s_nu grid -- no SED interpolant is cached across instances.
+    def test_l_gal_tracks_s_nu_without_stale_cache(self, hm200c):
         z_g, nu_g = jnp.linspace(0.0, 5.0, 6), jnp.geomspace(10.0, 1000.0, 6)
         s_nu_g = jnp.ones((6, 6)) * jnp.geomspace(1.0, 2.0, 6)[None, :]
-        cib = M21CIBProfile(nu=100, s_nu=(z_g, nu_g, s_nu_g))
-        z, nu = jnp.array([0.5, 1.5]), 150.0
-        assert jnp.allclose(cib._s_nu_interp(z, nu), cib._s_nu_interp(z, nu))
+        cib = M21CIBProfile(nu=150.0, s_nu=(z_g, nu_g, s_nu_g))
+        cib_x2 = M21CIBProfile(nu=150.0, s_nu=(z_g, nu_g, 2.0 * s_nu_g))
+        m, z = jnp.array([1e12, 1e13]), jnp.array([0.5, 1.5])
+        l_gal = cib.l_gal(hm200c, m, z)
+        assert jnp.allclose(cib.l_gal(hm200c, m, z), l_gal)
+        assert jnp.allclose(cib_x2.l_gal(hm200c, m, z), 2.0 * l_gal)
 
     # l_sat's subhalo integral also uses ngrid=halo_model.n_m, but the Maniyar clamping
     # (jnp.minimum of two branches) kinks the integrand, so Gauss-Legendre converges
@@ -686,15 +730,6 @@ class TestM21CIBProfile:
         l_fine, l_coarse = cib.l_sat(hm_fine, m, z), cib.l_sat(hm_coarse, m, z)
         assert not jnp.array_equal(l_fine, l_coarse)
         assert jnp.isclose(l_fine, l_coarse, rtol=0.1)
-
-    # _m_dot/_sfr are NOT squeezed like the public methods -- always shape (N_m, N_z).
-    def test_m_dot_and_sfr_helper_shapes(self, hm200c):
-        cib = M21CIBProfile(nu=100)
-        assert cib._m_dot(hm200c, jnp.array(1e13), jnp.array(0.5)).shape == (1, 1)
-        assert cib._sfr(hm200c, jnp.array(1e13), jnp.array(0.5)).shape == (1, 1)
-        assert cib._m_dot(
-            hm200c, jnp.array([1e13, 1e14]), jnp.array([0.3, 1.0])
-        ).shape == (2, 2)
 
     # update() replaces only the requested leaves and always preserves s_nu.
     def test_update_rebuilds_8_leaves_preserves_s_nu(self):
@@ -730,7 +765,7 @@ class TestM21CIBProfile:
         assert jnp.all(jnp.isnan(cib.mean_emissivity(hm200c_oob, z)))
 
     # l_cen/l_sat never reference halo_model.mass_def -- they are identical across mass defs
-    # at a fixed mass, while the satellite NFW kernel _u_r_nfw genuinely differs (different
+    # at a fixed mass, while the satellite NFW kernel in real() genuinely differs (different
     # r_delta/c_delta). A mass_translator-based real() comparison (as used for NFW/HOD/S12CIB
     # above) is NOT used here: M21's natural-log Gaussian efficiency term is steep enough that
     # mass_translator's approximate mass conversion gets amplified into an order-of-magnitude
@@ -767,9 +802,10 @@ class TestM21CIBProfile:
         m, z = jnp.array(5e13), jnp.array(0.5)
         assert jnp.allclose(cib.l_cen(hm_a, m, z), cib.l_cen(hm_b, m, z), rtol=1e-6)
         assert jnp.allclose(cib.l_sat(hm_a, m, z), cib.l_sat(hm_b, m, z), rtol=1e-6)
-        u_m_a = cib._u_r_nfw(hm_a, jnp.array(0.1), m, z)
-        u_m_b = cib._u_r_nfw(hm_b, jnp.array(0.1), m, z)
-        assert not jnp.isclose(u_m_a, u_m_b, rtol=1e-4)
+        # At r > 0 real() is the satellite term alone, so with equal l_sat it differs only through the kernel.
+        sat_a = cib.real(hm_a, jnp.array(0.1), m, z)
+        sat_b = cib.real(hm_b, jnp.array(0.1), m, z)
+        assert not jnp.isclose(sat_a, sat_b, rtol=1e-4)
 
 
 class TestB16DensityProfile:
@@ -787,25 +823,28 @@ class TestB16DensityProfile:
         out = jax.eval_shape(lambda: b16.fourier(hm200c, R_VALS[r_key], M_VALS[m_key], Z_VALS[z_key]))
         assert out.shape == expected_shape
 
-    # x_range/n_x are always turned into a log-spaced grid, regardless of the requested bounds.
-    def test_x_grid_is_log_spaced_from_range(self):
-        b16 = B16DensityProfile(x_range=(0.1, 10.0), n_x=4)
-        assert jnp.array_equal(b16.x_grid, jnp.logspace(jnp.log10(0.1), jnp.log10(10.0), 4))
+    # x_range/n_x are stored as a float pair and an int, whatever numeric types are passed.
+    def test_x_range_and_n_x_stored(self):
+        b16 = B16DensityProfile(x_range=(jnp.array(0.1), 10), n_x=4.0)
+        assert b16.x_range == (0.1, 10.0) and isinstance(b16.x_range[0], float)
+        assert b16.n_x == 4 and isinstance(b16.n_x, int)
 
-    # update(x_range=..., n_x=...) rebuilds a fresh HankelTransform on the new log-spaced grid.
-    def test_update_x_range_rebuilds_hankel(self):
+    # update(x_range=..., n_x=...) replaces the transform grid, which changes fourier() but not real().
+    def test_update_x_range_changes_fourier(self, hm200c):
         b16 = B16DensityProfile()
         b16_2 = b16.update(x_range=(0.01, 5.0), n_x=8)
-        assert jnp.array_equal(b16_2.x_grid, jnp.logspace(jnp.log10(0.01), jnp.log10(5.0), 8))
-        assert b16_2._hankel is not b16._hankel
+        assert b16_2.x_range == (0.01, 5.0) and b16_2.n_x == 8
+        k, r, m, z = jnp.array([0.1, 1.0]), jnp.array([0.1, 0.5]), jnp.array(1e14), jnp.array(0.5)
+        assert jnp.array_equal(b16_2.real(hm200c, r, m, z), b16.real(hm200c, r, m, z))
+        assert not jnp.allclose(b16_2.fourier(hm200c, k, m, z), b16.fourier(hm200c, k, m, z), rtol=1e-3)
 
     # calibrate() with a named preset matches an explicit update() call with the same kwargs.
     @pytest.mark.parametrize("key", ["agn", "shock"])
     def test_calibrate_matches_update(self, key):
         b16 = B16DensityProfile()
         calibrated = b16.calibrate(key)
-        updated = b16.update(**B16DensityProfile._PRESETS[key])
-        assert calibrated._tree_flatten()[0] == updated._tree_flatten()[0]
+        updated = b16.update(**B16_PRESETS[key])
+        assert _same_pytree(calibrated, updated)
 
     # calibrate() with an unknown preset name raises ValueError.
     def test_calibrate_unknown_key_raises_value_error(self):
@@ -813,12 +852,12 @@ class TestB16DensityProfile:
         with pytest.raises(ValueError):
             b16.calibrate("bogus")
 
-    # calibrate() only touches the 9 shape parameters -- x_grid and x_out are preserved.
-    def test_calibrate_preserves_x_grid_and_x_out(self):
-        b16 = B16DensityProfile(x_out=2.5)
+    # calibrate() only touches the 9 shape parameters -- x_range, n_x and x_out are preserved.
+    def test_calibrate_preserves_x_range_n_x_and_x_out(self):
+        b16 = B16DensityProfile(x_out=2.5, x_range=(0.05, 3.0), n_x=64)
         calibrated = b16.calibrate("shock")
         assert calibrated.x_out == 2.5
-        assert jnp.array_equal(calibrated.x_grid, b16.x_grid)
+        assert calibrated.x_range == b16.x_range and calibrated.n_x == b16.n_x
 
     # real() is invariant to halo_model.mass_def given a properly mass_translator-converted
     # mass -- B16 always renormalizes internally to 200c. Contrast with GNFW's sensitivity below.
@@ -889,17 +928,20 @@ class TestGNFWPressureProfile:
         out = jax.eval_shape(lambda: gnfw.fourier(hm200c, R_VALS[r_key], M_VALS[m_key], Z_VALS[z_key]))
         assert out.shape == expected_shape
 
-    # x_range/n_x are always turned into a log-spaced grid, regardless of the requested bounds.
-    def test_x_grid_is_log_spaced_from_range(self):
-        gnfw = GNFWPressureProfile(x_range=(0.1, 10.0), n_x=4)
-        assert jnp.array_equal(gnfw.x_grid, jnp.logspace(jnp.log10(0.1), jnp.log10(10.0), 4))
+    # x_range/n_x are stored as a float pair and an int, whatever numeric types are passed.
+    def test_x_range_and_n_x_stored(self):
+        gnfw = GNFWPressureProfile(x_range=(jnp.array(0.1), 10), n_x=4.0)
+        assert gnfw.x_range == (0.1, 10.0) and isinstance(gnfw.x_range[0], float)
+        assert gnfw.n_x == 4 and isinstance(gnfw.n_x, int)
 
-    # update(x_range=..., n_x=...) rebuilds a fresh HankelTransform on the new log-spaced grid.
-    def test_update_x_range_rebuilds_hankel(self):
+    # update(x_range=..., n_x=...) replaces the transform grid, which changes fourier() but not real().
+    def test_update_x_range_changes_fourier(self, hm200c):
         gnfw = GNFWPressureProfile()
         gnfw_2 = gnfw.update(x_range=(0.01, 5.0), n_x=8)
-        assert jnp.array_equal(gnfw_2.x_grid, jnp.logspace(jnp.log10(0.01), jnp.log10(5.0), 8))
-        assert gnfw_2._hankel is not gnfw._hankel
+        assert gnfw_2.x_range == (0.01, 5.0) and gnfw_2.n_x == 8
+        k, r, m, z = jnp.array([0.1, 1.0]), jnp.array([0.1, 0.5]), jnp.array(1e14), jnp.array(0.5)
+        assert jnp.array_equal(gnfw_2.real(hm200c, r, m, z), gnfw.real(hm200c, r, m, z))
+        assert not jnp.allclose(gnfw_2.fourier(hm200c, k, m, z), gnfw.fourier(hm200c, k, m, z), rtol=1e-3)
 
     # real() is deliberately mass-def SENSITIVE (no internal renormalization) -- given a
     # properly mass_translator-converted mass, mass_def A vs. B disagree well beyond a loose
@@ -983,24 +1025,27 @@ class TestB12PressureProfile:
         out = jax.eval_shape(lambda: b12.fourier(hm200c, R_VALS[r_key], M_VALS[m_key], Z_VALS[z_key]))
         assert out.shape == expected_shape
 
-    # x_range/n_x are always turned into a log-spaced grid, regardless of the requested bounds.
-    def test_x_grid_is_log_spaced_from_range(self):
-        b12 = B12PressureProfile(x_range=(0.1, 10.0), n_x=4)
-        assert jnp.array_equal(b12.x_grid, jnp.logspace(jnp.log10(0.1), jnp.log10(10.0), 4))
+    # x_range/n_x are stored as a float pair and an int, whatever numeric types are passed.
+    def test_x_range_and_n_x_stored(self):
+        b12 = B12PressureProfile(x_range=(jnp.array(0.1), 10), n_x=4.0)
+        assert b12.x_range == (0.1, 10.0) and isinstance(b12.x_range[0], float)
+        assert b12.n_x == 4 and isinstance(b12.n_x, int)
 
-    # update(x_range=..., n_x=...) rebuilds a fresh HankelTransform on the new log-spaced grid.
-    def test_update_x_range_rebuilds_hankel(self):
+    # update(x_range=..., n_x=...) replaces the transform grid, which changes fourier() but not real().
+    def test_update_x_range_changes_fourier(self, hm200c):
         b12 = B12PressureProfile()
         b12_2 = b12.update(x_range=(0.01, 5.0), n_x=8)
-        assert jnp.array_equal(b12_2.x_grid, jnp.logspace(jnp.log10(0.01), jnp.log10(5.0), 8))
-        assert b12_2._hankel is not b12._hankel
+        assert b12_2.x_range == (0.01, 5.0) and b12_2.n_x == 8
+        k, r, m, z = jnp.array([0.1, 1.0]), jnp.array([0.1, 0.5]), jnp.array(1e14), jnp.array(0.5)
+        assert jnp.array_equal(b12_2.real(hm200c, r, m, z), b12.real(hm200c, r, m, z))
+        assert not jnp.allclose(b12_2.fourier(hm200c, k, m, z), b12.fourier(hm200c, k, m, z), rtol=1e-3)
 
     # calibrate("agn") matches an explicit update() call with the same kwargs.
     def test_calibrate_agn_matches_update(self):
         b12 = B12PressureProfile()
         calibrated = b12.calibrate("agn")
-        updated = b12.update(**B12PressureProfile._PRESETS["agn"])
-        assert calibrated._tree_flatten()[0] == updated._tree_flatten()[0]
+        updated = b12.update(**B12_PRESETS["agn"])
+        assert _same_pytree(calibrated, updated)
 
     # calibrate() with an unknown preset name raises ValueError.
     def test_calibrate_unknown_key_raises_value_error(self):
@@ -1034,19 +1079,21 @@ class TestB12PressureProfile:
         real_b = b12.real(hm_b, r, m_b, z)
         assert jnp.allclose(real_a, real_b, rtol=0.15)
 
-    # real()'s independently-re-derived r_200c matches _fourier_radius_scale's -- both use the
-    # identical mass_translator + r_delta formula, so this is a regression guard against the
-    # two derivations silently drifting apart.
-    def test_real_and_fourier_radius_scale_agree(self, hm200c):
-        b12 = B12PressureProfile()
-        m, z = jnp.array([1e13, 1e14]), jnp.array([0.3, 1.0])
-        r_scale = b12._fourier_radius_scale(hm200c, m, z)
+    # fourier()'s k -> 0 limit equals the volume integral of real() truncated at x_out*r_200c, so
+    # fourier()'s radius scale and truncation cannot drift away from real()'s r_200c.
+    @pytest.mark.parametrize("x_out", [1.0, 2.0])
+    def test_fourier_k_zero_matches_volume_integral_of_real(self, hm200c, x_out):
+        b12 = B12PressureProfile(x_out=x_out)
+        m, z = jnp.array(1e14), jnp.array(0.5)
         mass_def_200c = shared(MassDefinition, 200, "critical")
         m200c = mass_translator(hm200c.mass_def, mass_def_200c, hm200c.concentration)(
             hm200c.cosmology, m, z
         )
-        r_200c_expected = mass_def_200c.r_delta(hm200c.cosmology, m200c, z)
-        assert jnp.allclose(r_scale, r_200c_expected, rtol=1e-10)
+        r_200c = mass_def_200c.r_delta(hm200c.cosmology, m200c, z)
+        r = jnp.geomspace(1e-6, 1.0, 200001) * b12.x_out * r_200c * (1.0 + z)
+        f = 4.0 * jnp.pi * r**3 * b12.real(hm200c, r, m, z)
+        volume_integral = jnp.sum(0.5 * (f[1:] + f[:-1]) * jnp.diff(jnp.log(r)))
+        assert jnp.isclose(b12.fourier(hm200c, jnp.array(1e-6), m, z), volume_integral, rtol=1e-3)
 
     # The same jitted real()/fourier() accept a differently-shaped z array across calls.
     def test_array_size_change_across_jitted_calls(self, hm200c):

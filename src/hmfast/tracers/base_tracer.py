@@ -1,9 +1,9 @@
 import jax
 import jax.numpy as jnp
 from abc import ABC, abstractmethod
-import numpy as np
 
 from hmfast.halos.profiles import HaloProfile
+from hmfast.utils import Const
 
 
  
@@ -66,16 +66,6 @@ class Tracer(ABC):
         
 
 
-    def _load_dndz_data(self, path):
-        """
-        Loads dndz curves in the format (z, phi) for galaxy HOD and galaxy lensing tracers.
-        """
-        data = np.loadtxt(path)
-        x = data[:, 0]
-        y = data[:, 1]
-        return (jnp.array(x), jnp.array(y))
-
-        
     def _prepare_z_function(self, value, normalize=True):
         """
         Converts (z, phi) curves to jnp arrays, optionally normalizing phi (e.g. for dndz);
@@ -97,11 +87,11 @@ class Tracer(ABC):
 
         .. math::
 
-            I_s(z) = \\int_z^{\\infty} dz_s\\, w(z_s)\\, \\frac{dN}{dz}(z_s) \\frac{\\chi(z_s) - \\chi(z)}{\\chi(z_s)}
+            I_s(z) = \\int_z^{\\infty} dz_s\\, w(z_s)\\, \\frac{dN}{dz}(z_s) \\frac{f_K(\\chi(z_s) - \\chi(z))}{f_K(\\chi(z_s))}
 
         where :math:`\\frac{dN}{dz}(z_s)` is the normalized source redshift distribution,
-        :math:`\\chi(z)` is the comoving distance to redshift :math:`z`,
-        :math:`\\chi(z_s)` is the comoving distance to source redshift :math:`z_s`, and
+        :math:`\\chi` is the comoving distance, :math:`f_K(\\chi) = (1+z) D_A(z)` the transverse
+        comoving distance, and
         :math:`w(z_s)` is an optional per-source weight (``weight``, defaulting to 1),
         e.g. a magnification-bias weighting evaluated at each source redshift.
 
@@ -143,7 +133,9 @@ class Tracer(ABC):
         # Lensing factor
         # A source at z_s=0 gives chi_z_s=0 (always masked out below), but an unguarded 1/chi_z_s still poisons the gradient with NaN/Inf.
         safe_chi_z_s = jnp.where(chi_z_s > 0, chi_z_s, 1.0)
-        chi_diff = (chi_z_s - chi_z) / safe_chi_z_s
+        # Lens-source transverse distance f_K(chi_s - chi) from the two transverse distances (sinh/sin subtraction rule)
+        curv = cosmology.Omega_k * (cosmology.H0 / (Const.c / 1e3)) ** 2
+        chi_diff = (chi_z_s * jnp.sqrt(1.0 + curv * chi_z ** 2) - chi_z * jnp.sqrt(1.0 + curv * chi_z_s ** 2)) / safe_chi_z_s
 
         # Mask: only include sources behind the lens
         mask = (z_s[:, None] > z[None, :])  # (N_s, N_z)
@@ -179,15 +171,9 @@ class Tracer(ABC):
         """
         pass
 
-    def _z_max(self, cosmology):
-        """Redshift above which every kernel term vanishes, or None if unbounded."""
-        return None
-
-    def _kernel_terms(self, cosmology, z):
-        """kernel(), checked to return only (W, n, a) triples."""
-        terms = self.kernel(cosmology, z)
-        if any(len(term) != 3 for term in terms):
-            raise ValueError(f"{type(self).__name__}.kernel() must return (W, der_bessel, der_angles) triples.")
-        return terms
+    @property
+    def z_range(self):
+        """``(z_min, z_max)`` outside which every kernel term vanishes; z_max is None if unbounded."""
+        return (0.0, None)
    
   

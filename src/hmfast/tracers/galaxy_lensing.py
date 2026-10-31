@@ -1,11 +1,9 @@
-import os
 import jax
 import jax.numpy as jnp
 
 from hmfast.tracers.base_tracer import Tracer
 from hmfast.halos.profiles import MatterProfile, NFWMatterProfile
 from hmfast.utils import Const
-from hmfast.download import _get_default_data_path
 
 
 jax.config.update("jax_enable_x64", True)
@@ -61,16 +59,10 @@ class GalaxyLensingTracer(Tracer):
     _required_profile_type = MatterProfile
 
 
-    def __init__(self, profile=None, *, dndz=None, ia_bias=None, has_shear=True):
+    def __init__(self, profile=None, *, dndz, ia_bias=None, has_shear=True):
 
         super().__init__(profile=profile or NFWMatterProfile())
-
-        if dndz is None:
-            # Call _load_dndz_data from BaseTracer
-            dndz_path = os.path.join(_get_default_data_path(), "auxiliary_files", "nz_source_normalized_bin4.txt")
-            self.dndz = self._load_dndz_data(dndz_path)
-        else:
-            self.dndz = dndz
+        self.dndz = dndz
 
         if not has_shear and ia_bias is None:
             raise ValueError("GalaxyLensingTracer with has_shear=False needs an intrinsic-alignment amplitude ia_bias.")
@@ -147,9 +139,11 @@ class GalaxyLensingTracer(Tracer):
     # --- End JAX PyTree Registration ---
 
 
-    def _z_max(self, cosmology):
-        """Redshift above which every kernel term vanishes: the top of ``dndz``."""
-        return jnp.max(self.dndz[0])
+    @property
+    def z_range(self):
+        """Support of ``dndz``, extended down to z=0 by the shear term (an IA-only tracer stays on ``dndz``)."""
+        z_s = self.dndz[0]
+        return (0.0 if self.has_shear else jnp.min(z_s), jnp.max(z_s))
 
     def _kernel_primary(self, cosmology, z):
         """
@@ -169,7 +163,7 @@ class GalaxyLensingTracer(Tracer):
         """
         z = jnp.atleast_1d(z)
 
-        c_km_s = Const._c_ / 1e3  # Speed of light in km/s
+        c_km_s = Const.c / 1e3  # Speed of light in km/s
         H0 = cosmology.H0  # Hubble constant in km/s/Mpc
         Omega_m = cosmology.omega_x(0.0, "matter")  # Matter density parameter
 
@@ -190,7 +184,7 @@ class GalaxyLensingTracer(Tracer):
         kernel, controlled by ``ia_bias``.
         """
         z = jnp.atleast_1d(z)
-        c_km_s = Const._c_ / 1e3
+        c_km_s = Const.c / 1e3
 
         z_a, A_vals = self.ia_bias
         A_IA_at_z = jnp.interp(z, z_a, A_vals)  # clamp-to-edge extrapolation (A_IA is not a density)
@@ -200,7 +194,7 @@ class GalaxyLensingTracer(Tracer):
         W_density = H_grid * jnp.interp(z, z_g, phi_prime_g, left=0.0, right=0.0)
 
         rho_m_h2_ref = cosmology.rho_x(0.0, "matter") / (cosmology.H0 / 100.0) ** 2  # Omega_m times the h = 1 critical density
-        W_IA = -A_IA_at_z * Const._C1_IA_ * rho_m_h2_ref / D_z * W_density
+        W_IA = -A_IA_at_z * Const.C1_IA * rho_m_h2_ref / D_z * W_density
 
         return jnp.squeeze(W_IA)
 

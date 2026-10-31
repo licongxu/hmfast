@@ -11,68 +11,17 @@ import mcfit
 import numpy as np
 
 from hmfast.halos.profiles.hod import GalaxyHODProfile
-from hmfast.utils import gauss_legendre_nodes_weights, log_interp1d_extrap
+from hmfast.utils import log_interp1d_extrap
 
 from . import projected_cl as _cl
 from .pk import Pk as _Pk
 
 
-def _extended_limber_grid_for_pair(hm, tracer_a, tracer_b, profile_a, profile_b, z, l, chi, k_damp=0.01):
-    """
-    Extended-Limber shifted-grid quantities (see :func:`hmfast.stats.projected_cl._extended_limber_kernel_grid`)
-    for one leg of a covariance -- ``tracer_a``/``tracer_b`` share a single multipole
-    ``l`` and wavenumber :math:`k=(\\ell+1/2)/\\chi`, exactly as the two tracers of a
-    single :math:`C_\\ell` would. Returns ``(None, None, None, None)`` if neither
-    tracer has a ``der_bessel!=0`` (e.g. RSD) kernel term, in which case the caller's
-    kernel product stays scalar-in-``l``, identical to the pre-extended-Limber behavior.
-
-    The reference :math:`P(k,z)` used for the correction is this leg's own halo-model
-    :math:`P_{1h}+P_{2h}` (built from ``profile_a``, ``profile_b``) -- the same
-    :math:`P(k,z)` that would enter this leg's own :math:`C_\\ell` if computed directly
-    via :func:`~hmfast.stats.cl`, so that
-    RSD's projection correction is treated consistently between the trispectrum/
-    covariance code here and the two-point ``C_\\ell`` code in ``stats/cl.py``.
-    """
-    cosmology = hm.cosmology
-    z_arr = jnp.atleast_1d(z)
-    needs_extended = (
-        any(der_bessel > 0 for _, der_bessel, _ in tracer_a._kernel_terms(cosmology, z_arr))
-        or any(der_bessel > 0 for _, der_bessel, _ in tracer_b._kernel_terms(cosmology, z_arr))
-    )
-    if not needs_extended:
-        return None, None, None, None
-
-    pk = _Pk(k_damp=k_damp)
-
-    def pk_fn(k, z):
-        return pk.pk_1h(hm, k, z, profile_a, profile_b) + pk.pk_2h(hm, k, z, profile_a, profile_b)
-
-    k_l = (l + 0.5) / chi
-    P_grid = jnp.atleast_1d(pk_fn(k_l, z_arr)).flatten()[None, :]  # (1, Nl) -- single-z slice
-    return _cl._extended_limber_kernel_grid(cosmology, l, z_arr, jnp.atleast_1d(chi), P_grid, pk_fn)
-
-
-def _kernel_pair_effective(cosmology, tracer_a, tracer_b, z, l, z_lp, lp1h, lp3h, sqell):
-    """
-    Product of two tracers' effective per-``(z,l)`` Limber kernels
-    (:func:`hmfast.stats.projected_cl._effective_kernel_limber`), evaluated at a single ``z``
-    (called once per redshift slice inside ``cov_cng``/``cov_ssc``'s
-    ``vmap`` over ``z``). Every ``der_bessel=0`` term of each tracer (density, tSZ, ...)
-    is summed directly; a ``der_bessel=-1`` term (lensing, magnification bias, IA) picks
-    up :math:`f^{(a)}_\\ell/(\\ell+1/2)^2`; a ``der_bessel=2`` (RSD) term is
-    projected through the extended-Limber correction (``z_lp``/``lp1h``/``lp3h``/
-    ``sqell``, or ``None`` if neither tracer needs it -- see
-    :func:`_extended_limber_grid_for_pair`).
-
-    Returns shape ``(Nl,)``: a plain per-``z`` scalar broadcastable against ``Nl`` when
-    every term of both tracers is ``(W, 0, 0)``, ``l``-dependent otherwise.
-    """
-    z_arr = jnp.atleast_1d(z)
-    ka = _cl._effective_kernel_limber(tracer_a, cosmology, z_arr, l, z_lp, lp1h, lp3h, sqell)
-    kb = _cl._effective_kernel_limber(tracer_b, cosmology, z_arr, l, z_lp, lp1h, lp3h, sqell)
-    ka = ka[:, None] if ka.ndim == 1 else ka  # (1,1) or (1,Nl)
-    kb = kb[:, None] if kb.ndim == 1 else kb
-    return jnp.squeeze(ka * kb, axis=0)  # (Nl,) or (1,)
+def _pair_pk(halo_model, tracer_a, tracer_b):
+    """Halo-model power spectrum of a tracer pair, the reference of any redshift-space distortion term."""
+    pk = _Pk(k_damp=0.01)
+    return lambda k, z: (pk.pk_1h(halo_model, k, z, tracer_a.profile, tracer_b.profile)
+                         + pk.pk_2h(halo_model, k, z, tracer_a.profile, tracer_b.profile))
 
 
 def _dPk_response(halo_model, k, z, profile1, profile2=None, include_1h=True, include_2h=True,
@@ -148,7 +97,7 @@ def _dPk_response(halo_model, k, z, profile1, profile2=None, include_1h=True, in
     pk_lin = jnp.reshape(hm.cosmology.pk(k_arr, z_arr, linear=True), (nk, nz))
 
     # dlnP/dlnk needs a properly resolved k grid -- a finite difference on a sparse query k_arr is inaccurate.
-    k_fine = hm.cosmology._pk_grid()
+    k_fine = np.geomspace(*hm.cosmology.k_range, hm.cosmology.n_k)
     pk_fine = jnp.reshape(hm.cosmology.pk(k_fine, z_arr, linear=True), (len(k_fine), nz))
     dlnp_fine = jnp.gradient(jnp.log(pk_fine), jnp.log(k_fine), axis=0)
     dlnp_dlnk = jax.vmap(
@@ -281,12 +230,12 @@ def cov_cng(tk, halo_model, l1, l2, tracer1, tracer2=None, tracer3=None, tracer4
     tracer2 = tracer2 if tracer2 is not None else tracer1
     tracer3 = tracer3 if tracer3 is not None else tracer1
     tracer4 = tracer4 if tracer4 is not None else tracer3
-    z_range = _cl._resolve_z_range(hm.cosmology, tracer1, tracer2, tracer3, tracer4)
-    logz, z_gl_w = gauss_legendre_nodes_weights(jnp.log(z_range[0]), jnp.log(z_range[1]), n_z)
-    z = jnp.exp(logz)
-    z_gl_w = z_gl_w * z  # Gauss-Legendre in ln(z); z spans orders of magnitude
+    z, z_gl_w, (kernels12, kernels34) = _cl._limber_kernels(
+        hm.cosmology, ((tracer1, tracer2), (tracer3, tracer4)), (l1, l2),
+        (_pair_pk(hm, tracer1, tracer2), _pair_pk(hm, tracer3, tracer4)), n_z,
+    )
 
-    def get_cov_slice(z_i):
+    def get_cov_slice(z_i, kernel12, kernel34):
         chi = hm.cosmology.angular_diameter_distance(z_i) * (1.0 + z_i)
         k1 = (l1 + 0.5) / chi
         k2 = (l2 + 0.5) / chi
@@ -297,26 +246,12 @@ def cov_cng(tk, halo_model, l1, l2, tracer1, tracer2=None, tracer3=None, tracer4
             (l1.size, l2.size),
         )
 
-        z_lp1, lp1h1, lp3h1, sqell1 = _extended_limber_grid_for_pair(
-            hm, tracer1, tracer2, tracer1.profile, tracer2.profile, z_i, l1, chi
-        )
-        kernel12 = _kernel_pair_effective(
-            hm.cosmology, tracer1, tracer2, z_i, l1, z_lp1, lp1h1, lp3h1, sqell1
-        )  # (N_l1,)
-
-        z_lp2, lp1h2, lp3h2, sqell2 = _extended_limber_grid_for_pair(
-            hm, tracer3, tracer4, tracer3.profile, tracer4.profile, z_i, l2, chi
-        )
-        kernel34 = _kernel_pair_effective(
-            hm.cosmology, tracer3, tracer4, z_i, l2, z_lp2, lp1h2, lp3h2, sqell2
-        )  # (N_l2,)
-
         kernels = kernel12[:, None] * kernel34[None, :]  # (N_l1, N_l2)
         weight = jnp.squeeze(hm.cosmology.comoving_volume_element(z_i) / chi ** 8)
 
         return T * (kernels * weight)
 
-    integrand = jax.vmap(get_cov_slice)(z)  # (Nz, N_l1, N_l2)
+    integrand = jax.vmap(get_cov_slice)(z, kernels12, kernels34)  # (Nz, N_l1, N_l2)
     cov = jnp.sum(integrand * z_gl_w[:, None, None], axis=0) / (4.0 * jnp.pi * f_sky)
 
     return jnp.squeeze(cov)
@@ -332,7 +267,7 @@ _DISC_VAR_LOW_K_DECADES = 2
 
 def _disc_var_transform(cosmology):
     """The disc-variance transform and its input k grid, the cosmology's extended below k_min at the same log spacing."""
-    k_grid = cosmology._pk_grid()
+    k_grid = np.geomspace(*cosmology.k_range, cosmology.n_k)
     dlnk = np.log(k_grid[1] / k_grid[0])
     n_low = int(np.ceil(_DISC_VAR_LOW_K_DECADES * np.log(10.0) / dlnk))
     k_ext = np.concatenate([k_grid[0] * np.exp(dlnk * np.arange(-n_low, 0)), k_grid])
@@ -374,7 +309,7 @@ def sigma2_b_disc(cosmology, z, *, f_sky=1.0):
         get squeezed before return.
     """
     z_arr = jnp.atleast_1d(z)
-    k_grid = cosmology._pk_grid()
+    k_grid = np.geomspace(*cosmology.k_range, cosmology.n_k)
     pk_grid = jnp.reshape(cosmology.pk(k_grid, z_arr, linear=True), (len(k_grid), len(z_arr)))
     transform, k_ext = _disc_var_transform(cosmology)
     # Power-law continuation of P_lin below k_min, whatever the cosmology returns there.
@@ -470,10 +405,10 @@ def cov_ssc(pk, halo_model, l1, l2, tracer1, tracer2=None, tracer3=None, tracer4
     tracer2 = tracer2 if tracer2 is not None else tracer1
     tracer3 = tracer3 if tracer3 is not None else tracer1
     tracer4 = tracer4 if tracer4 is not None else tracer3
-    z_range = _cl._resolve_z_range(hm.cosmology, tracer1, tracer2, tracer3, tracer4)
-    logz, z_gl_w = gauss_legendre_nodes_weights(jnp.log(z_range[0]), jnp.log(z_range[1]), n_z)
-    z = jnp.exp(logz)
-    z_gl_w = z_gl_w * z  # Gauss-Legendre in ln(z); z spans orders of magnitude
+    z, z_gl_w, (kernels12, kernels34) = _cl._limber_kernels(
+        hm.cosmology, ((tracer1, tracer2), (tracer3, tracer4)), (l1, l2),
+        (_pair_pk(hm, tracer1, tracer2), _pair_pk(hm, tracer3, tracer4)), n_z,
+    )
     if counterterms is None:
         counterterms = (None,) * 4
     elif len(counterterms) != 4:
@@ -484,7 +419,7 @@ def cov_ssc(pk, halo_model, l1, l2, tracer1, tracer2=None, tracer3=None, tracer4
     else:
         sigma2_b_fn = lambda z_i: jnp.interp(z_i, jnp.asarray(sigma2_b[0]), jnp.asarray(sigma2_b[1]))
 
-    def get_cov_slice(z_i):
+    def get_cov_slice(z_i, kernel12, kernel34):
         chi = hm.cosmology.angular_diameter_distance(z_i) * (1.0 + z_i)
         k1 = (l1 + 0.5) / chi
         k2 = (l2 + 0.5) / chi
@@ -499,20 +434,6 @@ def cov_ssc(pk, halo_model, l1, l2, tracer1, tracer2=None, tracer3=None, tracer4
         ), (l2.size,))  # (N_l2,)
         response_outer = response1[:, None] * response2[None, :]  # (N_l1, N_l2)
 
-        z_lp1, lp1h1, lp3h1, sqell1 = _extended_limber_grid_for_pair(
-            hm, tracer1, tracer2, tracer1.profile, tracer2.profile, z_i, l1, chi
-        )
-        kernel12 = _kernel_pair_effective(
-            hm.cosmology, tracer1, tracer2, z_i, l1, z_lp1, lp1h1, lp3h1, sqell1
-        )  # (N_l1,)
-
-        z_lp2, lp1h2, lp3h2, sqell2 = _extended_limber_grid_for_pair(
-            hm, tracer3, tracer4, tracer3.profile, tracer4.profile, z_i, l2, chi
-        )
-        kernel34 = _kernel_pair_effective(
-            hm.cosmology, tracer3, tracer4, z_i, l2, z_lp2, lp1h2, lp3h2, sqell2
-        )  # (N_l2,)
-
         kernels = kernel12[:, None] * kernel34[None, :]  # (N_l1, N_l2)
         sigma2_b_i = jnp.squeeze(sigma2_b_fn(z_i))
         weight = jnp.squeeze(hm.cosmology.comoving_volume_element(z_i) / chi ** 6)
@@ -520,7 +441,7 @@ def cov_ssc(pk, halo_model, l1, l2, tracer1, tracer2=None, tracer3=None, tracer4
         return response_outer * (kernels * weight * sigma2_b_i)
 
     # No 1/(4*pi*f_sky) prefactor: the footprint enters only through sigma2_b.
-    integrand = jax.vmap(get_cov_slice)(z)  # (Nz, N_l1, N_l2)
+    integrand = jax.vmap(get_cov_slice)(z, kernels12, kernels34)  # (Nz, N_l1, N_l2)
     cov = jnp.sum(integrand * z_gl_w[:, None, None], axis=0)
 
     return jnp.squeeze(cov)

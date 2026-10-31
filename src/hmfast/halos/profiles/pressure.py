@@ -6,9 +6,8 @@ import jax.numpy as jnp
 import mcfit
 import numpy as np
 
-from hmfast.download import _get_default_data_path
 from hmfast.halos.massdef import MassDefinition, mass_translator
-from hmfast.halos.profiles import HaloProfile, HankelTransform
+from hmfast.halos.profiles import HaloProfile
 from hmfast.utils import Const
 
 
@@ -141,20 +140,7 @@ class GNFWPressureProfile(PressureProfile):
         self.P0_hexp = P0_hexp
         self.x_out = x_out
 
-        x_grid = jnp.logspace(jnp.log10(x_range[0]), jnp.log10(x_range[1]), int(n_x))
-        self._hankel = HankelTransform(x_grid, nu=0.5)
-
-    @property
-    def x_grid(self):
-        return self._hankel.x
-
-    @property
-    def x_range(self):
-        return (self._hankel.x[0], self._hankel.x[-1])
-
-    @property
-    def n_x(self):
-        return self._hankel.x.shape[0]
+        self.x_range, self.n_x = (float(x_range[0]), float(x_range[1])), int(n_x)
 
     def _tree_flatten(self):
         # The dynamic parameters JAX should track
@@ -169,14 +155,13 @@ class GNFWPressureProfile(PressureProfile):
             self.P0_hexp,
             self.x_out,
         )
-        # Only the Hankel object: pytree aux must be hashable, which an array is not.
-        aux_data = (self._hankel,)
+        aux_data = (self.x_range, self.n_x)
         return (leaves, aux_data)
 
     @classmethod
     def _tree_unflatten(cls, aux_data, leaves):
-        hankel, = aux_data
-        # Create object without calling __init__ to avoid rebuilding Hankel
+        x_range, n_x = aux_data
+        # Create object without calling __init__
         obj = cls.__new__(cls)
         (
             obj.P0,
@@ -189,7 +174,7 @@ class GNFWPressureProfile(PressureProfile):
             obj.P0_hexp,
             obj.x_out,
         ) = leaves
-        obj._hankel = hankel
+        obj.x_range, obj.n_x = x_range, n_x
         return obj
 
     def update(
@@ -248,8 +233,7 @@ class GNFWPressureProfile(PressureProfile):
         if x_range is not None or n_x is not None:
             new_x_range = x_range if x_range is not None else self.x_range
             new_n_x = n_x if n_x is not None else self.n_x
-            x_grid = jnp.logspace(jnp.log10(new_x_range[0]), jnp.log10(new_x_range[1]), int(new_n_x))
-            aux_data = (HankelTransform(x_grid, nu=0.5),)
+            aux_data = ((float(new_x_range[0]), float(new_x_range[1])), int(new_n_x))
 
         return self._tree_unflatten(aux_data, new_leaves)
 
@@ -449,20 +433,7 @@ class B12PressureProfile(PressureProfile):
         )
         self.x_out = x_out
 
-        x_grid = jnp.logspace(jnp.log10(x_range[0]), jnp.log10(x_range[1]), int(n_x))
-        self._hankel = HankelTransform(x_grid, nu=0.5)
-
-    @property
-    def x_grid(self):
-        return self._hankel.x
-
-    @property
-    def x_range(self):
-        return (self._hankel.x[0], self._hankel.x[-1])
-
-    @property
-    def n_x(self):
-        return self._hankel.x.shape[0]
+        self.x_range, self.n_x = (float(x_range[0]), float(x_range[1])), int(n_x)
 
     def _tree_flatten(self):
         leaves = (
@@ -477,13 +448,12 @@ class B12PressureProfile(PressureProfile):
             self.alpha_z_beta,
             self.x_out,
         )
-        # Only the Hankel object: pytree aux must be hashable, which an array is not.
-        aux_data = (self._hankel,)
+        aux_data = (self.x_range, self.n_x)
         return (leaves, aux_data)
 
     @classmethod
     def _tree_unflatten(cls, aux_data, leaves):
-        hankel, = aux_data
+        x_range, n_x = aux_data
         obj = cls.__new__(cls)
 
         (
@@ -499,7 +469,7 @@ class B12PressureProfile(PressureProfile):
             obj.x_out,
         ) = leaves
 
-        obj._hankel = hankel
+        obj.x_range, obj.n_x = x_range, n_x
         return obj
 
     def update(
@@ -553,8 +523,7 @@ class B12PressureProfile(PressureProfile):
         if x_range is not None or n_x is not None:
             new_x_range = x_range if x_range is not None else self.x_range
             new_n_x = n_x if n_x is not None else self.n_x
-            x_grid = jnp.logspace(jnp.log10(new_x_range[0]), jnp.log10(new_x_range[1]), int(new_n_x))
-            aux_data = (HankelTransform(x_grid, nu=0.5),)
+            aux_data = ((float(new_x_range[0]), float(new_x_range[1])), int(new_n_x))
 
         return self._tree_unflatten(aux_data, new_leaves)
 

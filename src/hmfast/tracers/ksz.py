@@ -18,7 +18,7 @@ class kSZTracer(Tracer):
 
         W_{\\mathrm{kSZ}}(\\chi) = \\frac{\\sigma_T}{m_p}\\, \\frac{v_{\\mathrm{rms}}(z)}{1+z}
 
-    for :math:`z \\leq z_{\\max}`, and zero otherwise, where :math:`\\sigma_T`
+    for :math:`z_{\\min} \\leq z \\leq z_{\\max}`, and zero otherwise, where :math:`\\sigma_T`
     is the Thomson cross-section, :math:`m_p` is the proton mass, and
     :math:`v_{\\mathrm{rms}}(z) = \\sqrt{\\langle v^2\\rangle(z)}` is the velocity
     dispersion computed from the given cosmology. See :meth:`kernel` for how
@@ -28,34 +28,36 @@ class kSZTracer(Tracer):
     ----------
     profile : DensityProfile
         Electron density profile used to model the kinetic Sunyaev-Zeldovich signal.
-    z_max : float
-        Maximum redshift up to which the kernel has support.
+    z_range : tuple of float
+        ``(z_min, z_max)`` over which the kernel has support.
     """
     _required_profile_type = DensityProfile
 
-    def __init__(self, profile=None, *, z_max=5.0):
+    def __init__(self, profile=None, *, z_range=(0.0, 5.0)):
         super().__init__(profile=profile or B16DensityProfile())
-        self.z_max = z_max
+        self._z_range = (jnp.asarray(z_range[0]), jnp.asarray(z_range[1]))
 
+    @property
+    def z_range(self):
+        return self._z_range
 
     # ---------------- Start JAX PyTree Registration ---------------- #
 
     def _tree_flatten(self):
-        # The profile is the leaf. JAX will drill down into the profile's leaves.
-        leaves = (self.profile,)
-        aux_data = (self.z_max,)
+        # z_range is a leaf, so redshift slices can be traced and vmapped without recompiling.
+        leaves = (self.profile, self._z_range)
+        aux_data = None
         return (leaves, aux_data)
 
     @classmethod
     def _tree_unflatten(cls, aux_data, leaves):
-        profile, = leaves
-        z_max, = aux_data
+        profile, z_range = leaves
         obj = cls.__new__(cls)
         obj.profile = profile
-        obj.z_max = z_max
+        obj._z_range = z_range
         return obj
 
-    def update(self, *, profile=None, z_max=None):
+    def update(self, *, profile=None, z_range=None):
         """
         Return a new kSZTracer instance with updated attributes using PyTree logic.
 
@@ -63,25 +65,21 @@ class kSZTracer(Tracer):
         ----------
         profile : DensityProfile, optional
             New density profile to use for the tracer. If None, the profile is unchanged.
-        z_max : float, optional
-            New maximum redshift for the kernel. If None, z_max is unchanged.
+        z_range : tuple of float, optional
+            New ``(z_min, z_max)`` support of the kernel. If None, z_range is unchanged.
 
         Returns
         -------
         kSZTracer
             New tracer instance with updated attributes.
         """
-        flat, aux = self._tree_flatten()
-        new_profile = profile if profile is not None else flat[0]
-        new_z_max = z_max if z_max is not None else aux[0]
-        return self._tree_unflatten((new_z_max,), (new_profile,))
+        (old_profile, old_z_range), aux = self._tree_flatten()
+        new_profile = profile if profile is not None else old_profile
+        new_z_range = (jnp.asarray(z_range[0]), jnp.asarray(z_range[1])) if z_range is not None else old_z_range
+        return self._tree_unflatten(aux, (new_profile, new_z_range))
 
 
     # ---------------- End JAX PyTree Registration ---------------- #
-
-    def _z_max(self, cosmology):
-        """Redshift above which every kernel term vanishes."""
-        return self.z_max
 
     def _kernel_primary(self, cosmology, z):
         """
@@ -95,7 +93,7 @@ class kSZTracer(Tracer):
             W_{\\mathrm{kSZ}}(\\chi) = \\frac{\\sigma_T}{m_p}
             \\frac{v_{\\mathrm{rms}}(z)}{1+z}
 
-        for :math:`z \\leq z_{\\max}`, and zero otherwise.
+        for :math:`z_{\\min} \\leq z \\leq z_{\\max}`, and zero otherwise.
 
         where :math:`\\sigma_T` is the Thomson cross-section, :math:`m_p` is
         the proton mass, and :math:`z` is the redshift. The velocity dispersion
@@ -115,12 +113,13 @@ class kSZTracer(Tracer):
         """
         # sigmaT / (mu_e * m_prot) in physical Mpc^2 / Msun; mu_e converts gas density to electron density.
         mu_e = 1.14
-        sigma_T_over_m_p = (Const._sigma_T_ / Const._m_p_) / Const._Mpc_over_m_**2 * Const._M_sun_ / mu_e
+        sigma_T_over_m_p = (Const.sigma_T / Const.m_p) / Const.Mpc_over_m**2 * Const.M_sun / mu_e
         z = jnp.atleast_1d(z)
         velocity_dispersion = jnp.sqrt(cosmology.velocity_dispersion(z))
         W = sigma_T_over_m_p * velocity_dispersion / (1.0 + z)
-        # Tolerance guards against callers' z grids (e.g. jnp.geomspace) not landing bit-exactly on z_max.
-        return jnp.squeeze(jnp.where(z <= self.z_max + 1e-8, W, 0.0))
+        # Tolerance guards against callers' z grids (e.g. jnp.geomspace) not landing bit-exactly on the ends.
+        z_min, z_max = self._z_range
+        return jnp.squeeze(jnp.where((z >= z_min - 1e-8) & (z <= z_max + 1e-8), W, 0.0))
 
     def kernel(self, cosmology, z):
         """

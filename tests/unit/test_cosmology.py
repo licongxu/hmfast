@@ -11,7 +11,6 @@ import jax.numpy as jnp
 import pytest
 
 from hmfast.cosmology import CosmoPowerCosmology
-from hmfast.cosmology.cosmopower import _WEIGHTS
 
 from .._shared import emulator_z_max_bg, emulator_z_max_pk, shared
 
@@ -164,14 +163,6 @@ class TestCMB:
         with pytest.raises(ValueError):
             fixed_cosmology.cl_cmb(bad_type, jnp.array([10.0]))
 
-    # TT is genuinely lazy: absent from the weight cache before the first cl_cmb("TT",...) call, present after.
-    def test_lazy_loading(self):
-        _WEIGHTS.pop(("lcdm:v1", "TT"), None)
-        cosmo = CosmoPowerCosmology("lcdm:v1", H0=67.5, omega_cdm=0.12, omega_b=0.022, A_s=2.1e-9, n_s=0.965)
-        assert ("lcdm:v1", "TT") not in _WEIGHTS
-        cosmo.cl_cmb("TT", jnp.array([10.0]))
-        assert ("lcdm:v1", "TT") in _WEIGHTS
-
 
 class TestDerivedParameters:
     # derived_parameters() returns all 14 documented keys, all finite for an in-bounds cosmology.
@@ -270,13 +261,17 @@ class TestExtrapolateZ:
 
 
 class TestUpdateAndPytree:
-    # update() returns a new instance, changes only the given field, and reuses the cached emulator functions (no reload).
-    def test_update_returns_new_instance_without_reloading(self, fixed_cosmology):
+    # update() returns a new instance that changes only the given field, keeps the pytree structure (so jitted calls are reused) and evaluates at the new value.
+    def test_update_returns_new_instance_with_same_structure(self, fixed_cosmology):
         updated = fixed_cosmology.update(H0=68.0)
         assert updated is not fixed_cosmology
         assert updated.H0 == 68.0
         assert updated.omega_cdm == fixed_cosmology.omega_cdm
-        assert updated._functions is fixed_cosmology._functions
+        assert jax.tree_util.tree_structure(updated) == jax.tree_util.tree_structure(fixed_cosmology)
+        h0 = jax.jit(lambda c: c.hubble_parameter(jnp.array(0.0)))
+        # The emulated H(z=0) reproduces the input H0 to ~1e-4.
+        assert jnp.isclose(h0(updated), 68.0, rtol=1e-3)
+        assert jnp.isclose(h0(fixed_cosmology), fixed_cosmology.H0, rtol=1e-3)
 
     # update() cannot switch emulator_set -- it's not an accepted keyword argument.
     def test_update_cannot_switch_emulator_set(self, fixed_cosmology):

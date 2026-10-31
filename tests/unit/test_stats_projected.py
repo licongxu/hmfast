@@ -13,10 +13,9 @@ import numpy as np
 import pytest
 
 from hmfast.stats import Pk, cl, cl_linbias, corr_angular
-from hmfast.stats.projected_cl import _f_ell
-from hmfast.tracers import GalaxyTracer
+from hmfast.tracers import GalaxyTracer, Tracer
 
-from .._shared import GAL_TRACER_BIASED, GLENS_TRACER, HOD, L_GRID, N_Z, Z_BIAS, stats_halo_model
+from .._shared import DNDZ, GAL_TRACER_BIASED, GLENS_TRACER, HOD, L_GRID, N_Z, Z_BIAS, stats_halo_model
 
 HM = stats_halo_model()
 COSMO = HM.cosmology
@@ -30,7 +29,7 @@ L_SHAPES = [("scalar", ()), ("array1", ()), ("arrayN", (4,))]
 
 def _galaxy_with_bias(scale):
     """GAL_TRACER_BIASED with its bias multiplied by `scale` (same pytree structure, so no recompile)."""
-    return GalaxyTracer(profile=HOD, bias=(Z_BIAS, scale * (1.0 + 0.5 * Z_BIAS)))
+    return GalaxyTracer(profile=HOD, dndz=DNDZ, bias=(Z_BIAS, scale * (1.0 + 0.5 * Z_BIAS)))
 
 
 class TestCl:
@@ -135,8 +134,25 @@ class TestCorrAngular:
             corr_angular(COSMO, np.linspace(1.0, 1e4, 512), _gaussian_cl(), THETA_EVAL)
 
 
+class BadAnglesTracer(Tracer):
+    """Tracer with a single density-like term carrying an unsupported der_angles=3."""
+
+    def kernel(self, cosmology, z):
+        return [(jnp.ones_like(jnp.atleast_1d(z)), 0, 3)]
+
+
+jax.tree_util.register_pytree_node(BadAnglesTracer, lambda t: ((), None), lambda aux, leaves: BadAnglesTracer())
+
+
 class TestAngularPrefactor:
-    # The angular prefactor exists only for der_angles 0, 1 and 2.
+    # The spin-2 prefactor sqrt((l+2)!/(l-2)!) vanishes at l <= 1, so a shear spectrum is exactly zero there.
+    def test_shear_vanishes_below_l2(self):
+        l = jnp.array([0.0, 1.0, 2.0, 10.0, 100.0, 1000.0])
+        out = np.asarray(cl_linbias(COSMO, l, GLENS_TRACER, None, n_z=N_Z))
+        assert np.all(out[:2] == 0.0)
+        assert np.all(out[2:] > 0.0)
+
+    # The angular prefactor exists only for der_angles 0, 1 and 2; a kernel term with any other value is rejected.
     def test_rejects_unknown_der_angles(self):
         with pytest.raises(ValueError):
-            _f_ell(jnp.array([10.0]), 3)
+            cl_linbias(COSMO, L_GRID, BadAnglesTracer(), None, n_z=N_Z)

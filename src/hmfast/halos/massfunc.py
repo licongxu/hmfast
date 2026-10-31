@@ -58,14 +58,9 @@ class T08HaloMassFunction(HaloMassFunction):
         """
         
         # Overdensity threshold converted to log scale
-        delta_numeric = mass_def._delta_numeric(cosmology, z)
-        delta_mean = mass_def._convert_reference(
-            cosmology,
-            z,
-            delta_numeric,
-            from_ref=mass_def.reference,
-            to_ref='mean',
-        )
+        # Δ relative to mean matter density: the enclosed density within r_Δ over ρ̄_m(z)
+        r_1 = mass_def.r_delta(cosmology, 1.0, z)
+        delta_mean = jnp.reshape(3.0 / (4.0 * jnp.pi * r_1**3 * cosmology.critical_density(z) * cosmology.omega_m(z)), jnp.shape(z))
         delta_mean = jnp.log10(delta_mean)
         
         # Define parameters as JAX arrays
@@ -182,14 +177,9 @@ class T10HaloMassFunction(HaloMassFunction):
             Values of the dimensionless fitting function with shape matching
             ``sigma``.
         """
-        delta_numeric = mass_def._delta_numeric(cosmology, z)
-        delta_mean = mass_def._convert_reference(
-            cosmology,
-            z,
-            delta_numeric,
-            from_ref=mass_def.reference,
-            to_ref="mean",
-        )
+        # Δ relative to mean matter density: the enclosed density within r_Δ over ρ̄_m(z)
+        r_1 = mass_def.r_delta(cosmology, 1.0, z)
+        delta_mean = jnp.reshape(3.0 / (4.0 * jnp.pi * r_1**3 * cosmology.critical_density(z) * cosmology.omega_m(z)), jnp.shape(z))
         ldelta_mean = jnp.log10(delta_mean)
 
         delta_mean_tab = jnp.log10(jnp.array([200., 300., 400., 600., 800., 1200., 1600., 2400., 3200.]))

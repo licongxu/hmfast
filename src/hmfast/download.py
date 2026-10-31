@@ -137,11 +137,15 @@ AUX_FILES = [
 
 
 
-def _get_default_data_path():
+def data_path():
     """
-    Returns the base data path for emulator and auxiliary files.
-    Uses the HMFAST_DATA_PATH environment variable if set,
-    otherwise defaults to ~/.cache/hmfast.
+    Directory where hmfast stores and reads its emulator and auxiliary data files.
+
+    Returns
+    -------
+    str
+        The ``HMFAST_DATA_PATH`` environment variable if set, otherwise
+        ``~/.cache/hmfast``.
     """
     if "HMFAST_DATA_PATH" in os.environ:
         return os.environ["HMFAST_DATA_PATH"]
@@ -202,7 +206,7 @@ def download_emulators(emulator_set="all", skip_existing=True):
         ``~/.cache/hmfast`` or the path specified by the ``HMFAST_DATA_PATH``
         environment variable).
     """
-    target_dir = _get_default_data_path()
+    target_dir = data_path()
     os.makedirs(target_dir, exist_ok=True)
 
     models_to_fetch = _resolve_emulator_sets(emulator_set)

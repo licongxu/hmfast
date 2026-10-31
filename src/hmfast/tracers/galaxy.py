@@ -1,10 +1,8 @@
-import os
 import jax
 import jax.numpy as jnp
 
 from hmfast.tracers.base_tracer import Tracer
 from hmfast.halos.profiles import GalaxyHODProfile, Z07GalaxyHODProfile
-from hmfast.download import _get_default_data_path
 from hmfast.utils import Const
 
 # Ensure high precision for cosmological integrations
@@ -70,14 +68,9 @@ class GalaxyTracer(Tracer):
 
     _required_profile_type = GalaxyHODProfile
 
-    def __init__(self, profile=None, *, dndz=None, has_density=True, bias=None, mag_bias=None, has_rsd=False):
+    def __init__(self, profile=None, *, dndz, has_density=True, bias=None, mag_bias=None, has_rsd=False):
         self._check_has_density(has_density)
         super().__init__(profile=profile or Z07GalaxyHODProfile())
-
-        if dndz is None:
-            dndz_path = os.path.join(_get_default_data_path(), "auxiliary_files", "normalised_dndz_cosmos_0.txt")
-            dndz = self._load_dndz_data(dndz_path)
-
         self.dndz = dndz
 
         if mag_bias is None:
@@ -187,12 +180,15 @@ class GalaxyTracer(Tracer):
         z_g, phi_prime_g = self.dndz
 
         phi_prime_g_at_z = jnp.interp(z, z_g, phi_prime_g, left=0.0, right=0.0)
-        H_grid = cosmology.hubble_parameter(z) / (Const._c_ / 1e3)
+        H_grid = cosmology.hubble_parameter(z) / (Const.c / 1e3)
         return H_grid * phi_prime_g_at_z
 
-    def _z_max(self, cosmology):
-        """Redshift above which every kernel term vanishes: the top of ``dndz``."""
-        return jnp.max(self.dndz[0])
+    @property
+    def z_range(self):
+        """Support of ``dndz``, extended down to z=0 when the magnification term (s != 2/5) is non-zero."""
+        z_g = self.dndz[0]
+        no_magnification = jnp.all(self.mag_bias[1] == 0.4)
+        return (jnp.where(no_magnification, jnp.min(z_g), 0.0), jnp.max(z_g))
 
     def _kernel_primary(self, cosmology, z):
         """
@@ -224,7 +220,7 @@ class GalaxyTracer(Tracer):
         weight = 1.0 - 2.5 * s_at_source  # magnification weighting from the mag-bias log-slope s(z)
 
         chi_z = cosmology.angular_diameter_distance(z) * (1 + z)
-        lensing_pref = 1.5 * cosmology.omega_x(0.0, "matter") * (cosmology.H0 / (Const._c_ / 1e3)) ** 2 * chi_z * (1 + z)
+        lensing_pref = 1.5 * cosmology.omega_x(0.0, "matter") * (cosmology.H0 / (Const.c / 1e3)) ** 2 * chi_z * (1 + z)
         W_mag = -2.0 * lensing_pref \
             * self._lensing_efficiency_integral(cosmology, z, self.dndz, weight=weight)
 

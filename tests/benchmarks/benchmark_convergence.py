@@ -9,10 +9,13 @@ lower them when accuracy improves. Errors are the maximum relative error over el
 Marked `accuracy` and skipped unless selected: `pytest -m accuracy tests/benchmarks/benchmark_convergence.py`.
 """
 
+import os
+
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from hmfast.download import data_path
 from hmfast.halos.profiles import GNFWPressureProfile, NFWMatterProfile, Z07GalaxyHODProfile
 from hmfast.stats import Pk, cl
 from hmfast.tracers import GalaxyTracer, tSZTracer
@@ -28,6 +31,12 @@ PRODUCTION = dict(m=50, z=50, x=100)
 REFERENCE = dict(m=200, z=200, x=800)
 REFERENCE_OVERRIDES = {"Cl_gg": dict(z=800)}  # Cl_gg converges more slowly in z, so its reference is finer there
 PK = Pk()
+
+
+def load_dndz(filename):
+    """A tabulated (z, dN/dz) from hmfast's auxiliary data files."""
+    table = np.loadtxt(os.path.join(data_path(), "auxiliary_files", filename))
+    return table[:, 0], table[:, 1]
 
 
 def _gnfw(n_x):
@@ -51,10 +60,10 @@ def _halo_model(cosmology, n_m):
 def _evaluate(cosmology, name, m, z, x):
     hm = _halo_model(cosmology, m)
     if name == "Cl_yy":
-        t = tSZTracer(profile=_gnfw(x), z_max=Z_RANGE[1])
+        t = tSZTracer(profile=_gnfw(x), z_range=(0.0, Z_RANGE[1]))
         return np.asarray(cl(PK, hm, ELL, t, t, n_z=z))
     if name == "Cl_gg":
-        t = GalaxyTracer(profile=HOD)
+        t = GalaxyTracer(profile=HOD, dndz=load_dndz("normalised_dndz_cosmos_0.txt"))
         return np.asarray(cl(PK, hm, ELL, t, t, n_z=z))
     p = NFWMatterProfile() if name == "Pk_mm" else _gnfw(x)
     return np.asarray(PK.pk_1h(hm, K, Z_PK, p) + PK.pk_2h(hm, K, Z_PK, p))

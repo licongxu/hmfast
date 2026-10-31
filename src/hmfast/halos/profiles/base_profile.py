@@ -36,11 +36,23 @@ class HankelTransform:
 
     def transform(self, f_theta):
         """
-        Perform the Hankel transform on a profile sampled on self._x_grid
+        Perform the Hankel transform on a profile sampled on self.x
         """
         f_theta = jnp.pad(f_theta, [(0, 0)] * (f_theta.ndim - 1) + [(0, self._n_pad)])
         k, y_k = self._hankel_jit(f_theta)
         return k, y_k
+
+
+_HANKEL_PLANS = {}  # x nodes (bytes) -> HankelTransform, so each grid is planned once per process
+
+
+def _hankel_plan(x):
+    key = np.asarray(x, dtype=np.float64).tobytes()
+    if key not in _HANKEL_PLANS:
+        # Built eagerly even when first reached inside jit: mcfit needs concrete values to plan on.
+        with jax.ensure_compile_time_eval():
+            _HANKEL_PLANS[key] = HankelTransform(x, nu=0.5)
+    return _HANKEL_PLANS[key]
 
 
 class HaloProfile(ABC):
@@ -58,9 +70,8 @@ class HaloProfile(ABC):
     def fourier(self, halo_model, k, m, z):
         pass
 
-    def _truncation_weights(self):
+    def _truncation_weights(self, x):
         # Log-trapezoid end weights at the truncation radius, clipped to the grid edge; O(h^2) instead of O(h).
-        x = self.x_grid
         s = jnp.log(jnp.minimum(getattr(self, "x_out", jnp.inf), x[-1]) / x[0]) / jnp.log(x[1] / x[0])
         s = jnp.where(jnp.abs(s - jnp.round(s)) < 1e-6, jnp.round(s), s)
         j = jnp.floor(s)
@@ -91,7 +102,6 @@ class HaloProfile(ABC):
             :math:`(N_k, N_m, N_z)`, where singleton dimensions get squeezed
             before return.
         """
-        x = jnp.atleast_1d(x)
         r = jnp.asarray(r)
         m = jnp.atleast_1d(m)
         z = jnp.atleast_1d(z)
@@ -109,7 +119,7 @@ class HaloProfile(ABC):
             out_axes=0,
         )(r, m, z, w)
 
-        k_native, u_k_native = self._hankel.transform(hankel_integrand)
+        k_native, u_k_native = _hankel_plan(x).transform(hankel_integrand)
         u_k_native = jnp.swapaxes(u_k_native, 2, 0)
         u_k_native = jnp.swapaxes(u_k_native, 2, 1)
 
@@ -138,12 +148,14 @@ class HaloProfile(ABC):
             Fourier-space profile with shape :math:`(N_k, N_m, N_z)`, where singleton
             dimensions get squeezed before return.
         """
+        # Log-spaced over x_range, as a NumPy array so the Hankel plan can be built from it even under a trace.
+        x = np.logspace(np.log10(self.x_range[0]), np.log10(self.x_range[1]), self.n_x)
         # Sampled a hair inside each node so a node sitting exactly on x_out is not lost to round-off in real().
-        r = self.x_grid[:, None, None] * (1.0 - 1e-12) * r_scale[None, :, :] * (1.0 + z[None, None, :])
-        real_profile = jnp.reshape(self.real(halo_model, r, m, z), (len(self.x_grid), len(m), len(z)))
+        r = x[:, None, None] * (1.0 - 1e-12) * r_scale[None, :, :] * (1.0 + z[None, None, :])
+        real_profile = jnp.reshape(self.real(halo_model, r, m, z), (len(x), len(m), len(z)))
 
-        w = jnp.broadcast_to(self._truncation_weights(), (len(self.x_grid), len(m), len(z)))
-        k_native, u_k_native = self._u_k_hankel(halo_model, self.x_grid, r, m, z, w)
+        w = jnp.broadcast_to(self._truncation_weights(x), (len(x), len(m), len(z)))
+        k_native, u_k_native = self._u_k_hankel(halo_model, x, r, m, z, w)
         u_k_native = jnp.reshape(u_k_native, (len(k_native), len(m), len(z)))
 
         q_native = jnp.broadcast_to(k_native[:, None, None], (len(k_native), len(m), len(z)))
@@ -151,12 +163,12 @@ class HaloProfile(ABC):
         prefactor = 4.0 * jnp.pi * r_scale**3 * (1.0 + z)[None, :] ** 3
 
         u_k_val = prefactor[None, :, :] * u_k_native * jnp.sqrt(jnp.pi / (2.0 * q_native))
-        u_k_zero = prefactor * jnp.log(self.x_grid[1] / self.x_grid[0]) * jnp.sum(w * self.x_grid[:, None, None] ** 3 * real_profile, axis=0)
+        u_k_zero = prefactor * jnp.log(x[1] / x[0]) * jnp.sum(w * x[:, None, None] ** 3 * real_profile, axis=0)
 
         # Below q = 1 / x_s FFTLog loses accuracy, so those native nodes take direct quadrature of the same samples (u_k_zero is its q = 0 case).
-        x_s = jnp.max(jnp.where(w > 0, self.x_grid[:, None, None], 0.0), axis=0)
-        sinc = jnp.sinc(k_native[:, None] * self.x_grid[None, :] / jnp.pi)
-        u_direct = prefactor * jnp.log(self.x_grid[1] / self.x_grid[0]) * jnp.einsum("qx,xmz->qmz", sinc, w * self.x_grid[:, None, None] ** 3 * real_profile)
+        x_s = jnp.max(jnp.where(w > 0, x[:, None, None], 0.0), axis=0)
+        sinc = jnp.sinc(k_native[:, None] * x[None, :] / jnp.pi)
+        u_direct = prefactor * jnp.log(x[1] / x[0]) * jnp.einsum("qx,xmz->qmz", sinc, w * x[:, None, None] ** 3 * real_profile)
         u_k_val = jnp.where(q_native <= 1.0 / x_s, u_direct, u_k_val)
 
         q_native = jnp.concatenate([jnp.zeros((1, len(m), len(z))), q_native], axis=0)

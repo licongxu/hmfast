@@ -6,7 +6,6 @@ import jax.numpy as jnp
 from hmfast.tracers.base_tracer import Tracer
 from hmfast.halos.profiles import CIBProfile, S12CIBProfile
 from hmfast.utils import lambertw, Const
-from hmfast.download import _get_default_data_path
 
 class CIBTracer(Tracer):
     """
@@ -18,40 +17,43 @@ class CIBTracer(Tracer):
 
         W_{\\mathrm{CIB}}(\\chi) = \\frac{1}{1+z}
 
-    for :math:`z \\leq z_{\\max}`, and zero otherwise. See :meth:`kernel` for
+    for :math:`z_{\\min} \\leq z \\leq z_{\\max}`, and zero otherwise. See :meth:`kernel` for
     how this is returned.
 
     Attributes
     ----------
     profile : CIBProfile
         Infrared emissivity profile used to model the cosmic infrared background signal.
-    z_max : float
-        Maximum redshift up to which the kernel has support.
+    z_range : tuple of float
+        ``(z_min, z_max)`` over which the kernel has support.
     """
 
     _required_profile_type = CIBProfile
 
-    def __init__(self, profile=None, *, z_max=5.0):
+    def __init__(self, profile=None, *, z_range=(0.0, 5.0)):
         super().__init__(profile=profile or S12CIBProfile(nu=100))
-        self.z_max = z_max
+        self._z_range = (jnp.asarray(z_range[0]), jnp.asarray(z_range[1]))
+
+    @property
+    def z_range(self):
+        return self._z_range
 
     # --- JAX PyTree Registration ---
     def _tree_flatten(self):
-        # The Tracer's only dynamic component is the Profile PyTree
-        leaves = (self.profile,)
-        aux_data = (self.z_max,)
+        # z_range is a leaf, so redshift slices can be traced and vmapped without recompiling.
+        leaves = (self.profile, self._z_range)
+        aux_data = None
         return (leaves, aux_data)
 
     @classmethod
     def _tree_unflatten(cls, aux_data, leaves):
-        profile, = leaves
-        z_max, = aux_data
+        profile, z_range = leaves
         obj = cls.__new__(cls)
         obj.profile = profile
-        obj.z_max = z_max
+        obj._z_range = z_range
         return obj
 
-    def update(self, *, profile=None, z_max=None):
+    def update(self, *, profile=None, z_range=None):
         """
         Return a new CIBTracer instance with updated attributes using PyTree logic.
 
@@ -59,24 +61,18 @@ class CIBTracer(Tracer):
         ----------
         profile : CIBProfile, optional
             New CIB profile to use for the tracer. If None, the profile is unchanged.
-        z_max : float, optional
-            New maximum redshift for the kernel. If None, z_max is unchanged.
+        z_range : tuple of float, optional
+            New ``(z_min, z_max)`` support of the kernel. If None, z_range is unchanged.
 
         Returns
         -------
         CIBTracer
             New tracer instance with updated attributes.
         """
-        flat, aux = self._tree_flatten()
-        if profile is not None:
-            flat = (profile,)
-        if z_max is not None:
-            aux = (z_max,)
-        return self._tree_unflatten(aux, flat)
-
-    def _z_max(self, cosmology):
-        """Redshift above which every kernel term vanishes."""
-        return self.z_max
+        (old_profile, old_z_range), aux = self._tree_flatten()
+        new_profile = profile if profile is not None else old_profile
+        new_z_range = (jnp.asarray(z_range[0]), jnp.asarray(z_range[1])) if z_range is not None else old_z_range
+        return self._tree_unflatten(aux, (new_profile, new_z_range))
 
     def _kernel_primary(self, cosmology, z):
         """
@@ -88,7 +84,7 @@ class CIBTracer(Tracer):
 
             W_{\\mathrm{CIB}}(\\chi) = \\frac{1}{1+z}
 
-        for :math:`z \\leq z_{\\max}`, and zero otherwise.
+        for :math:`z_{\\min} \\leq z \\leq z_{\\max}`, and zero otherwise.
 
         Parameters
         ----------
@@ -104,8 +100,9 @@ class CIBTracer(Tracer):
         """
         z = jnp.atleast_1d(z)
         W = 1.0 / (1.0 + z)
-        # Tolerance guards against callers' z grids (e.g. jnp.geomspace) not landing bit-exactly on z_max.
-        return jnp.squeeze(jnp.where(z <= self.z_max + 1e-8, W, 0.0))
+        # Tolerance guards against callers' z grids (e.g. jnp.geomspace) not landing bit-exactly on the ends.
+        z_min, z_max = self._z_range
+        return jnp.squeeze(jnp.where((z >= z_min - 1e-8) & (z <= z_max + 1e-8), W, 0.0))
 
     def kernel(self, cosmology, z):
         """

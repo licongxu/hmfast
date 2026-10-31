@@ -192,7 +192,7 @@ class HaloModel:
         I2 = jnp.sum(b2 * dn_dlnm * m_over_rho_mean * gl_w[:, None], axis=0)
     
         # Apply formulas
-        m_min =  m[0]
+        m_min = self.m_range[0]
         n_min =  (1.0 - I0) * rho_mean_0 / m_min
         b1_min = (1.0 - I1) * rho_mean_0 / m_min / n_min
         b2_min = -I2 * rho_mean_0 / m_min / n_min
@@ -224,9 +224,9 @@ class HaloModel:
         plain product of first moments.
 
         When :attr:`hm_consistency` is set, the unresolved haloes below
-        :attr:`m_range` are represented by a point mass at the lowest
-        quadrature node :math:`m_0`, contributing
-        :math:`n_{\\min}\\, b_{\\beta,\\min} \\prod_i u_i(k_i \\mid m_0, z)`.
+        :attr:`m_range` are represented by a point mass at the lower mass
+        limit :math:`M_{\\min}`, contributing
+        :math:`n_{\\min}\\, b_{\\beta,\\min} \\prod_i u_i(k_i \\mid M_{\\min}, z)`.
 
         The result carries the units of the product of the profiles; for
         :class:`~hmfast.halos.profiles.NFWMatterProfile`,
@@ -272,6 +272,8 @@ class HaloModel:
         z = jnp.atleast_1d(z)
         logm, w = gauss_legendre_nodes_weights(jnp.log(self.m_range[0]), jnp.log(self.m_range[1]), self.n_m)
         m = jnp.exp(logm)
+        # Profiles are also needed at m_range[0], where the counterterm point mass sits
+        m_u = jnp.concatenate([jnp.atleast_1d(self.m_range[0]), m])
         n_m, n_z = len(m), len(z)
 
         total_weights = jnp.reshape(self.halo_mass_function.dndlnm(self.cosmology, m, z, self.mass_def), (n_m, n_z)) * w[:, None]
@@ -282,18 +284,19 @@ class HaloModel:
 
         if shared_k and len(profiles) == 2:
             k_arr = jnp.atleast_1d(k)
-            u = jnp.reshape(_fourier_2pt(self, profiles[0], profiles[1], k_arr.ravel(), m, z), k_arr.shape + (n_m, n_z))
+            u = jnp.reshape(_fourier_2pt(self, profiles[0], profiles[1], k_arr.ravel(), m_u, z), k_arr.shape + (n_m + 1, n_z))
         else:
             u = 1.0
             for profile, k_i in zip(profiles, ks):
                 k_i = jnp.atleast_1d(k_i)
-                u = u * jnp.reshape(profile.fourier(self, k_i.ravel(), m, z), k_i.shape + (n_m, n_z))
+                u = u * jnp.reshape(profile.fourier(self, k_i.ravel(), m_u, z), k_i.shape + (n_m + 1, n_z))
+        u_min, u = u[..., 0, :], u[..., 1:, :]
 
         integral = jnp.sum(u * total_weights, axis=-2)  # (..., Nz)
 
         n_min, b1_min, b2_min = self._counter_terms(z)
         b_min = (jnp.ones_like(n_min), b1_min, b2_min)[bias_order]
-        correction = n_min * b_min * u[..., 0, :]  # point mass at the lowest mass node
+        correction = n_min * b_min * u_min  # point mass at the lower mass limit
 
         return jnp.squeeze(integral + self.hm_consistency * correction)
 

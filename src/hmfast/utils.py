@@ -9,27 +9,28 @@ from functools import partial
 
 # Create a central location for all constants
 class Const:
-    #_c_km_s_ = 299792.458  # speed of light in km/s
-    #_h_J_s_ = 6.626070040e-34  # Planck's constant
-    #_kB_J_K_ = 1.38064852e-23  # Boltzmann constant
+    # SI 2019 defining constants (exact) and constants derived from them
+    c = 2.99792458e8            # speed of light in m/s
+    h_P = 6.62607015e-34        # Planck constant in J s
+    k_B = 1.380649e-23          # Boltzmann constant in J/K
+    eV = 1.602176634e-19        # 1 eV expressed in J
+    sigma_B = 5.670374419e-08   # Stefan-Boltzmann constant in W/m^2/K^4
 
-    _c_ = 2.99792458e8      # c in m/s 
-    _Mpc_over_m_ = 3.085677581282e22  # conversion factor from meters to megaparsecs 
-    _Gyr_over_Mpc_ = 3.06601394e2 # conversion factor from megaparsecs to gigayears
-    _G_ = 6.67428e-11             # Newton constant in m^3/Kg/s^2 
-    _eV_ = 1.602176487e-19        # 1 eV expressed in J 
-    _sigma_T_ = 6.6524587e-29     # Thomson cross-section in m^2
-    _m_e_ = 9.1093837015e-31      # Electron mass in kg
-    _m_p_ = 1.67262192369e-27     # Proton mass in kg
-    _L_sun_ = 3.828e26            # Solar luminosity in Watts (1 kg·m²/s³)
-    _C1_IA_ = 5e-14                # h^-2 Msun^-1 Mpc^3 (Hirata & Seljak 2004 / Joachimi et al. 2011 Eq. 6 normalization)
+    # CODATA 2018 measured constants
+    G = 6.67430e-11             # Newton constant in m^3/kg/s^2
+    sigma_T = 6.6524587321e-29  # Thomson cross-section in m^2
+    m_e = 9.1093837015e-31      # electron mass in kg
+    m_p = 1.67262192369e-27     # proton mass in kg
 
-    # parameters entering in Stefan-Boltzmann constant sigma_B 
-    _k_B_ = 1.3806504e-23
-    _h_P_ = 6.62606896e-34
-    _M_sun_ =  1.98855e30 # solar mass in kg
+    # IAU 2015 astronomical constants
+    Mpc_over_m = 3.085677581491367e22  # megaparsec in m, exact from the au
+    GM_sun = 1.3271244e20       # nominal solar mass parameter in m^3/s^2
+    L_sun = 3.828e26            # nominal solar luminosity in W
+    M_sun = GM_sun / G      # solar mass in kg
 
-    _sigma_B_ = 5.6704004737209545e-08
+    # Derived units and model conventions
+    Gyr_over_Mpc = 3.06601394e2  # conversion factor from megaparsecs to gigayears
+    C1_IA = 5e-14                # h^-2 Msun^-1 Mpc^3 (Hirata & Seljak 2004 / Joachimi et al. 2011 Eq. 6 normalization)
 
 
 
@@ -67,94 +68,58 @@ _DOPRI5_A = (
     (9017 / 3168, -355 / 33, 46732 / 5247, 49 / 176, -5103 / 18656),
 )
 _DOPRI5_B5 = (35 / 384, 0.0, 500 / 1113, 125 / 192, -2187 / 6784, 11 / 84)
-_DOPRI5_B4 = (5179 / 57600, 0.0, 7571 / 16695, 393 / 640, -92097 / 339200, 187 / 2100, 1 / 40)
 
 
-def dopri5_integrate(rhs, y0, x_start, x_max, rtol=1e-6, atol=1e-9, max_steps=200, max_h=None):
+def dopri5_integrate(rhs, coeffs, y0, x_start, x_end, n_steps):
     """
-    Adaptive-step embedded Dormand-Prince (order 5(4)) integration of
-    dy/dx = rhs(x, y), y(x_start) = y0, from x_start to x_max.
+    Fixed-step Dormand-Prince (order 5) integration of dy/dx = rhs(coeffs(x), y), y(x_start) = y0,
+    from x_start to x_end on ``n_steps`` uniform steps.
 
-    Every proposed step is accepted unconditionally; its embedded 4th-order
-    error estimate is used only to size the *next* step to (rtol, atol).
-    Runs inside a fixed-length ``lax.scan`` of ``max_steps`` proposals so it
-    stays reverse-mode differentiable -- once x reaches x_max, remaining
-    proposals are frozen (zero-length), so max_steps is a safety cap on
-    resolution, not an accuracy control; rtol/atol control accuracy.
+    The x-dependence enters only through ``coeffs``, evaluated once, vectorised, at every stage point
+    of every step; the sequential ``lax.scan`` then only does arithmetic on the state, so it is cheap
+    on GPU and in reverse mode.
 
     Parameters
     ----------
     rhs : callable
-        Right-hand side ``rhs(x, y) -> dy/dx``. ``y`` and its return
-        value may be arbitrary JAX pytrees of matching structure.
+        Right-hand side ``rhs(c, y) -> dy/dx``, with ``c`` the coefficients at one x. ``y`` and its
+        return value may be arbitrary JAX pytrees of matching structure.
+    coeffs : callable
+        ``coeffs(x) -> c`` for a 1D array of x, a pytree whose leaves have a leading axis of ``len(x)``.
     y0 : pytree
         Initial state at ``x_start``.
-    x_start, x_max : float
-        Integration bounds (``x_max`` may be less than ``x_start`` to
-        integrate backward).
-    rtol, atol : float
-        Relative/absolute error tolerance used for step-size control.
-    max_steps : int
-        Static upper bound on the number of proposed steps; must be large
-        enough that x reaches x_max well before it is exhausted.
-    max_h : float or None
-        Optional ceiling on the step size. The tolerance-driven step size
-        can otherwise grow large enough on a smooth problem that the
-        returned trajectory is too sparse to safely interpolate between
-        nodes for callers reading off *interior* points, not just
-        ``x_traj[-1]``; set this to bound node spacing for such callers.
+    x_start, x_end : float
+        Integration bounds (``x_end`` may be less than ``x_start`` to integrate backward).
+    n_steps : int
+        Number of uniform steps.
 
     Returns
     -------
     x_traj : jnp.ndarray
-        Up to ``max_steps + 1`` integration nodes, including ``x_start``;
-        nodes after convergence repeat ``x_max``.
+        The ``n_steps + 1`` uniform nodes from ``x_start`` to ``x_end``.
     y_traj : pytree
         State trajectory at each node in ``x_traj``, same pytree structure
-        as ``y0`` with a leading axis of length ``max_steps + 1`` on every leaf.
+        as ``y0`` with a leading axis of length ``n_steps + 1`` on every leaf.
     """
-    direction = jnp.sign(x_max - x_start)
-    h0 = (x_max - x_start) / max_steps
-    if max_h is not None:
-        h0 = direction * jnp.minimum(jnp.abs(h0), max_h)
+    h = (x_end - x_start) / n_steps
+    x_traj = x_start + h * jnp.arange(n_steps + 1)
+    x_stage = x_traj[:-1, None] + h * jnp.asarray((0.0,) + _DOPRI5_C)[None, :]  # (n_steps, 6)
+    c_all = jax.tree_util.tree_map(lambda a: a.reshape(x_stage.shape), coeffs(x_stage.ravel()))
 
-    def combine(y, h, coeffs, ks):
+    def combine(y, weights, ks):
         return jax.tree_util.tree_map(
-            lambda y_leaf, *k_leaves: y_leaf + h * sum(c * k for c, k in zip(coeffs, k_leaves)),
-            y, *ks,
+            lambda y_leaf, *k_leaves: y_leaf + h * sum(w * k for w, k in zip(weights, k_leaves)), y, *ks
         )
 
-    def rms_norm(tree):
-        leaves = jax.tree_util.tree_leaves(tree)
-        mean_sq = sum(jnp.sum(l ** 2) for l in leaves) / sum(l.size for l in leaves)
-        return jnp.sqrt(mean_sq + 1e-300)  # avoid sqrt's singular grad at exactly 0
+    def step(y, c_step):
+        stage = lambda j: jax.tree_util.tree_map(lambda a: a[j], c_step)
+        ks = [rhs(stage(0), y)]
+        for j, a_row in enumerate(_DOPRI5_A):
+            ks.append(rhs(stage(j + 1), combine(y, a_row, ks)))
+        y_new = combine(y, _DOPRI5_B5, ks)
+        return y_new, y_new
 
-    def step(carry, _):
-        x, y, h = carry
-        remaining = x_max - x
-        done = direction * remaining <= 0
-        h_eff = jnp.where(done, 0.0, jnp.where(jnp.abs(h) > jnp.abs(remaining), remaining, h))
-
-        ks = [rhs(x, y)]
-        for a_row, c in zip(_DOPRI5_A, _DOPRI5_C):
-            ks.append(rhs(x + c * h_eff, combine(y, h_eff, a_row, ks)))
-        y5 = combine(y, h_eff, _DOPRI5_B5, ks)
-        k7 = rhs(x + h_eff, y5)
-        y4 = combine(y, h_eff, _DOPRI5_B4, ks + [k7])
-
-        err_norm = rms_norm(jax.tree_util.tree_map(
-            lambda a, b, y5_leaf: (a - b) / (atol + rtol * jnp.abs(y5_leaf)), y5, y4, y5
-        ))
-        factor = jnp.clip(0.9 * err_norm ** (-0.2), 0.2, 5.0)
-        h_prop = h * factor
-        if max_h is not None:
-            h_prop = direction * jnp.minimum(jnp.abs(h_prop), max_h)
-        h_new = jnp.where(done, h, h_prop)
-        x_new = x + h_eff
-        return (x_new, y5, h_new), (x_new, y5)
-
-    _, (x_traj, y_traj) = lax.scan(step, (x_start, y0, h0), None, length=max_steps)
-    x_traj = jnp.concatenate([jnp.asarray([x_start]), x_traj])
+    _, y_traj = lax.scan(step, y0, c_all)
     y_traj = jax.tree_util.tree_map(
         lambda leaf0, traj: jnp.concatenate([jnp.asarray(leaf0)[None], traj]), y0, y_traj
     )

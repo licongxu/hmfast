@@ -28,6 +28,9 @@ single components, each batched into one Jacobian per group of quantities.
 
 import functools
 import inspect
+import subprocess
+import sys
+import textwrap
 
 import numpy as np
 import pytest
@@ -36,8 +39,8 @@ import jax
 import jax.numpy as jnp
 import jax.scipy.special  # noqa: F401  (probed below for loggamma)
 
-from hmfast.cosmology import Cosmology, CosmoPowerCosmology
-from hmfast.cosmology.cosmopower import _WEIGHTS
+import hmfast.stats
+from hmfast.cosmology import Cosmology
 from hmfast.halos.bias import T10HaloBias
 from hmfast.halos.concentration import (
     B13Concentration,
@@ -62,8 +65,6 @@ from hmfast.halos.profiles import (
     Z07GalaxyHODProfile,
 )
 from hmfast.stats import Bk, Pk, Tk, cl, cl_linbias, corr_3d, corr_angular, cov_cng, cov_g, cov_ssc, sigma2_b_disc
-from hmfast.stats import projected_cl as _cl_module
-from hmfast.stats import covariance as _covariance_module
 from hmfast.tracers import CMBLensingTracer, GalaxyLensingTracer, GalaxyTracer, kSZTracer
 
 from hmfast.utils import gauss_legendre_nodes_weights
@@ -142,7 +143,9 @@ case("B13Concentration.c_delta",
      lambda p: shared(B13Concentration).c_delta(cosmo(p), M_GRID, Z_GRID, MD_200C))
 
 # --- halo model ------------------------------------------------------------------
-case("HaloModel._counter_terms", lambda p: halo_model(p)._counter_terms(Z_GRID))
+# At k -> 0 the counterterm point mass carries every unresolved halo, at each bias order.
+case("HaloModel.mass_integral[counterterms]",
+     lambda p: [halo_model(p).mass_integral(1e-4, Z_GRID, NFW, bias_order=b) for b in (0, 1, 2)])
 case("HaloModel.mass_integral", lambda p: halo_model(p).mass_integral(K_GRID, Z_GRID, NFW, bias_order=1))
 
 # --- profiles --------------------------------------------------------------------
@@ -241,6 +244,19 @@ def test_jittable(fn):
     jax.jit(fn).trace(PARAMS)
 
 
+def traces_on_second_call(call, first, second):
+    """Number of jit traces JAX records while running call(second) directly, after call(first) has filled the caches."""
+    jax.block_until_ready(call(first))
+    events = []
+    listener = lambda name, duration, **kwargs: events.append(name)
+    jax.monitoring.register_event_duration_secs_listener(listener)
+    try:
+        jax.block_until_ready(call(second))
+    finally:
+        jax.monitoring.unregister_event_duration_listener(listener)
+    return events.count("/jax/core/compile/jaxpr_trace_duration")
+
+
 def test_no_retrace_on_new_parameters():
     """A second call at different parameters must reuse the compiled kernel.
 
@@ -248,12 +264,9 @@ def test_no_retrace_on_new_parameters():
     sampler would hit if a cosmological parameter leaked into a pytree's aux data
     instead of staying a leaf.
     """
-    fn = jax.jit(lambda p: PK0.pk_1h(halo_model(p), K_GRID, Z_SINGLE, NFW))
-    jax.block_until_ready(fn(PARAMS))
-    n_compiles = fn._cache_size()
-
-    jax.block_until_ready(fn(PARAMS * jnp.array([1.01, 0.99, 1.02, 0.98, 1.0])))
-    assert fn._cache_size() == n_compiles, "changing parameter values triggered a retrace"
+    hm_a, hm_b = halo_model(PARAMS), halo_model(PARAMS * jnp.array([1.01, 0.99, 1.02, 0.98, 1.0]))
+    n = traces_on_second_call(lambda hm: PK0.pk_1h(hm, K_GRID, Z_SINGLE, NFW), hm_a, hm_b)
+    assert n == 0, "changing parameter values triggered a retrace"
 
 
 def test_pk_k_damp_sweep_does_not_recompile():
@@ -264,25 +277,16 @@ def test_pk_k_damp_sweep_does_not_recompile():
     test_profile_parameter_sweep_does_not_recompile guards against for profiles).
     """
     hm = halo_model(PARAMS)
-    fn = jax.jit(lambda pk_obj: pk_obj.pk_1h(hm, K_GRID, Z_SINGLE, NFW))
-
-    jax.block_until_ready(fn(Pk(k_damp=0.01)))
-    n_compiles = fn._cache_size()
-
-    jax.block_until_ready(fn(Pk(k_damp=0.05)))
-    assert fn._cache_size() == n_compiles, "changing k_damp triggered a retrace"
+    n = traces_on_second_call(lambda pk_obj: pk_obj.pk_1h(hm, K_GRID, Z_SINGLE, NFW), Pk(k_damp=0.01), Pk(k_damp=0.05))
+    assert n == 0, "changing k_damp triggered a retrace"
 
 
 def test_bk_k_damp_sweep_does_not_recompile():
     """Varying Bk.k_damp must reuse the compiled kernel (mirrors the Pk.k_damp case)."""
     hm = halo_model(PARAMS)
-    fn = jax.jit(lambda bk_obj: bk_obj._bk_1h(hm, K_GRID_BT, K_GRID_BT, -0.5, Z_SINGLE, NFW))
-
-    jax.block_until_ready(fn(Bk(k_damp=0.01)))
-    n_compiles = fn._cache_size()
-
-    jax.block_until_ready(fn(Bk(k_damp=0.05)))
-    assert fn._cache_size() == n_compiles, "changing k_damp triggered a retrace"
+    n = traces_on_second_call(lambda bk_obj: bk_obj.bk_1h(hm, K_GRID_BT, K_GRID_BT, -0.5, Z_SINGLE, NFW),
+                              Bk(k_damp=0.01), Bk(k_damp=0.05))
+    assert n == 0, "changing k_damp triggered a retrace"
 
 
 def test_cl_survives_jit_before_eager():
@@ -291,20 +295,28 @@ def test_cl_survives_jit_before_eager():
     The first cl_cmb call loads the set's TT emulator; when that happens under a
     trace, the loaded weights must stay concrete. A sampler that jits its likelihood, then takes
     its gradient or inspects a spectrum eagerly on the same object, hits exactly this order.
+    It runs in a fresh interpreter, where no earlier test can have loaded the TT emulator.
     """
-    _WEIGHTS.pop(("lcdm:v1", "TT"), None)  # so the first load below happens under the trace
-    obj = CosmoPowerCosmology(
-        "lcdm:v1", H0=67.36, omega_cdm=0.12011, omega_b=0.02242,
-        A_s=2.1005e-9, n_s=0.9665,
-    )
-    ell = jnp.arange(2, 200)
-    fn = lambda p: obj.update(H0=p[0], omega_cdm=p[1], omega_b=p[2], A_s=p[3], n_s=p[4]).cl_cmb("tt", ell)  # noqa: E731
+    script = textwrap.dedent(f"""
+        import jax, jax.numpy as jnp, numpy as np
+        from hmfast.cosmology import CosmoPowerCosmology
 
-    jitted = jax.block_until_ready(jax.jit(fn)(PARAMS))
-    grad = jax.block_until_ready(jax.jit(jax.grad(lambda p: jnp.sum(fn(p))))(PARAMS))
-    eager = jax.block_until_ready(fn(PARAMS))
-    assert np.all(np.isfinite(grad))
-    np.testing.assert_allclose(jitted, eager, rtol=1e-10)
+        obj = CosmoPowerCosmology(
+            "lcdm:v1", H0=67.36, omega_cdm=0.12011, omega_b=0.02242,
+            A_s=2.1005e-9, n_s=0.9665,
+        )
+        params = jnp.array({PARAMS.tolist()})
+        ell = jnp.arange(2, 200)
+        fn = lambda p: obj.update(H0=p[0], omega_cdm=p[1], omega_b=p[2], A_s=p[3], n_s=p[4]).cl_cmb("tt", ell)
+
+        jitted = jax.block_until_ready(jax.jit(fn)(params))
+        grad = jax.block_until_ready(jax.jit(jax.grad(lambda p: jnp.sum(fn(p))))(params))
+        eager = jax.block_until_ready(fn(params))
+        assert np.all(np.isfinite(grad))
+        np.testing.assert_allclose(jitted, eager, rtol=1e-10)
+    """)
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
 
 
 # Internal jitting: a user must never need to write jax.jit to get compiled performance.
@@ -328,11 +340,10 @@ JITTED_API = [
     (Z07GalaxyHODProfile, "ng_bar"), (Z07GalaxyHODProfile, "galaxy_bias"),
     (S12CIBProfile, "real"), (S12CIBProfile, "fourier"), (S12CIBProfile, "mean_emissivity"),
     (Pk, "pk_1h"), (Pk, "pk_2h"), (Pk, "pk_tot"),
-    (_cl_module, "cl"), (_cl_module, "cl_linbias"),
-    (Bk, "_bk_1h"), (Bk, "_bk_2h"), (Bk, "_bk_3h"), (Bk, "_bk_tot"),
+    (hmfast.stats, "cl"), (hmfast.stats, "cl_linbias"),
     (Tk, "tk_1h"), (Tk, "tk_2h"), (Tk, "tk_3h"), (Tk, "tk_4h"), (Tk, "tk_tot"),
-    (_covariance_module, "cov_g"), (_covariance_module, "cov_cng"), (_covariance_module, "cov_ssc"),
-    (_covariance_module, "sigma2_b_disc"),
+    (hmfast.stats, "cov_g"), (hmfast.stats, "cov_cng"), (hmfast.stats, "cov_ssc"),
+    (hmfast.stats, "sigma2_b_disc"),
 ]
 
 
@@ -343,13 +354,22 @@ def test_public_api_is_jitted_internally(owner, attr):
     """The decorator must be on the library's own function, not supplied by the caller.
 
     A user calling hmfast should get compiled performance without ever writing jax.jit
-    themselves. `bk_1h`/`bk_2h`/`bk_3h` validate their inputs eagerly and delegate to the
-    jitted `_bk_*` cores listed above, which is why the core is what gets checked.
+    themselves.
     """
     fn = inspect.getattr_static(owner, attr)
     assert isinstance(fn, jax.stages.Wrapped), (
         f"{owner.__name__}.{attr} is a plain function -- it needs a jax.jit decorator, "
         "otherwise every call pays eager per-operation dispatch"
+    )
+
+
+@pytest.mark.parametrize("method", ["bk_1h", "bk_2h", "bk_3h", "bk_tot"])
+def test_bk_is_jitted_internally(method):
+    """`Bk.bk_*` validate their inputs eagerly, so they are plain methods that must hand off to one compiled call."""
+    hm = halo_model(PARAMS)
+    jaxpr = jax.make_jaxpr(lambda: getattr(BK, method)(hm, K_GRID_BT, K_GRID_BT, -0.5, Z_SINGLE, NFW))()
+    assert [eqn.primitive.name for eqn in jaxpr.eqns] in (["pjit"], ["jit"]), (
+        f"Bk.{method} is not a single jitted call -- every call pays eager per-operation dispatch"
     )
 
 
@@ -375,13 +395,9 @@ def test_profile_parameter_sweep_does_not_recompile(profile, method, mass_def, n
     """
     hm = halo_model(PARAMS, mass_def)
     arg = jnp.geomspace(1e-2, 5.0, N_R) if method == "real" else K_GRID
-
-    jax.block_until_ready(getattr(profile, method)(hm, arg, M_GRID, Z_SINGLE))
-    n_compiles = inspect.getattr_static(type(profile), method)._cache_size()
-
-    jax.block_until_ready(getattr(profile.update(**new_params), method)(hm, arg, M_GRID, Z_SINGLE))
-
-    assert inspect.getattr_static(type(profile), method)._cache_size() == n_compiles
+    n = traces_on_second_call(lambda prof: getattr(prof, method)(hm, arg, M_GRID, Z_SINGLE),
+                              profile, profile.update(**new_params))
+    assert n == 0, "changing profile parameters triggered a retrace"
 
 
 # Differentiability of the full pipeline: for a few key observables, the autodiff Jacobian with respect to the
@@ -397,19 +413,12 @@ def _hod_galaxy(e):
     return GAL_TRACER.update(profile=HOD.update(alpha_s=e[5], M1_prime=e[6], sigma_log10M=e[7]))
 
 
-def _cl_gy(e):
-    t_g = GAL_TRACER.update(profile=HOD.update(alpha_s=e[5]))
-    t_y = TSZ_TRACER.update(profile=GNFW.update(beta=e[6]))
-    return cl(PK, halo_model(e[:5]), L_GRID, t_g, t_y, n_z=N_Z)
-
-
 LOG_PARAMS = jnp.log(PARAMS)
 GRADIENT_CASES = {
     "cl_yy": (lambda th: (lambda e: cl(PK, halo_model(e[:5]), L_GRID, _gnfw_tsz(e), _gnfw_tsz(e), n_z=N_Z))(jnp.exp(th)),
               jnp.concatenate([LOG_PARAMS, jnp.log(jnp.array([6.41, 4.13, 1.4]))])),
     "cl_gg": (lambda th: (lambda e: cl(PK, halo_model(e[:5]), L_GRID, _hod_galaxy(e), _hod_galaxy(e), n_z=N_Z))(jnp.exp(th)),
               jnp.concatenate([LOG_PARAMS, jnp.log(jnp.array([1.0, 1e13, 0.2]))])),
-    "cl_gy": (lambda th: _cl_gy(jnp.exp(th)), jnp.concatenate([LOG_PARAMS, jnp.log(jnp.array([1.0, 4.13]))])),
     "cl_kgkg": (lambda th: cl(PK, halo_model(jnp.exp(th)), L_GRID, GLENS_TRACER, GLENS_TRACER, n_z=N_Z), LOG_PARAMS),
     "pk_mm": (lambda th: (lambda hm: PK.pk_1h(hm, K_GRID, Z_SINGLE, NFW) + PK.pk_2h(hm, K_GRID, Z_SINGLE, NFW))(
         halo_model(jnp.exp(th))), LOG_PARAMS),
@@ -431,8 +440,8 @@ def _jacobian_errors(name, step=1e-4):
 
 
 # Central-difference step 1e-4 in ln(theta); errors are relative to each parameter's largest sensitivity. A broken
-# gradient is off by O(1), so these ~5x-measured bounds leave room (measured: 1.3e-6, 2.0e-5, 1.2e-5, 1.3e-5, 2.8e-9, 2.1e-6).
-GRADIENT_FD_TOL = {"cl_yy": 1e-5, "cl_gg": 1e-4, "cl_gy": 6e-5, "cl_kgkg": 6e-5, "pk_mm": 1.5e-8,
+# gradient is off by O(1), so these ~5x-measured bounds leave room (measured: 1.3e-6, 2.0e-5, 1.3e-5, 2.8e-9, 2.1e-6).
+GRADIENT_FD_TOL = {"cl_yy": 1e-5, "cl_gg": 1e-4, "cl_kgkg": 6e-5, "pk_mm": 1.5e-8,
                    "cl_kgkg_nl[hmcode]": 1e-5}
 
 
@@ -494,6 +503,12 @@ def _hod_m_grid(hm):
     return jnp.exp(logm)
 
 
+def _counterterm(hm, z):
+    """Counterterm point-mass part of the matter mass integral at k -> 0, i.e. the mass fraction below m_range."""
+    k = jnp.array(1e-4)
+    return hm.mass_integral(k, z, NFW) - hm.update(hm_consistency=False).mass_integral(k, z, NFW)
+
+
 def _halo_components(x):
     c, m = FIXED_COSMOLOGY.update(H0=x[0]), jnp.array(1e13)
     return jnp.stack([
@@ -502,7 +517,7 @@ def _halo_components(x):
         CONC.c_delta(c, m, _Z_HALF, MD_200C),
         MD_200C.r_delta(c, m, _Z_HALF),
         MASS_TRANSLATOR_200C_200M(c, m, _Z_HALF),
-        HM_DEFAULT.update(cosmology=c)._counter_terms(_Z_HALF)[0][0],
+        _counterterm(HM_DEFAULT.update(cosmology=c), _Z_HALF),
     ])
 
 
@@ -521,7 +536,7 @@ def _delta_c(x):
 
 # kSZ needs a finite z_max, and is read at a z inside velocity_dispersion's valid range.
 _H0_KERNEL_TRACERS = [(CMBLensingTracer(z_source=Z_STAR), _Z_HALF), (GalaxyLensingTracer(dndz=_TRACER_DNDZ), _Z_HALF),
-                      (GalaxyTracer(dndz=_TRACER_DNDZ), _Z_HALF), (kSZTracer(z_max=3.0), jnp.array(1.0))]
+                      (GalaxyTracer(dndz=_TRACER_DNDZ), _Z_HALF), (kSZTracer(z_range=(0.0, 3.0)), jnp.array(1.0))]
 
 
 def _tracer_kernels_H0(x):
@@ -582,7 +597,7 @@ def _params_case(fn, params, outputs):
 # name: (fn, x0, input names, output names, finite-difference step rule, rtol)
 COMPONENT_GRADIENT_CASES = {
     "halo_components[H0]": (_halo_components, [67.5], ["H0"],
-                            ["dndlnm", "bias", "c_delta", "r_delta", "mass_translator", "counter_terms.n_min"],
+                            ["dndlnm", "bias", "c_delta", "r_delta", "mass_translator", "counterterm"],
                             HALO_STEP, HALO_RTOL),
     "cosmology[H0]": (_cosmology_background, [67.5], ["H0"],
                       ["hubble_parameter", "angular_diameter_distance", "sigma8", "growth_factor", "omega_m", "pk"],

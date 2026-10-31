@@ -6,7 +6,7 @@ import jax.scipy as jscipy
 import mcfit
 from functools import partial
 
-from hmfast.download import _get_default_data_path
+from hmfast.download import data_path
 from hmfast.utils import lambertw, Const, gauss_legendre_nodes_weights
 from hmfast.halos.profiles import HaloProfile
 
@@ -256,9 +256,9 @@ class S12CIBProfile(CIBProfile):
         nu = self.nu * (1 + z)
         T0, alpha, beta, gamma = self.T0, self.alpha, self.beta, self.gamma
     
-        h = Const._h_P_  # Planck [J s]
-        k_B = Const._k_B_  # Boltzmann [J K^-1]
-        c = Const._c_  #2.99792458e8    # speed of light [m/s]
+        h = Const.h_P  # Planck [J s]
+        k_B = Const.k_B  # Boltzmann [J K^-1]
+        c = Const.c  #2.99792458e8    # speed of light [m/s]
     
         T_d_z = T0 * (1 + z) ** alpha
     
@@ -414,7 +414,8 @@ class S12CIBProfile(CIBProfile):
         integrand = dndlnm * (lc + ls)
         j_bar = jnp.sum(integrand * gl_w[:, None], axis=0)
 
-        j_bar = jax.lax.cond(halo_model.hm_consistency, lambda x: x + halo_model._counter_terms(z)[0] * lc[0], lambda x: x, j_bar)
+        lc_min = jnp.reshape(self.l_cen(halo_model, jnp.atleast_1d(halo_model.m_range[0]), z), (1, len(z)))[0]
+        j_bar = jax.lax.cond(halo_model.hm_consistency, lambda x: x + halo_model._counter_terms(z)[0] * lc_min, lambda x: x, j_bar)
 
         return jnp.squeeze(j_bar / (4 * jnp.pi))
 
@@ -447,7 +448,7 @@ class S12CIBProfile(CIBProfile):
 
         j_bar = self.mean_emissivity(halo_model, z)
 
-        dchi_dz = (Const._c_ / 1e3) / halo_model.cosmology.hubble_parameter(z)
+        dchi_dz = (Const.c / 1e3) / halo_model.cosmology.hubble_parameter(z)
         a = 1.0 / (1.0 + z)
 
         integrand = dchi_dz * a * j_bar
@@ -658,7 +659,9 @@ class M21CIBProfile(CIBProfile):
         :math:`S_\\nu(z, \\nu)`, with redshift grid :math:`z` dimensionless,
         frequency grid :math:`\\nu` in GHz, and template values :math:`S_\\nu`
         in the luminosity-per-SFR units assumed by the Maniyar model. If not
-        provided, it is read from the default auxiliary data files.
+        provided, the Planck template in the auxiliary data files is used, which
+        covers :math:`0 \\leq z \\leq 10.22` and :math:`90 \\leq \\nu \\leq 3000` GHz;
+        :math:`S_\\nu` is NaN outside the tabulated grid.
     """
     def __init__(self, nu, *, eta_max=0.4028, z_c=1.5, tau=1.204, f_sub=0.134, 
                  M_min=10**11.5, M_eff=10**12.6, sigma2_LM=0.5, s_nu=None):
@@ -669,9 +672,9 @@ class M21CIBProfile(CIBProfile):
 
 
         if s_nu is None:
-            s_nu_z_path = os.path.join(_get_default_data_path(), "auxiliary_files", "filtered_snu_planck_z_fine.txt")
-            s_nu_nu_path = os.path.join(_get_default_data_path(), "auxiliary_files", "filtered_snu_planck_nu_fine.txt")
-            s_nu_path = os.path.join(_get_default_data_path(), "auxiliary_files", "filtered_snu_planck_fine.txt")
+            s_nu_z_path = os.path.join(data_path(), "auxiliary_files", "filtered_snu_planck_z_fine.txt")
+            s_nu_nu_path = os.path.join(data_path(), "auxiliary_files", "filtered_snu_planck_nu_fine.txt")
+            s_nu_path = os.path.join(data_path(), "auxiliary_files", "filtered_snu_planck_fine.txt")
             self.s_nu = (np.loadtxt(s_nu_z_path), np.loadtxt(s_nu_nu_path), np.loadtxt(s_nu_path))
         else:
             self.s_nu = s_nu
@@ -689,8 +692,8 @@ class M21CIBProfile(CIBProfile):
                    sigma2_LM=sigma2_LM, s_nu=s_nu)
 
 
-    def update(self, *, nu=None, eta_max=None, z_c=None, tau=None, f_sub=None, 
-               M_min=None, M_eff=None, sigma2_LM=None):
+    def update(self, *, nu=None, eta_max=None, z_c=None, tau=None, f_sub=None,
+               M_min=None, M_eff=None, sigma2_LM=None, s_nu=None):
         """
         Return a new profile instance with updated CIB parameters.
 
@@ -698,6 +701,8 @@ class M21CIBProfile(CIBProfile):
         ----------
         nu, eta_max, z_c, tau, f_sub, M_min, M_eff, sigma2_LM : float, optional
             Replacement values for the corresponding class attributes. Any argument left as ``None`` keeps its current value.
+        s_nu : tuple, optional
+            New tabulated spectral template :math:`(z, \\nu, S_\\nu)`. If None, s_nu is unchanged.
 
         Returns
         -------
@@ -715,7 +720,7 @@ class M21CIBProfile(CIBProfile):
             M_min if M_min is not None else self.M_min,
             M_eff if M_eff is not None else self.M_eff,
             sigma2_LM if sigma2_LM is not None else self.sigma2_LM,
-            self.s_nu,
+            s_nu if s_nu is not None else self.s_nu,
         )
 
         return self._tree_unflatten(treedef, new_leaves)
@@ -931,7 +936,8 @@ class M21CIBProfile(CIBProfile):
         integrand = dndlnm * (lc + ls)
         j_bar = jnp.sum(integrand * gl_w[:, None], axis=0)
 
-        j_bar = jax.lax.cond(halo_model.hm_consistency, lambda x: x + halo_model._counter_terms(z)[0] * lc[0], lambda x: x, j_bar)
+        lc_min = jnp.reshape(self.l_cen(halo_model, jnp.atleast_1d(halo_model.m_range[0]), z), (1, len(z)))[0]
+        j_bar = jax.lax.cond(halo_model.hm_consistency, lambda x: x + halo_model._counter_terms(z)[0] * lc_min, lambda x: x, j_bar)
 
         return jnp.squeeze(j_bar / (4 * jnp.pi))
 
@@ -964,7 +970,7 @@ class M21CIBProfile(CIBProfile):
 
         j_bar = self.mean_emissivity(halo_model, z)
 
-        dchi_dz = (Const._c_ / 1e3) / halo_model.cosmology.hubble_parameter(z)
+        dchi_dz = (Const.c / 1e3) / halo_model.cosmology.hubble_parameter(z)
         a = 1.0 / (1.0 + z)
 
         integrand = dchi_dz * a * j_bar

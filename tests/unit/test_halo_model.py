@@ -8,7 +8,7 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from hmfast.halos.massdef import MassDefinition, mass_translator, _convert_m_delta
+from hmfast.halos.massdef import MassDefinition, mass_translator
 from hmfast.halos.massfunc import (
     T08HaloMassFunction,
     T10HaloMassFunction,
@@ -18,6 +18,7 @@ from hmfast.halos.massfunc import (
 from hmfast.halos.bias import T10HaloBias
 from hmfast.halos.concentration import ConstantConcentration, D08Concentration, B13Concentration
 from hmfast.halos import HaloModel
+from hmfast.halos.profiles import NFWMatterProfile
 
 from .._shared import halo_model, shared
 
@@ -102,14 +103,12 @@ class TestMassConversion:
         m_roundtrip = f_bwd(fixed_cosmology, m_converted, z_val)
         assert jnp.allclose(m_roundtrip, m, rtol=0.03)
 
-    # _convert_m_delta's output shape follows the scalar/array broadcast-then-squeeze convention.
+    # mass_translator's output shape follows the scalar/array broadcast-then-squeeze convention.
     @pytest.mark.parametrize("m_key,z_key,expected_shape", SHAPE_MATRIX_CASES)
-    def test_convert_m_delta_shape_matrix(self, fixed_cosmology, m_key, z_key, expected_shape):
+    def test_mass_translator_shape_matrix(self, fixed_cosmology, m_key, z_key, expected_shape):
         md_old, md_new = shared(MassDefinition, 200, "critical"), shared(MassDefinition, 200, "mean")
-        m, z = M_VALS[m_key], Z_VALS[z_key]
-        r = jax.eval_shape(lambda: _convert_m_delta(
-            fixed_cosmology, m, z, md_old, md_new, shared(D08Concentration).c_delta(fixed_cosmology, m, z, md_old)
-        ))
+        f = mass_translator(md_old, md_new, shared(D08Concentration))
+        r = jax.eval_shape(lambda: f(fixed_cosmology, M_VALS[m_key], Z_VALS[z_key]))
         assert r.shape == expected_shape
 
 
@@ -302,27 +301,22 @@ class TestHaloModelCore:
         assert jnp.allclose(hm_rt.m_range[1], hm.m_range[1])
         assert hm_rt.n_m == hm.n_m
 
-    # _counter_terms returns shape-(Nz,) arrays (even for scalar z, which never gets squeezed away) with n_min > 0.
-    def test_counter_terms_shape_and_sign(self, fixed_cosmology):
-        hm = halo_model(fixed_cosmology)
-        n_min, b1_min, b2_min = hm._counter_terms(jnp.array(0.5))
-        assert n_min.shape == (1,)
-        assert b1_min.shape == (1,)
-        assert b2_min.shape == (1,)
-        assert n_min[0] > 0
+    # With hm_consistency, the NFW I_1^0 and I_1^1 tend to 1 as k -> 0; without it the unresolved haloes below M_min are missing.
+    @pytest.mark.parametrize("bias_order", [0, 1])
+    def test_consistency_large_scale_limit(self, fixed_cosmology, bias_order):
+        nfw, z, k = NFWMatterProfile(), jnp.array([0.0, 0.5, 1.0, 2.0]), jnp.array([1e-4])
+        on = halo_model(fixed_cosmology).mass_integral(k, z, nfw, bias_order=bias_order)
+        off = halo_model(fixed_cosmology, hm_consistency=False).mass_integral(k, z, nfw, bias_order=bias_order)
+        # The residual is the profile's finite size, ~2.5e-10 at k=1e-4 and scaling as k^2.
+        assert jnp.allclose(on, 1.0, rtol=0.0, atol=1e-8)
+        assert jnp.all(off < 0.9)
 
-        n_min_arr, _, _ = hm._counter_terms(jnp.array([0.0, 0.5, 1.0]))
-        assert n_min_arr.shape == (3,)
-
-    # _counter_terms works under an outer jax.jit and across successive calls with differently-shaped z.
-    def test_counter_terms_under_outer_jit_and_array_size_change(self, fixed_cosmology):
-        hm = halo_model(fixed_cosmology)
-
-        @jax.jit
-        def call(hm, z):
-            return hm._counter_terms(z)
-
-        n_min_scalar, _, _ = call(hm, 0.5)
-        assert n_min_scalar.shape == (1,)
-        n_min_array, _, _ = call(hm, jnp.array([0.0, 0.5, 1.0]))
-        assert n_min_array.shape == (3,)
+    # mass_integral keeps the z axis for array z and drops it for scalar z, also under an outer jax.jit across differently-shaped z.
+    def test_mass_integral_z_shape_under_outer_jit(self, fixed_cosmology):
+        hm, nfw, k = halo_model(fixed_cosmology), NFWMatterProfile(), jnp.array([1e-3, 1e-2])
+        call = jax.jit(lambda hm, z: hm.mass_integral(k, z, nfw, bias_order=1))
+        out_scalar = call(hm, 0.5)
+        out_array = call(hm, jnp.array([0.0, 0.5, 1.0]))
+        assert out_scalar.shape == (2,)
+        assert out_array.shape == (2, 3)
+        assert jnp.allclose(out_scalar, out_array[:, 1], rtol=1e-12)

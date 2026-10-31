@@ -182,7 +182,6 @@ def ccl_bk(setup, k1, k2, k3, keys, z):
     k_all = np.concatenate([k1, k2, k3])
     leg = [slice(0, n), slice(n, 2 * n), slice(2 * n, 3 * n)]
     norm = [p.get_normalization(ccl, a, hmc=hmc) for p in profs]
-    u = [p.fourier(ccl, k_all[leg[i]], hmc._mass, a) / norm[i] for i, p in enumerate(profs)]
     I1 = [hmc.I_1_1(ccl, k_all[leg[i]], a, p) / norm[i] for i, p in enumerate(profs)]
     P = [pyccl.linear_matter_power(ccl, k_all[leg[i]], a) for i in range(3)]
     idx = np.arange(n)
@@ -196,7 +195,9 @@ def ccl_bk(setup, k1, k2, k3, keys, z):
             + 2 * _f2(k2, k3, _cos_opposite(k2, k3, k1)) * P[1] * P[2]
             + 2 * _f2(k3, k1, _cos_opposite(k3, k1, k2)) * P[2] * P[0])
     return {
-        "1h": hmc.integrate_over_massfunc(lambda M: (u[0] * u[1] * u[2]).T, ccl, a),
+        "1h": hmc.integrate_over_massfunc(
+            lambda M: np.prod([p.fourier(ccl, k_all[leg[i]], M, a) / norm[i] for i, p in enumerate(profs)], axis=0).T,
+            ccl, a),
         "2h": P[0] * I1[0] * I2(1, 2) + P[1] * I1[1] * I2(0, 2) + P[2] * I1[2] * I2(0, 1),
         "3h": b_pt * I1[0] * I1[1] * I1[2],
     }
@@ -283,7 +284,16 @@ def tk_mmmm(setup):
     return hm_tk(setup, "mmmm"), ccl_terms
 
 
-def ccl_tk_mixed(setup, keys, tk_4h_matter):
+def pbar_kernel(hm, k, kp, z, n_theta):
+    """<P_lin(|k + k'|)> over the angle between k and k', on the same Gauss-Legendre nodes in theta as Tk."""
+    x, w = np.polynomial.legendre.leggauss(n_theta)
+    cth = np.cos(0.5 * np.pi * (x + 1.0))
+    kr = np.sqrt(k[:, None, None] ** 2 + kp[None, :, None] ** 2 + 2.0 * k[:, None, None] * kp[None, :, None] * cth)
+    pkr = np.reshape(np.asarray(hm.cosmology.pk(jnp.asarray(kr.ravel()), jnp.array([z]), linear=True)), kr.shape)
+    return np.sum(pkr * 0.5 * w, axis=-1)
+
+
+def ccl_tk_mixed(setup, keys, tk_mmmm):
     """T(k_u, k_v) with legs 1, 2 at k_u and 3, 4 at k_v, from CCL's mass integrals and hmfast's PT kernels."""
     hm, ccl, hmc, profiles, _ = setup
     profs = [profiles[key][1] for key in keys]
@@ -302,13 +312,17 @@ def ccl_tk_mixed(setup, keys, tk_4h_matter):
         m = hmc.I_1_3(ccl, K_TK, a, profs[i], prof2=profs[j], prof3=profs[l], prof_2pt=pyccl.halos.Profile2pt())
         return m.T / (norm[i] * norm[j] * norm[l])
 
-    za = jnp.array([Z_X])
-    p_bar = np.asarray(TK._Pbar_kernel(hm, jnp.asarray(K_TK), jnp.asarray(K_TK), za))[..., 0]
-    b_pt = np.asarray(TK._Bpt_kernel(hm, jnp.asarray(K_TK), jnp.asarray(K_TK), za))[..., 0]
+    za, kj = jnp.array([Z_X]), jnp.asarray(K_TK)
+    p_bar = pbar_kernel(hm, K_TK, K_TK, Z_X, TK.n_theta)
+    # hmfast's tree-level B_PT: its matter 3-halo term over its own mass integrals, four equal terms for one profile
+    nfw = profiles["m"][0]
+    i_m = np.asarray(hm.mass_integral(kj, za, nfw, bias_order=1))
+    j_mm = np.asarray(hm.mass_integral((kj[:, None], kj[None, :]), za, (nfw, nfw), bias_order=1))
+    b_pt = tk_mmmm[0]["3h"] / (4.0 * i_m[:, None] * i_m[None, :] * j_mm)
     p_lin = pyccl.linear_matter_power(ccl, K_TK, a)
     m_ccl = profiles["m"][1]
     I_m = hmc.I_1_1(ccl, K_TK, a, m_ccl) / m_ccl.get_normalization(ccl, a, hmc=hmc)
-    t_pt = tk_4h_matter / (I_m[:, None] ** 2 * I_m[None, :] ** 2)
+    t_pt = tk_mmmm[1]["4h"] / (I_m[:, None] ** 2 * I_m[None, :] ** 2)
     return {
         "1h": pyccl.halos.halomod_trispectrum_1h(ccl, hmc, K_TK, a, profs[0], prof2=profs[1], prof3=profs[2],
                                                  prof4=profs[3]).T,
@@ -354,7 +368,7 @@ class TestTrispectrumCCL:
     @pytest.mark.parametrize("term,tol", [("1h", 4.2e-3), ("2h", 5.2e-3), ("3h", 3.6e-3), ("4h", 6.5e-3)])
     def test_tk_mixed_legs(self, setup, tk_mmmm, term, tol):
         got = hm_tk(setup, "mmyy")[term]
-        want = ccl_tk_mixed(setup, "mmyy", tk_mmmm[1]["4h"])[term]
+        want = ccl_tk_mixed(setup, "mmyy", tk_mmmm)[term]
         if term == "4h":
             got, want = got[NEAR_DIAGONAL], want[NEAR_DIAGONAL]
         assert rel_err(got, want) < tol

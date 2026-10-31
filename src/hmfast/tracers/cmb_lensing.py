@@ -5,7 +5,6 @@ import jax.scipy as jscipy
 from jax.scipy.special import sici, erf 
 
 from hmfast.tracers.base_tracer import Tracer
-from hmfast.download import _get_default_data_path
 from hmfast.utils import Const
 from hmfast.halos.profiles import MatterProfile, NFWMatterProfile
 jax.config.update("jax_enable_x64", True)
@@ -77,9 +76,10 @@ class CMBLensingTracer(Tracer):
         new_z_source = z_source if z_source is not None else old_z_source
         return self._tree_unflatten(aux, (new_profile, new_z_source))
 
-    def _z_max(self, cosmology):
-        """Redshift above which every kernel term vanishes: the source plane."""
-        return jnp.asarray(self.z_source)
+    @property
+    def z_range(self):
+        """``(0, z_source)``: the kernel runs from the observer to the source plane."""
+        return (0.0, jnp.asarray(self.z_source))
 
 
     def _kernel_primary(self, cosmology, z):
@@ -91,10 +91,11 @@ class CMBLensingTracer(Tracer):
 
             .. math::
 
-                W_{\\kappa_{\\mathrm{CMB}}}(\\chi) = \\frac{3}{2} \\Omega_m \\left(\\frac{H_0}{c}\\right)^2 \\chi(z)\\,(1+z)\\,\\frac{\\chi_s - \\chi(z)}{\\chi_s}
+                W_{\\kappa_{\\mathrm{CMB}}}(\\chi) = \\frac{3}{2} \\Omega_m \\left(\\frac{H_0}{c}\\right)^2 f_K(\\chi)\\,(1+z)\\,\\frac{f_K(\\chi_s - \\chi)}{f_K(\\chi_s)}
 
         for :math:`\\chi(z) < \\chi_s` and zero beyond, where :math:`\\chi_s` is the comoving
-        distance to the source plane at ``z_source``.
+        distance to the source plane at ``z_source`` and :math:`f_K(\\chi) = (1+z) D_A(z)` the
+        transverse comoving distance.
     
         Parameters
         ----------
@@ -115,7 +116,7 @@ class CMBLensingTracer(Tracer):
         # Cosmological constants
         H0 = cosmology.H0    # Hubble constant in km/s/Mpc
         Omega_m = cosmology.omega_x(0.0, "matter")  # Matter density parameter
-        c_km_s = Const._c_ / 1e3  # Speed of light in km/s
+        c_km_s = Const.c / 1e3  # Speed of light in km/s
         
         # Compute comoving distances in physical Mpc.
         chi_z = cosmology.angular_diameter_distance(z) * (1 + z)
@@ -123,12 +124,16 @@ class CMBLensingTracer(Tracer):
         # Comoving distance to the source plane in physical Mpc.
         chi_s = cosmology.angular_diameter_distance(self.z_source) * (1.0 + self.z_source)
 
+        # Lens-source transverse distance f_K(chi_s - chi) from the two transverse distances (sinh/sin subtraction rule)
+        curv = cosmology.Omega_k * (H0 / c_km_s) ** 2
+        chi_ls = chi_s * jnp.sqrt(1.0 + curv * chi_z ** 2) - chi_z * jnp.sqrt(1.0 + curv * chi_s ** 2)
+
         # Compute the CMB lensing kernel
         W_kappa_cmb = (
             (3.0 / 2.0) * Omega_m *
             (H0/c_km_s)**2 *
             chi_z * (1 + z) *
-            ((chi_s - chi_z) / chi_s)
+            (chi_ls / chi_s)
         )
         # Written as chi_z > chi_s so a NaN chi_s (z_source past the emulator range) stays NaN, not 0.
         W_kappa_cmb = jnp.where(chi_z > chi_s, 0.0, W_kappa_cmb)

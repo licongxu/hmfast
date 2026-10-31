@@ -1,7 +1,7 @@
 """
 Unit tests for hmfast.tracers: the profile-type compatibility guardrail
 (e.g. CMB lensing must not accept a pressure profile), dndz normalization,
-kernel shape/squeeze conventions, z_max truncation and NaN propagation.
+kernel shape/squeeze conventions, z_range truncation and NaN propagation.
 Gradients are checked in test_jax_transforms.py.
 """
 
@@ -11,9 +11,13 @@ import pytest
 
 from hmfast.halos.profiles import (
     B16DensityProfile,
+    CIBProfile,
+    DensityProfile,
+    GalaxyHODProfile,
     GNFWPressureProfile,
     MatterProfile,
     NFWMatterProfile,
+    PressureProfile,
     S12CIBProfile,
     Z07GalaxyHODProfile,
 )
@@ -123,13 +127,16 @@ class TestTracerProfileGuardrail:
 
 
 class TestDndzNormalization:
-    # A default (file-loaded) dndz integrates to 1.
-    def test_default_dndz_is_normalized(self):
-        try:
-            tracer = GalaxyTracer()
-        except Exception as exc:
-            pytest.skip(f"default GalaxyTracer dndz file not available locally: {exc}")
-        z, phi = tracer.dndz
+    # dndz is required: the galaxy tracers have no default source distribution.
+    @pytest.mark.parametrize("tracer_cls", [GalaxyTracer, GalaxyLensingTracer])
+    def test_dndz_required(self, tracer_cls):
+        with pytest.raises(TypeError):
+            tracer_cls()
+
+    # A dndz passed at construction is normalized to integrate to 1.
+    @pytest.mark.parametrize("tracer_cls", [GalaxyTracer, GalaxyLensingTracer])
+    def test_constructor_dndz_is_normalized(self, tracer_cls):
+        z, phi = tracer_cls(dndz=_SYNTHETIC_DNDZ).dndz
         assert jnp.isclose(jnp.trapezoid(phi, x=z), 1.0)
 
     # update(dndz=unnormalized_array) re-normalizes explicitly before storing.
@@ -177,11 +184,12 @@ class TestKernelShapeAndSqueeze:
             assert isinstance(der_angles, int) and der_angles in (0, 1, 2)
 
 
-class TestKernelZMaxTruncation:
-    # kernel() is exactly zero beyond z_max and finite/nonzero just inside it.
+class TestKernelZRangeTruncation:
+    # kernel() is exactly zero outside z_range and finite/nonzero inside it.
     @pytest.mark.parametrize("tracer_cls", [CIBTracer, kSZTracer, tSZTracer])
-    def test_truncates_at_z_max(self, fixed_cosmology, tracer_cls):
-        tracer = tracer_cls(z_max=3.0)
+    def test_truncates_outside_z_range(self, fixed_cosmology, tracer_cls):
+        tracer = tracer_cls(z_range=(1.0, 3.0))
+        assert _kernel_scalar(tracer, fixed_cosmology, jnp.array(0.5)) == 0.0
         assert _kernel_scalar(tracer, fixed_cosmology, jnp.array(3.5)) == 0.0
         inside = _kernel_scalar(tracer, fixed_cosmology, jnp.array(2.5))
         assert jnp.isfinite(inside) and inside != 0.0
@@ -197,12 +205,13 @@ class TestTracerUpdateAndPytree:
         assert tracer2.profile is new_profile
         assert tracer.profile is original_profile
 
-    # update(z_max=...) changes only z_max, leaving the profile untouched.
+    # update(z_range=...) changes only z_range, leaving the profile and the original tracer untouched.
     @pytest.mark.parametrize("tracer_cls", [CIBTracer, kSZTracer, tSZTracer])
-    def test_update_z_max_preserves_profile(self, tracer_cls):
-        tracer = _build_default(tracer_cls, z_max=3.0)
-        tracer2 = tracer.update(z_max=4.0)
-        assert tracer2.z_max == 4.0
+    def test_update_z_range_preserves_profile(self, tracer_cls):
+        tracer = _build_default(tracer_cls, z_range=(0.0, 3.0))
+        tracer2 = tracer.update(z_range=(0.5, 4.0))
+        assert tuple(float(v) for v in tracer2.z_range) == (0.5, 4.0)
+        assert tuple(float(v) for v in tracer.z_range) == (0.0, 3.0)
         assert tracer2.profile is tracer.profile
 
     # update(profile=...) changes only the profile, leaving dndz untouched.
@@ -250,14 +259,14 @@ class TestKernelNaNPropagation:
     )
     def test_nan_outside_emulator_bounds(self, out_of_bounds_cosmology, tracer_cls):
         tracer = (
-            _build_default(tracer_cls, z_max=3.0)
+            _build_default(tracer_cls, z_range=(0.0, 3.0))
             if tracer_cls is kSZTracer
             else _build_default(tracer_cls)
         )
         out = _kernel_scalar(tracer, out_of_bounds_cosmology, jnp.array([0.3, 1.0]))
         assert jnp.all(jnp.isnan(out))
 
-    # tSZ/CIB's kernels are purely analytic in z (and z_max), with no cosmology dependence at
+    # tSZ/CIB's kernels are purely analytic in z (and z_range), with no cosmology dependence at
     # all, so they stay finite regardless of the cosmology's validity.
     @pytest.mark.parametrize("tracer_cls", [tSZTracer, CIBTracer])
     def test_unaffected_by_cosmology_bounds(self, out_of_bounds_cosmology, tracer_cls):
@@ -267,21 +276,25 @@ class TestKernelNaNPropagation:
 
 
 
+def _lensing_efficiency(tracer, cosmology, z):
+    """Shear kernel divided by chi(z)(1+z) = D_A(z)(1+z)^2, leaving a positive constant times I_s(z)."""
+    shear_weight = tracer.kernel(cosmology, z)[0][0]
+    return shear_weight / (cosmology.angular_diameter_distance(z) * (1.0 + z) ** 2)
+
+
 class TestGalaxyLensingEfficiency:
-    # I_s(z) is exactly zero at/beyond the source distribution's maximum redshift.
+    # The shear kernel, and so I_s(z), is exactly zero at/beyond the source distribution's maximum redshift.
     def test_zero_beyond_max_source_z(self, fixed_cosmology):
         tracer = GalaxyLensingTracer(dndz=_SYNTHETIC_DNDZ)
         z_max_source = float(_SYNTHETIC_DNDZ[0][-1])
-        I_s = tracer._lensing_efficiency_integral(
-            fixed_cosmology, jnp.array([z_max_source, z_max_source + 1.0]), tracer.dndz
-        )
-        assert jnp.all(I_s == 0.0)
+        shear_weight = tracer.kernel(fixed_cosmology, jnp.array([z_max_source, z_max_source + 1.0]))[0][0]
+        assert jnp.all(shear_weight == 0.0)
 
     # I_s(z) decreases monotonically with z (fewer sources remain "behind" the lens).
     def test_monotonically_decreasing(self, fixed_cosmology):
         tracer = GalaxyLensingTracer(dndz=_SYNTHETIC_DNDZ)
-        z = jnp.linspace(0.0, 1.9, 10)
-        I_s = tracer._lensing_efficiency_integral(fixed_cosmology, z, tracer.dndz)
+        z = jnp.linspace(1e-3, 1.9, 10)
+        I_s = _lensing_efficiency(tracer, fixed_cosmology, z)
         assert jnp.all(jnp.diff(I_s) <= 0.0)
 
 
@@ -327,8 +340,16 @@ class TestIntrinsicAlignment:
 
 
 class TestDefaultProfileMatchesRequiredType:
-    # Each tracer's own default profile is an instance of its own _required_profile_type.
-    @pytest.mark.parametrize("tracer_cls", _ALL_TRACER_CLASSES)
-    def test_default_profile_matches_required_type(self, tracer_cls):
+    # Each tracer's default profile is the documented concrete profile, from the family the tracer requires.
+    @pytest.mark.parametrize("tracer_cls,family,default_cls", [
+        (CIBTracer, CIBProfile, S12CIBProfile),
+        (CMBLensingTracer, MatterProfile, NFWMatterProfile),
+        (GalaxyTracer, GalaxyHODProfile, Z07GalaxyHODProfile),
+        (GalaxyLensingTracer, MatterProfile, NFWMatterProfile),
+        (kSZTracer, DensityProfile, B16DensityProfile),
+        (tSZTracer, PressureProfile, GNFWPressureProfile),
+    ])
+    def test_default_profile_matches_required_type(self, tracer_cls, family, default_cls):
         tracer = _build_default(tracer_cls)
-        assert isinstance(tracer.profile, tracer_cls._required_profile_type)
+        assert type(tracer.profile) is default_cls
+        assert isinstance(tracer.profile, family)

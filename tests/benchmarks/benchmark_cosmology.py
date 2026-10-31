@@ -1,8 +1,12 @@
 """
-Benchmarks for hmfast.cosmology.Cosmology against external ground truth: CCL running CLASS for the background, growth
-and power spectra (CAMB for the HMcode nonlinear spectrum), and CLASS directly (classy) for the CMB spectra and derived
-parameters. Every comparison runs hmfast with ncdm_mode="m", the neutrino convention CCL uses, against a CCL cosmology
-with the same neutrino masses (see `ccl_cosmology`).
+Benchmarks for hmfast.cosmology.Cosmology against external ground truth: CCL running CLASS for the background and
+power spectra (CAMB for the HMcode nonlinear spectrum), and CLASS directly (classy) for the growth, the CMB spectra and
+derived parameters. Every comparison runs hmfast with ncdm_mode="m", the neutrino convention CCL uses, against a CCL
+cosmology with the same neutrino masses (see `ccl_cosmology`).
+
+The growth reference is CLASS's CDM+baryon growth, D_cb(z)^2 = P_cb(k_ref, z) / P_cb(k_ref, 0) at a linear k_ref inside
+neutrino free streaming, which is what hmfast's growth equation solves for; CCL's growth sources it with all matter,
+including massive neutrinos, so it differs by ~0.55 f_nu in f.
 
 CCL tests are marked `ccl`, the CAMB test `camb` and the CLASS tests `classy`; each is skipped if its package is
 missing.
@@ -29,6 +33,7 @@ except ImportError:
     classy = None
 
 REQUIRES_CCL = [pytest.mark.ccl, pytest.mark.skipif(pyccl is None, reason="requires pyccl")]
+REQUIRES_CLASS = [pytest.mark.classy, pytest.mark.skipif(classy is None, reason="requires classy")]
 
 
 def z_to_a(z):
@@ -60,6 +65,60 @@ def cosmo_ext(fixed_cosmology_m):
 def ccl_class(fixed_cosmology_m):
     """CCL running CLASS for the same cosmology: an independent background, growth and linear P(k)."""
     return ccl_cosmology(fixed_cosmology_m)
+
+
+# Wavenumber in 1/Mpc of the CLASS growth reference: inside neutrino free streaming for every set's masses (the
+# references move by <= 1e-4 for 0.5-2 / Mpc; at 0.1 / Mpc the 0.3 eV mnu:v1 D moves by 3e-3).
+K_REF = 0.5
+# Step in ln(1+z) of the reference growth rate's finite difference (changes it by < 1e-5 against 1e-3).
+DLNZ = 2.5e-3
+
+
+def class_run(cosmology, z_max_pk=20.0):
+    """CLASS with `cosmology`'s parameters and its emulator set's training settings: Fermi-Dirac massive states (three
+    degenerate ones for mnu-3states:v1) and the set's N_ur."""
+    params = {
+        "output": "mPk", "P_k_max_1/Mpc": 60.0, "z_max_pk": z_max_pk,
+        "H0": cosmology.H0, "omega_cdm": cosmology.omega_cdm, "omega_b": cosmology.omega_b, "A_s": cosmology.A_s,
+        "n_s": cosmology.n_s, "tau_reio": cosmology.tau, "N_ur": float(cosmology.N_ur),
+    }
+    if float(cosmology.m_ncdm) > 0:
+        deg = 3.0 if cosmology.emulator_set == "mnu-3states:v1" else 1.0
+        params.update(N_ncdm=1, m_ncdm=float(cosmology.m_ncdm), deg_ncdm=deg)
+    if float(cosmology.w0) != -1.0:
+        params.update(Omega_Lambda=0.0, w0_fld=float(cosmology.w0), wa_fld=0.0)
+    c = classy.Class()
+    c.set(params)
+    c.compute()
+    return c
+
+
+def class_growth(c, z):
+    """CLASS D_cb(z) at K_REF and f_cb(z) = -dlnD_cb/dln(1+z), central differences (second-order one-sided at z = 0)."""
+    pk = c.pk_cb_lin if c.pars.get("N_ncdm") else c.pk_lin  # total matter is CDM+baryons without massive neutrinos
+
+    def ln_D(x):
+        return 0.5 * np.log(pk(K_REF, np.expm1(x)) / pk(K_REF, 0.0))
+
+    D, f = [], []
+    for x in np.log1p(np.atleast_1d(z)):
+        D.append(np.exp(ln_D(x)))
+        if x >= DLNZ:
+            f.append(-(ln_D(x + DLNZ) - ln_D(x - DLNZ)) / (2 * DLNZ))
+        else:
+            f.append(-(-3 * ln_D(x) + 4 * ln_D(x + DLNZ) - ln_D(x + 2 * DLNZ)) / (2 * DLNZ))
+    return np.array(D), np.array(f)
+
+
+@pytest.fixture(scope="module")
+def class_ref(fixed_cosmology_m):
+    """CLASS for the fixed cosmology: the growth and linear P(k) reference."""
+    if classy is None:
+        pytest.skip("requires classy")
+    c = class_run(fixed_cosmology_m)
+    yield c
+    c.struct_cleanup()
+    c.empty()
 
 
 @pytest.fixture(scope="module")
@@ -128,28 +187,28 @@ class TestDensitiesCCL:
         assert rel_err(cosmo_ext.comoving_volume_element(jnp.asarray(z)), (1 + z) ** 2 * D_A**2 * c_km_s / H) < 1.2e-3
 
 
-class TestGrowthCCL:
-    pytestmark = REQUIRES_CCL
+class TestGrowthClass:
+    pytestmark = REQUIRES_CLASS
 
-    # growth_factor(z) across the P(k) emulators' range (measured 1.3e-3).
-    def test_growth_factor(self, cosmo, ccl_class):
-        assert rel_err(cosmo.growth_factor(jnp.asarray(Z_PK)), pyccl.growth_factor(ccl_class, z_to_a(Z_PK))) < 2.5e-3
+    # growth_factor(z) across the P(k) emulators' range (measured 8.3e-5).
+    def test_growth_factor(self, cosmo, class_ref):
+        assert rel_err(cosmo.growth_factor(jnp.asarray(Z_PK)), class_growth(class_ref, Z_PK)[0]) < 1.7e-4
 
-    # growth_rate(z) away from the growth table's edges (measured 1.1e-3).
-    def test_growth_rate(self, cosmo, ccl_class):
+    # growth_rate(z) away from the growth table's edges (measured 1.4e-4).
+    def test_growth_rate(self, cosmo, class_ref):
         got = cosmo.growth_rate(jnp.asarray(Z_GROWTH_RATE))
-        assert rel_err(got, pyccl.growth_rate(ccl_class, z_to_a(Z_GROWTH_RATE))) < 2.5e-3
+        assert rel_err(got, class_growth(class_ref, Z_GROWTH_RATE)[1]) < 3e-4
 
-    # growth_rate at the table's first node, z = 0, from a second-order one-sided difference (measured 3.7e-3).
-    def test_growth_rate_at_z0(self, cosmo, ccl_class):
-        assert rel_err(cosmo.growth_rate(jnp.array([0.0])), pyccl.growth_rate(ccl_class, z_to_a(0.0))) < 7.5e-3
+    # growth_rate at the table's first node, z = 0 (measured 3.9e-4).
+    def test_growth_rate_at_z0(self, cosmo, class_ref):
+        assert rel_err(cosmo.growth_rate(jnp.array([0.0])), class_growth(class_ref, 0.0)[1]) < 8e-4
 
-    # With extrapolate_z=True, growth_factor continues past z_max_pk = 5 (measured 1.3e-3); NaN without the flag.
-    def test_growth_factor_beyond_grid_with_extrapolation(self, cosmo, cosmo_ext, ccl_class):
+    # With extrapolate_z=True, growth_factor continues past z_max_pk = 5 (measured 1.0e-4); NaN without the flag.
+    def test_growth_factor_beyond_grid_with_extrapolation(self, cosmo, cosmo_ext, class_ref):
         z_max_pk = emulator_z_max_pk(cosmo)
         z = jnp.array([z_max_pk + 2.0, z_max_pk + 10.0])
         assert jnp.all(jnp.isnan(cosmo.growth_factor(z)))
-        assert rel_err(cosmo_ext.growth_factor(z), pyccl.growth_factor(ccl_class, z_to_a(z))) < 2.5e-3
+        assert rel_err(cosmo_ext.growth_factor(z), class_growth(class_ref, np.asarray(z))[0]) < 2e-4
 
     # growth_rate has no extrapolation branch: NaN beyond z_max_pk unless extrapolating.
     def test_growth_rate_nan_beyond_grid_unless_extrapolating(self, cosmo, cosmo_ext):
@@ -157,18 +216,17 @@ class TestGrowthCCL:
         assert jnp.isnan(cosmo.growth_rate(z_beyond))
         assert jnp.isfinite(cosmo_ext.growth_rate(z_beyond))
 
-    # velocity_dispersion(z) against (f a H / c)^2 / 3 * int P_lin dk / 2 pi^2 built from CCL's own ingredients
-    # (measured 1.9e-3; 7.1e-3 at z = 0, which inherits growth_rate's larger error there).
-    def test_velocity_dispersion(self, cosmo, ccl_class):
+    # velocity_dispersion(z) against (f a H / c)^2 / 3 * int P_lin dk / 2 pi^2 from CLASS's f_cb, H and total-matter
+    # P_lin, the spectrum hmfast's pk returns (measured 5.9e-4 for z > 0, 3.4e-4 at z = 0).
+    def test_velocity_dispersion(self, cosmo, class_ref):
         z = np.array([0.0, 0.1, 0.5, 1.0, 2.0])
-        a = z_to_a(z)
-        k = np.geomspace(1e-5, 50.0, 4000)
-        pk = np.array([pyccl.linear_matter_power(ccl_class, k, float(ai)) for ai in a])
-        f_aH = pyccl.growth_rate(ccl_class, a) * a * cosmo.H0 * pyccl.h_over_h0(ccl_class, a) / 299792.458
+        k = np.geomspace(*cosmo.k_range, 4000)
+        pk = np.array([[class_ref.pk_lin(ki, zi) for ki in k] for zi in z])
+        f_aH = class_growth(class_ref, z)[1] * np.array([class_ref.Hubble(zi) for zi in z]) / (1 + z)
         want = f_aH**2 / 3 * np.trapezoid(pk * k, np.log(k), axis=1) / (2 * np.pi**2)
         got = np.asarray(cosmo.velocity_dispersion(jnp.asarray(z)))
-        assert rel_err(got[1:], want[1:]) < 4e-3
-        assert rel_err(got[0], want[0]) < 1.5e-2
+        assert rel_err(got[1:], want[1:]) < 1.2e-3
+        assert rel_err(got[0], want[0]) < 7e-4
 
 
 class TestDeltaCCL:
@@ -210,22 +268,29 @@ class TestLinearPowerCCL:
 
     # Without extrapolate_k, pk is NaN beyond the trained k range; with it, a modest factor beyond (measured 3.4e-3).
     def test_pk_k_extrapolation(self, cosmo, ccl_class):
-        k_native = cosmo._pk_grid()
+        k_native = np.geomspace(*cosmo.k_range, cosmo.n_k)
         k = jnp.array([k_native.min() * 0.5, k_native.max() * 2.0])
         assert jnp.all(jnp.isnan(cosmo.update(extrapolate_k=False).pk(k, jnp.array([1.0]), linear=True)))
         got = np.ravel(cosmo.update(extrapolate_k=True).pk(k, jnp.array([1.0]), linear=True))
         assert rel_err(got, pyccl.linear_matter_power(ccl_class, np.asarray(k), z_to_a(1.0))) < 7e-3
 
-    # Without extrapolate_z, pk is NaN beyond z_max_pk; with it, P(k) scales by CCL's growth-factor ratio
-    # (measured 3.3e-5).
-    def test_pk_z_extrapolation_growth_ratio(self, cosmo, cosmo_ext, ccl_class):
+
+class TestLinearPowerClass:
+    pytestmark = REQUIRES_CLASS
+
+    # Without extrapolate_z, pk is NaN beyond z_max_pk; with it, P(k, z) = P(k, z_max_pk) [D(z) / D(z_max_pk)]^2 against
+    # CLASS's total-matter P, as a ratio to z_max_pk (measured 1.9e-4, from neutrino scale dependence at k = 0.05 / Mpc)
+    # and absolute, which adds the emulator's error at z_max_pk (measured 5.9e-4).
+    def test_pk_z_extrapolation_growth_ratio(self, cosmo, cosmo_ext, class_ref):
         z_max_pk = emulator_z_max_pk(cosmo)
         k0 = jnp.array([0.05])
         z = jnp.array([z_max_pk + 2.0, z_max_pk + 10.0])
         assert jnp.all(jnp.isnan(cosmo.pk(k0, z, linear=True)))
-        ratio = np.ravel(cosmo_ext.pk(k0, z, linear=True)) / np.ravel(cosmo.pk(k0, jnp.array([z_max_pk])))[0]
-        D = pyccl.growth_factor(ccl_class, z_to_a(z)) / pyccl.growth_factor(ccl_class, z_to_a(z_max_pk))
-        assert rel_err(ratio, D**2) < 7e-5
+        got = np.ravel(cosmo_ext.pk(k0, z, linear=True))
+        want = np.array([class_ref.pk_lin(0.05, float(zi)) for zi in z])
+        ratio = got / np.ravel(cosmo.pk(k0, jnp.array([z_max_pk])))[0]
+        assert rel_err(ratio, want / class_ref.pk_lin(0.05, z_max_pk)) < 4e-4
+        assert rel_err(got, want) < 1.2e-3
 
 
 class TestNonlinearPowerCCL:
@@ -288,14 +353,6 @@ class TestEmulatorSetsCCL:
         assert rel_err(cosmo.hubble_parameter(z), cosmo.H0 * pyccl.h_over_h0(ccl, a)) < 3e-4
         assert rel_err(cosmo.angular_diameter_distance(z), pyccl.angular_diameter_distance(ccl, a)) < 1e-4
 
-    # growth_factor(z), growth_rate(z) per emulator set (measured max over sets 3.6e-3 / 3.3e-3, both mnu-3states). With
-    # massive neutrinos growth is scale dependent: hmfast reads it off P_lin at k = 0.01 / Mpc, CCL solves an ODE.
-    def test_growth(self, pair):
-        cosmo, ccl = pair
-        assert rel_err(cosmo.growth_factor(jnp.asarray(Z_PK)), pyccl.growth_factor(ccl, z_to_a(Z_PK))) < 7e-3
-        got = cosmo.growth_rate(jnp.asarray(Z_GROWTH_RATE))
-        assert rel_err(got, pyccl.growth_rate(ccl, z_to_a(Z_GROWTH_RATE))) < 7e-3
-
     # sigma8(z) per emulator set (measured max over sets 1.3e-4).
     def test_sigma8(self, pair):
         cosmo, ccl = pair
@@ -310,6 +367,29 @@ class TestEmulatorSetsCCL:
         got = np.asarray(cosmo.pk(jnp.asarray(k), jnp.asarray(Z_PK), linear=True))
         want = np.stack([pyccl.linear_matter_power(ccl, k, float(a)) for a in z_to_a(Z_PK)], axis=1)
         assert rel_err(got, want) < 3.3e-3
+
+
+@pytest.fixture(scope="module")
+def class_set(emulator_set_cosmology):
+    """CLASS for each emulator set's cosmology: the growth reference."""
+    if classy is None:
+        pytest.skip("requires classy")
+    c = class_run(emulator_set_cosmology)
+    yield c
+    c.struct_cleanup()
+    c.empty()
+
+
+class TestEmulatorSetsClass:
+    pytestmark = REQUIRES_CLASS
+
+    # growth_factor(z), growth_rate(z) per emulator set against CLASS's CDM+baryon growth (measured max over sets
+    # 2.0e-4 / 5.0e-4, both mnu-3states; 8.3e-5 / 1.6e-4 without the large neutrino masses).
+    def test_growth(self, emulator_set_cosmology, class_set):
+        cosmo = emulator_set_cosmology
+        assert rel_err(cosmo.growth_factor(jnp.asarray(Z_PK)), class_growth(class_set, Z_PK)[0]) < 4e-4
+        got = cosmo.growth_rate(jnp.asarray(Z_GROWTH_RATE))
+        assert rel_err(got, class_growth(class_set, Z_GROWTH_RATE)[1]) < 1e-3
 
 
 # ---------------------------------------------------------------------------------------------------------------------

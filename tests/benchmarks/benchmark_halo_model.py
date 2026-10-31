@@ -2,9 +2,10 @@
 CCL benchmarks for hmfast.halos (mass definitions and conversions, concentration, halo mass function, halo bias).
 
 Every comparison runs hmfast with ncdm_mode="m", the neutrino convention CCL uses, against a CCL CosmologyCalculator
-with the same neutrino masses and fed hmfast's own P_lin, so residuals measure the halo-model formulas rather than
-P(k). Each test runs at three cosmologies: lcdm:v1 (one 0.06 eV state), mnu:v1 with 0.3 eV, where the neutrino
-fraction is large enough to expose any Omega_cb/Omega_m mix-up, and mnu-3states:v1 (three 0.1 eV states).
+with the same neutrino masses and fed hmfast's own P_lin, D(z) and f(z), so residuals measure the halo-model formulas
+rather than P(k) or growth. Each test runs at three cosmologies: lcdm:v1 (one 0.06 eV state), mnu:v1 with 0.3 eV,
+where the neutrino fraction is large enough to expose any Omega_cb/Omega_m mix-up, and mnu-3states:v1 (three 0.1 eV
+states).
 
 T10 and B13 are compared with CCL's delta_c set to the constant EdS value both papers calibrate with, where CCL itself
 uses the EdS_approx (Tinker10) and NakamuraSuto97 (Bhattacharya13) fits; with CCL's choice they differ by up to 0.7%.
@@ -49,7 +50,7 @@ COSMOLOGIES = [
 
 @pytest.fixture(scope="module", params=COSMOLOGIES, ids=[s for s, _ in COSMOLOGIES])
 def cosmologies(request, fixed_cosmology):
-    """(hmfast cosmology in ncdm_mode="m", matching CCL calculator) for each benchmark cosmology."""
+    """(hmfast cosmology in ncdm_mode="m", matching CCL calculator fed its P_lin and growth) for each cosmology."""
     emulator_set, extension = request.param
     f = fixed_cosmology
     try:
@@ -57,7 +58,7 @@ def cosmologies(request, fixed_cosmology):
                           n_s=f.n_s, ncdm_mode="m", **extension)
     except Exception as exc:
         pytest.skip(f"{emulator_set} emulator files not available locally: {exc}")
-    return cosmo, ccl_cosmology(cosmo, pk_linear=True)
+    return cosmo, ccl_cosmology(cosmo, pk_linear=True, growth=True)
 
 
 @pytest.fixture
@@ -113,11 +114,10 @@ class TestMassConversionCCL:
 
 
 class TestConcentrationCCL:
-    # D08 and B13 at their shared mass definitions (measured 4e-16 / 2.9e-3). B13 inherits the scale-dependent
-    # growth-factor difference with massive neutrinos through D(z)^B (see benchmark_cosmology.py); 1.1e-3 for lcdm:v1.
+    # D08 and B13 at their shared mass definitions, with CCL on hmfast's D(z) (measured 4e-16 / 9.6e-6).
     @pytest.mark.parametrize("conc_cls,ccl_conc_cls,tol", [
         (D08Concentration, "ConcentrationDuffy08", 1e-12),
-        (B13Concentration, "ConcentrationBhattacharya13", 6e-3),
+        (B13Concentration, "ConcentrationBhattacharya13", 2e-5),
     ])
     @pytest.mark.parametrize("delta,reference", [(200, "critical"), (200, "mean"), ("vir", "critical")])
     def test_concentration(self, cosmologies, eds_delta_c, conc_cls, ccl_conc_cls, tol, delta, reference):

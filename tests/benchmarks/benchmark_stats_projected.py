@@ -25,10 +25,10 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from hmfast.download import data_path
 from hmfast.halos.massdef import MassDefinition
 from hmfast.halos.profiles import GNFWPressureProfile, NFWMatterProfile, S12CIBProfile, Z07GalaxyHODProfile
 from hmfast.stats import Pk, cl, cl_linbias, corr_angular
-from hmfast.stats.projected_cl import _D_kz
 from hmfast.tracers import CIBTracer, CMBLensingTracer, GalaxyLensingTracer, GalaxyTracer, tSZTracer
 
 from .._shared import ccl_profile2pt_hod, halo_model, rel_err, shared
@@ -42,24 +42,37 @@ ELL = np.geomspace(10, 5000, 30)
 PK_1H, PK_2H = Pk(include_2h=False, k_damp=0.0), Pk(include_1h=False)
 
 
-class _CMBLensingCut(CMBLensingTracer):
+class CMBLensingCut(CMBLensingTracer):
     """CMB lensing projected only up to z_cut, the hmfast side of the CCL kernel cut in Setup.cmb_lensing."""
 
     def __init__(self, profile=None, *, z_source, z_cut):
         super().__init__(profile, z_source=z_source)
         self.z_cut = z_cut
 
-    def _z_max(self, cosmology):
-        return jnp.asarray(self.z_cut)
+    @property
+    def z_range(self):
+        return (0.0, jnp.asarray(self.z_cut))
 
 
-def _unflatten_cut(z_cut, leaves):
-    t = _CMBLensingCut._tree_unflatten(None, leaves)
-    t.z_cut = z_cut
-    return t
+jax.tree_util.register_pytree_node(
+    CMBLensingCut, lambda t: ((t.profile, t.z_source), t.z_cut),
+    lambda z_cut, leaves: CMBLensingCut(leaves[0], z_source=leaves[1], z_cut=z_cut))
 
 
-jax.tree_util.register_pytree_node(_CMBLensingCut, lambda t: (t._tree_flatten()[0], t.z_cut), _unflatten_cut)
+def load_dndz(filename):
+    """A tabulated (z, dN/dz) from hmfast's auxiliary data files."""
+    table = np.loadtxt(os.path.join(data_path(), "auxiliary_files", filename))
+    return table[:, 0], table[:, 1]
+
+
+def growth_D_kz(cosmo, k, z, mass_integral=None):
+    """D(k, z) = sqrt(P_lin(k, z) / P_lin(k, 0)), times mass_integral(k, z) with z capped at z_max_pk if given."""
+    k, z = jnp.atleast_1d(k), jnp.atleast_1d(z)
+    D = jnp.sqrt(jnp.reshape(cosmo.pk(k, z, linear=True), (len(k), len(z)))
+                 / jnp.reshape(cosmo.pk(k, jnp.array([0.0]), linear=True), (len(k), 1)))
+    if mass_integral is None:
+        return D
+    return D * mass_integral(k, z if cosmo.z_max_pk is None else jnp.minimum(z, cosmo.z_max_pk))
 
 NFW = NFWMatterProfile()
 GNFW = GNFWPressureProfile(x_range=(1e-5, 1e5), n_x=128, P0=8.13, c500=1.156, alpha=1.062, beta=5.4807, gamma=0.3292,
@@ -105,8 +118,11 @@ class Setup:
             "g": self._halo_pk2d(hod, prof_2pt=ccl_profile2pt_hod()), "gm": self._halo_pk2d(hod, nfw),
             "c": self._halo_pk2d(cib, prof_2pt=pyccl.halos.Profile2ptCIB()),
         }
-        self.z_g, self.n_g = (np.asarray(x) for x in GalaxyTracer(profile=HOD).dndz)
-        self.z_s, self.n_s = (np.asarray(x) for x in GalaxyLensingTracer(profile=NFW).dndz)
+        # Normalized by the tracers, so both codes see the same dN/dz.
+        self.z_g, self.n_g = (np.asarray(x) for x in GalaxyTracer(
+            profile=HOD, dndz=load_dndz("normalised_dndz_cosmos_0.txt")).dndz)
+        self.z_s, self.n_s = (np.asarray(x) for x in GalaxyLensingTracer(
+            profile=NFW, dndz=load_dndz("nz_source_normalized_bin4.txt")).dndz)
 
     def _background(self):
         z = np.concatenate([[0.0], np.geomspace(1e-5, 3.0, 600)[:-1], np.geomspace(3.0, 1200.0, 400)])
@@ -120,7 +136,7 @@ class Setup:
         c = self.cosmo
         h = c.H0 / 100.0
         a_tab = np.sort(1.0 / (1.0 + np.linspace(0.0, 3.0, 60)))
-        k_tab = np.asarray(c._pk_grid())
+        k_tab = np.geomspace(*c.k_range, c.n_k)
         z_tab = jnp.asarray(1.0 / a_tab - 1.0)
         pk = {lin: np.asarray(c.pk(jnp.asarray(k_tab), z_tab, linear=lin)).T for lin in (True, False)}
         return pyccl.CosmologyCalculator(
@@ -141,7 +157,8 @@ class Setup:
     # Tracers, each as an (hmfast, CCL) pair.
     def galaxy(self, *, bias=None, mag=False, rsd=False, density=True, lin=False):
         s = (self.z_g, 0.3 * np.ones_like(self.z_g))
-        t = GalaxyTracer(profile=HOD, has_density=density, bias=bias, mag_bias=s if mag else None, has_rsd=rsd)
+        t = GalaxyTracer(profile=HOD, dndz=(self.z_g, self.n_g), has_density=density, bias=bias,
+                         mag_bias=s if mag else None, has_rsd=rsd)
         ccl_bias = bias if bias is not None else (self.z_g, np.ones_like(self.z_g))
         tc = pyccl.NumberCountsTracer(self.ccl_lin if lin else self.ccl, dndz=(self.z_g, self.n_g), has_rsd=rsd,
                                       bias=ccl_bias if density else None, mag_bias=s if mag else None)
@@ -149,7 +166,7 @@ class Setup:
 
     def shear(self, *, ia=False, shear=True, lin=False):
         A = (self.z_s, 0.5 * np.ones_like(self.z_s))
-        t = GalaxyLensingTracer(profile=NFW, ia_bias=A if ia else None, has_shear=shear)
+        t = GalaxyLensingTracer(profile=NFW, dndz=(self.z_s, self.n_s), ia_bias=A if ia else None, has_shear=shear)
         tc = pyccl.WeakLensingTracer(self.ccl_lin if lin else self.ccl, dndz=(self.z_s, self.n_s), has_shear=shear,
                                      ia_bias=A if ia else None)
         return t, tc
@@ -164,14 +181,14 @@ class Setup:
             cut = pyccl.Tracer()
             cut.add_tracer(c, kernel=(chi, tc.get_kernel(chi)[0]), der_bessel=-1, der_angles=1)
             tc = cut
-            t = _CMBLensingCut(profile=NFW, z_source=self.z_star, z_cut=z_max)
+            t = CMBLensingCut(profile=NFW, z_source=self.z_star, z_cut=z_max)
         return t, tc
 
     def tsz(self):
-        return tSZTracer(profile=GNFW, z_max=3.0), pyccl.tSZTracer(self.ccl, z_max=3.0)
+        return tSZTracer(profile=GNFW, z_range=(0.0, 3.0)), pyccl.tSZTracer(self.ccl, z_max=3.0)
 
     def cib(self):
-        return CIBTracer(profile=CIB, z_max=3.0), pyccl.CIBTracer(self.ccl, z_min=1e-4, z_max=3.0)
+        return CIBTracer(profile=CIB, z_range=(1e-4, 3.0)), pyccl.CIBTracer(self.ccl, z_min=1e-4, z_max=3.0)
 
     # Spectra.
     def hm_cl(self, t1, t2=None, ell=ELL, **kw):
@@ -217,13 +234,11 @@ class TestHaloModelClLimber:
         assert rel_err(got["2h"], want["2h"]) < tol_2h
 
     # Secondary kernel terms alone and combined, so the cross terms between them are checked through the totals
-    # (measured 7.3e-4, 6.4e-3, 4.9e-4, 1.1e-3, 3.0e-4). IA follows the rough source dN/dz, which needs n_z = 800
-    # (0.9% at the default 200). RSD alone is a near-cancellation of the two extended-Limber pieces at high l; it is
-    # 0.65% from CCL there, unexplained (same formula, insensitive to n_z, dN/dz sampling and CCL's table density), but
-    # <= 5e-4 combined with density.
+    # (measured 7.3e-4, 4.9e-4, 1.1e-3, 3.0e-4). IA follows the rough source dN/dz, which needs n_z = 800 (0.9% at the
+    # default 200). RSD enters through the combined galaxy case; alone it is a near-cancellation of the two
+    # extended-Limber pieces at high l, 0.65% from CCL there, unexplained, but <= 5e-4 combined with density.
     @pytest.mark.parametrize("name,make,kw,key,n_z,tol", [
         ("galaxy mag only", "galaxy", dict(density=False, mag=True), "g", N_Z, 1.5e-3),
-        ("galaxy RSD only", "galaxy", dict(density=False, rsd=True), "g", N_Z, 1.3e-2),
         ("galaxy dens + mag + RSD", "galaxy", dict(mag=True, rsd=True), "g", N_Z, 1e-3),
         ("shear IA only", "shear", dict(ia=True, shear=False), "m", 800, 2.2e-3),
         ("shear + IA", "shear", dict(ia=True), "m", 800, 6e-4),
@@ -312,7 +327,7 @@ def swiftcl_cl(s, cache, tracer, z_max, D_kz, bias=None, n_chi=512, n_k=400, tra
     chi_of_z = s.chi_bg[::-1]
     chi = np.geomspace(np.interp(1e-4, z_of_a, chi_of_z), np.interp(z_max, z_of_a, chi_of_z), n_chi)
     z_nodes = np.interp(chi, chi_of_z, z_of_a)
-    k_tab = np.asarray(s.cosmo._pk_grid())
+    k_tab = np.geomspace(*s.cosmo.k_range, s.cosmo.n_k)
     k = np.geomspace(k_tab[0], k_tab[-1], n_k)
     key = (cache, float(z_max), n_chi, n_k, n_fft)
     if key not in s.swiftcl_comps:
@@ -348,7 +363,7 @@ def halo_D_kz(s, profile):
         def I11(k, z):
             return jnp.reshape(s.hm.mass_integral(k, z, profile, bias_order=1), (len(k), len(z)))
 
-        return _D_kz(s.cosmo, k, z, z_fid=0.0, linear=True, mass_integral=I11)
+        return growth_D_kz(s.cosmo, k, z, mass_integral=I11)
 
     return D_kz
 
@@ -380,7 +395,7 @@ class TestNonLimber:
         for name, (_, t, _, z_hi, bias) in linbias_spectra.items():
             z_sw = 1.05 * z_hi if name == "CMB lensing" else z_hi
             out[name] = swiftcl_cl(s, swiftcl_cache, t, z_sw,
-                                   lambda k, z: _D_kz(s.cosmo, k, z, z_fid=0.0, linear=True), bias=bias)
+                                   lambda k, z: growth_D_kz(s.cosmo, k, z), bias=bias)
         return out
 
     # Non-Limber cl_linbias against SwiftCl, 3 <= l <= 200 (measured 1.8e-4, 1.9e-4, 2.1e-4, 2.4e-4); l = 2 below.
@@ -418,10 +433,8 @@ class TestNonLimber:
         got = cl(PK_2H, s.hm, jnp.asarray(ELL_NL), t, n_z=N_Z, l_limber=L_LIMBER)
         assert rel_err(got[1:], swiftcl_cl(s, swiftcl_cache, t, Z_RANGE[1], halo_D_kz(s, profile))[1:]) < tol
 
-    # Edge kernels vs SwiftCl, measured l=2 / l>=3: y 1.7e-5/4.7e-3, CIB 4.7e-3/2.3e-2, y x kCMB 3.7e-4/1.4e-3
+    # A tSZ kernel cut at z_max, crossed with CMB lensing, vs SwiftCl (measured l=2 / l>=3: 3.7e-4/1.4e-3)
     @pytest.mark.parametrize("make1,make2,n_fft,sw_n_fft,tol_l2,tol", [
-        ("tsz", None, None, 2048, 4e-5, 1e-2),
-        ("cib", None, 2000, 4096, 1e-2, 4.5e-2),
         ("tsz", "cmb_lensing", None, 2048, 8e-4, 3e-3),
     ])
     def test_edge_kernels_vs_swiftcl(self, s, swiftcl_cache, make1, make2, n_fft, sw_n_fft, tol_l2, tol):

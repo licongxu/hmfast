@@ -88,8 +88,15 @@ class Cosmology:
     tau : float or None
         Optical depth to reionization (default None).
     Omega_k : float
-        Curvature density parameter today, positive for an open universe (default 0). Distances extrapolated
-        beyond the redshift range and the projected statistics assume a flat geometry.
+        Curvature density parameter today: 0 for a flat universe (default), positive for an open one and
+        negative for a closed one.
+
+        .. warning::
+
+            With curvature, ``angular_diameter_distance`` must return the curved distance. The virial
+            overdensity uses the Bryan & Norman (1998) flat-ΛCDM fit, the non-Limber projection assumes flat
+            space, and several of the mass function, bias and concentration models were calibrated on flat
+            ΛCDM simulations.
     m_ncdm : float
         Mass in eV of the massive neutrino state; this class has one (default 0.06).
     N_ur : float
@@ -138,7 +145,7 @@ class Cosmology:
     ...     return p["H0"] * jnp.sqrt(om * (1 + z) ** 3 + 1 - om)
     >>> cosmo = Cosmology(hubble, my_pk, my_da, my_pknl, my_growth, H0=70.0)
     """
-    _STATIC = ("_functions", "_k", "ncdm_mode", "z_max_pk")
+    _STATIC = ("_functions", "k_range", "n_k", "ncdm_mode", "z_max_pk")
     _SETTINGS = ("ncdm_mode",)
     _deg_ncdm = 1  # number of massive neutrino states of mass m_ncdm each
 
@@ -155,15 +162,15 @@ class Cosmology:
                         m_ncdm=m_ncdm, N_ur=N_ur, w0=w0, wa=wa, T_cmb=T_cmb, T_ncdm=T_ncdm, f_ede=f_ede, z_c=z_c,
                         theta_i=theta_i, r=r)
         standard = {n: v for n, v in standard.items() if v is not None}
-        self._setup({**standard, **params}, functions, np.geomspace(*k_range, n_k), ncdm_mode, z_max_pk)
+        self._setup({**standard, **params}, functions, k_range, n_k, ncdm_mode, z_max_pk)
         self._check_functions()
 
-    def _setup(self, params, functions, k_grid, ncdm_mode, z_max_pk=None):
+    def _setup(self, params, functions, k_range, n_k, ncdm_mode, z_max_pk=None):
         if ncdm_mode not in ("cb", "m"):
             raise ValueError(f'ncdm_mode must be "cb" or "m", got {ncdm_mode!r}.')
         self.params = dict(params)
         self._functions = functions
-        self._k = tuple(np.asarray(k_grid, dtype=float))  # static, so equal grids give equal treedefs
+        self.k_range, self.n_k = (float(k_range[0]), float(k_range[1])), int(n_k)  # static: equal settings, equal treedefs
         self.ncdm_mode = ncdm_mode
         self.z_max_pk = None if z_max_pk is None else float(z_max_pk)
 
@@ -186,7 +193,7 @@ class Cosmology:
     def _check_functions(self):
         """Trace the given functions once, so a missing parameter or a wrong shape fails here."""
         p = self.params
-        z, k = jnp.zeros(3), jnp.asarray(self._pk_grid()[:4])
+        z, k = jnp.zeros(3), jnp.asarray(np.geomspace(*self.k_range, self.n_k)[:4])
         args = {"hubble_parameter": ((z, p), (3,)), "pk_linear": ((k, z, p), (4, 3)),
                 "angular_diameter_distance": ((z, p), (3,)), "pk_nonlinear": ((k, z, p), (4, 3)),
                 "growth_factor": ((z, p), (3,))}
@@ -290,20 +297,9 @@ class Cosmology:
         """Call the cosmology's function for ``name`` with its parameters."""
         return getattr(self._functions, name)(*args, self.params)
 
-    @classmethod
-    def _from_params(cls, params):
-        """Cosmology of this class with the given parameter values, for functions that only receive ``p``."""
-        obj = cls.__new__(cls)
-        obj.params = dict(params)
-        return obj
-
     # ------------------------------------------------------------------
     # shared grids
     # ------------------------------------------------------------------
-
-    def _pk_grid(self):
-        # numpy, not jnp: fixed by the cosmology's class, so it stays concrete for mcfit to plan on.
-        return np.asarray(self._k)
 
     @partial(jax.jit, static_argnums=(0,))
     def _compute_sigma_grid(self, z):
@@ -325,7 +321,8 @@ class Cosmology:
         z_grid = jnp.atleast_1d(z)
 
         # Power spectra at the requested redshifts, shape: (n_k, n_z)
-        k_grid = self._pk_grid()
+        # numpy, not jnp: fixed by the settings, so it stays concrete for mcfit to plan on.
+        k_grid = np.geomspace(*self.k_range, self.n_k)
         pk_grid = jnp.reshape(self.pk(k_grid, z_grid, linear=True), (len(k_grid), len(z_grid)))
 
         # mcfit plans on concrete values, so build the transform eagerly even under a trace.
@@ -526,7 +523,7 @@ class Cosmology:
         H_z = self.hubble_parameter(z)
         
         # Convert H(z) from km/s/Mpc to s^-1 inside the prefactor.
-        G, M_sun, Mpc_over_m = Const._G_, Const._M_sun_, Const._Mpc_over_m_
+        G, M_sun, Mpc_over_m = Const.G, Const.M_sun, Const.Mpc_over_m
         rho_crit_factor = (3.0 / (8.0 * jnp.pi * G * M_sun)) * (1e6 * Mpc_over_m)
         
         return rho_crit_factor * H_z**2 
@@ -555,8 +552,8 @@ class Cosmology:
             Physical density in :math:`M_\\odot \\, \\mathrm{Mpc}^{-3}`, with the shape of ``z``.
         """
         p = {**self._fixed_params(), **self.params}
-        sigma_B, c, M_sun, Mpc = Const._sigma_B_, Const._c_, Const._M_sun_, Const._Mpc_over_m_
-        rho_crit_100 = 3.0e10 * Mpc / (8.0 * np.pi * Const._G_ * M_sun)  # critical density for H0 = 100 km/s/Mpc
+        sigma_B, c, M_sun, Mpc = Const.sigma_B, Const.c, Const.M_sun, Const.Mpc_over_m
+        rho_crit_100 = 3.0e10 * Mpc / (8.0 * np.pi * Const.G * M_sun)  # critical density for H0 = 100 km/s/Mpc
         rho_crit_0 = rho_crit_100 * (p["H0"] / 100.0) ** 2
         T_cmb = p.get("T_cmb", 0.0)
         rho_photons = 4.0 * sigma_B * T_cmb**4 / c**3 * Mpc**3 / M_sun
@@ -569,7 +566,7 @@ class Cosmology:
         def rho_nu(zp1):
             if not has_nu:
                 return 0.0 * zp1
-            y = p["m_ncdm"] * Const._eV_ / (Const._k_B_ * p["T_ncdm"] * T_cmb * zp1)
+            y = p["m_ncdm"] * Const.eV / (Const.k_B * p["T_ncdm"] * T_cmb * zp1)
             return self._deg_ncdm * 7.0 / 8.0 * p["T_ncdm"] ** 4 * rho_photons * zp1**4 * _fermi_dirac_energy(y)
 
         zp1 = 1.0 + jnp.asarray(z)
@@ -750,9 +747,9 @@ class Cosmology:
         """
         
         z = jnp.atleast_1d(z)
-        k = self._pk_grid()
+        k = np.geomspace(*self.k_range, self.n_k)
         P = jnp.reshape(self.pk(k, z, linear=True), (len(k), len(z)))
-        W = jnp.atleast_1d(self.growth_rate(z)) * jnp.atleast_1d(self.hubble_parameter(z)) / (1.0 + z) / (Const._c_ / 1e3)
+        W = jnp.atleast_1d(self.growth_rate(z)) * jnp.atleast_1d(self.hubble_parameter(z)) / (1.0 + z) / (Const.c / 1e3)
         integrand = W[None, :] ** 2 / 3 * P * k[:, None] / (2 * jnp.pi**2)
         return jnp.squeeze(jax.scipy.integrate.trapezoid(integrand, x=jnp.log(k), axis=0))
 
@@ -779,7 +776,7 @@ class Cosmology:
         dAz = self.angular_diameter_distance(z)
         Hz = self.hubble_parameter(z)
 
-        return (1 + z)**2 * dAz**2 * (Const._c_ / 1e3) / Hz
+        return (1 + z)**2 * dAz**2 * (Const.c / 1e3) / Hz
    
 
     # ------------------------------------------------------------------
