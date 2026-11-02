@@ -3,6 +3,7 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 from functools import partial
+from jax.scipy.special import sici
 from jax.tree_util import register_pytree_node_class
 
 from hmfast.halos.massdef import MassDefinition
@@ -90,15 +91,20 @@ class NFWMatterProfile(MatterProfile):
             Real-space profile with shape :math:`(N_r, N_m, N_z)`, where
             singleton dimensions get squeezed before return.
         """
-        r = jnp.atleast_1d(r)
-        m = jnp.atleast_1d(m)
-        z = jnp.atleast_1d(z)
+        r, m, z = jnp.atleast_1d(r), jnp.atleast_1d(m), jnp.atleast_1d(z)
+        c = jnp.reshape(halo_model.concentration.c_delta(halo_model.cosmology, m, z, mass_def=halo_model.mass_def), (len(m), len(z)))
+        r_delta = jnp.reshape(halo_model.mass_def.r_delta(halo_model.cosmology, m, z), (len(m), len(z)))
+        r_s = r_delta * (1.0 + z[None, :]) / c
+
+        # Unit-mass profile of Eq. (2), truncated at r_Delta (x = c).
+        f_nfw = 1.0 / (jnp.log1p(c) - c / (1.0 + c))
+        x = r[:, None, None] / r_s[None, :, :]
+        u_r = (1.0 / (4.0 * jnp.pi * r_s**3))[None, :, :] * f_nfw[None, :, :] / (x * (1.0 + x) ** 2)
+        # NaN-safe: a bare `x <= c` would silently zero out NaN instead of propagating it.
+        u_r = jnp.where(jnp.isnan(x) | jnp.isnan(c[None, :, :]) | (x <= c[None, :, :]), u_r, 0.0)
 
         rho_mean_0 = halo_model.cosmology.rho_x(0.0, "matter")  # delta_m = rho_halo / rho_m; neutrinos stay smooth
-        # Normalized real-space profile (unit mass)
-        u_r_norm = jnp.reshape(self._u_r_nfw(halo_model, r, m, z), (len(r), len(m), len(z)))
-        # Mass-weighted profile
-        return jnp.squeeze((m[:, None] / rho_mean_0)[None, :, :] * u_r_norm)
+        return jnp.squeeze((m[:, None] / rho_mean_0)[None, :, :] * u_r)
 
 
     @jax.jit
@@ -129,18 +135,20 @@ class NFWMatterProfile(MatterProfile):
 
         
         k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
-    
-        # Compute u_m_k from Tracer
-        _, u_m = self._u_k_nfw(halo_model, k, m, z)
-        u_m = jnp.reshape(u_m, (len(k), len(m), len(z)))
-        
-        rho_mean_0 = halo_model.cosmology.rho_x(0.0, "matter")  # delta_m = rho_halo / rho_m; neutrinos stay smooth
-        m_over_rho_mean = (m / rho_mean_0)[:, None]  # shape (N_m, 1)
-        m_over_rho_mean = jnp.broadcast_to(m_over_rho_mean, u_m.shape)
+        c = jnp.reshape(halo_model.concentration.c_delta(halo_model.cosmology, m, z, mass_def=halo_model.mass_def), (len(m), len(z)))
+        r_delta = jnp.reshape(halo_model.mass_def.r_delta(halo_model.cosmology, m, z), (len(m), len(z)))
 
-        u_m *= m_over_rho_mean
-    
-        return jnp.squeeze(u_m)
+        # Unit-mass truncated NFW of Eq. (3), shape (N_k, N_m, N_z).
+        c_b = c[None, :, :]
+        q = k[:, None, None] * r_delta[None, :, :] / c_b * (1 + z[None, None, :])
+        q_scaled = (1 + c_b) * q
+        Si_q, Ci_q = sici(q)
+        Si_q_scaled, Ci_q_scaled = sici(q_scaled)
+        f_nfw = 1.0 / (jnp.log1p(c_b) - c_b / (1 + c_b))
+        u_k = (jnp.cos(q) * (Ci_q_scaled - Ci_q) + jnp.sin(q) * (Si_q_scaled - Si_q) - jnp.sin(c_b * q) / q_scaled) * f_nfw
+
+        rho_mean_0 = halo_model.cosmology.rho_x(0.0, "matter")  # delta_m = rho_halo / rho_m; neutrinos stay smooth
+        return jnp.squeeze(u_k * (m / rho_mean_0)[None, :, None])
 
 
 jax.tree_util.register_pytree_node(

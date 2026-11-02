@@ -8,7 +8,7 @@ import numpy as np
 
 from hmfast.halos.massdef import MassDefinition, mass_translator
 from hmfast.halos.profiles import HaloProfile
-from hmfast.utils import Const
+from hmfast.utils import Const, hankel_transform
 
 
 class PressureProfile(HaloProfile):
@@ -18,39 +18,12 @@ class PressureProfile(HaloProfile):
     Child profile classes must implement :meth:`real` and :meth:`fourier`.
     """
 
-    def _fourier_radius_scale(self, halo_model, m, z):
-        raise NotImplementedError()
-
-    @jax.jit
-    def fourier(self, halo_model, k, m, z):
-        """
-        Compute the Fourier-space pressure profile for halo-model calculations.
-
-        Parameters
-        ----------
-        halo_model : HaloModel
-            Halo model providing the cosmology and halo-radius relation.
-        k : float or jnp.ndarray
-            Comoving wavenumber(s) in :math:`\\mathrm{Mpc}^{-1}`.
-        m : float or jnp.ndarray
-            Halo mass or masses in physical :math:`M_\\odot`.
-        z : float or jnp.ndarray
-            Redshift(s).
-
-        Returns
-        -------
-        jnp.ndarray
-            Transformed profile with shape :math:`(N_k, N_m, N_z)`, where
-            singleton dimensions get squeezed before return.
-        """
-        k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
-        r_scale = jnp.reshape(self._fourier_radius_scale(halo_model, m, z), (len(m), len(z)))
-        return self._fourier_via_hankel_transform(halo_model, k, m, z, r_scale)
-
-
 class GNFWPressureProfile(PressureProfile):
     """
     Electron pressure profile from `Nagai, Kravtsov & Vikhlinin (2007) <https://ui.adsabs.harvard.edu/abs/2007ApJ...668....1N/abstract>`_.
+
+    The defaults are the universal profile of `Arnaud et al. (2010) <https://ui.adsabs.harvard.edu/abs/2010A%26A...517A..92A/abstract>`_
+    (their Eq. 12, with :math:`\\alpha_P = 0.12` and :math:`P_0 \\propto h_{70}^{-3/2}`), with hydrostatic mass bias :math:`B = 1.25`.
 
     The profile is evaluated as a function of the comoving radius :math:`r`,
     and its normalization and shape are defined using the native :math:`500c`
@@ -119,14 +92,14 @@ class GNFWPressureProfile(PressureProfile):
         *,
         x_range=(1e-5, 4.0),
         n_x=100,
-        P0=8.130,
-        c500=1.156,
-        alpha=1.0620,
-        beta=5.4807,
-        gamma=0.3292,
-        B=1.4,
+        P0=8.403,
+        c500=1.177,
+        alpha=1.0510,
+        beta=5.4905,
+        gamma=0.3081,
+        B=1.25,
         alpha_P=0.12,
-        P0_hexp=-1.0,
+        P0_hexp=-1.5,
         x_out=jnp.inf,
     ):
 
@@ -237,18 +210,6 @@ class GNFWPressureProfile(PressureProfile):
 
         return self._tree_unflatten(aux_data, new_leaves)
 
-    def _fourier_radius_scale(self, halo_model, m, z):
-        m = jnp.atleast_1d(m)
-        z = jnp.atleast_1d(z)
-
-        m_tilde = jnp.reshape(m[:, None] / self.B, (len(m), 1))
-        m_tilde = jnp.broadcast_to(m_tilde, (len(m), len(z)))
-        r_tilde = jnp.reshape(
-            halo_model.mass_def.r_delta(halo_model.cosmology, m_tilde, z),
-            (len(m), len(z)),
-        )
-        return r_tilde
-
     @jax.jit
     def real(self, halo_model, r, m, z):
         """
@@ -272,55 +233,57 @@ class GNFWPressureProfile(PressureProfile):
             Electron pressure profile with shape :math:`(N_r, N_m, N_z)`,
             where singleton dimensions get squeezed before return.
         """
-        H0 = halo_model.cosmology.H0
-        P0, c500, alpha, beta, gamma, B, alpha_P, P0_hexp, x_out = (
-            self.P0,
-            self.c500,
-            self.alpha,
-            self.beta,
-            self.gamma,
-            self.B,
-            self.alpha_P,
-            self.P0_hexp,
-            self.x_out,
-        )
         r, m, z = jnp.atleast_1d(r), jnp.atleast_1d(m), jnp.atleast_1d(z)
-        h = H0 / 100.0
+        h = halo_model.cosmology.H0 / 100.0
+        E = jnp.atleast_1d(halo_model.cosmology.hubble_parameter(z)) / halo_model.cosmology.H0
+        m_tilde = jnp.broadcast_to((m / self.B)[:, None], (len(m), len(z)))
+        r_tilde = jnp.reshape(halo_model.mass_def.r_delta(halo_model.cosmology, m_tilde, z), (len(m), len(z)))
+        # Eq. (2), times P0, shape (N_m, N_z).
+        P_tilde = self.P0 * 1.65 * (h / 0.7) ** 2 * E[None, :] ** (8 / 3) * (m_tilde * h / (0.7 * 3e14)) ** (2 / 3 + self.alpha_P) * (h / 0.7) ** self.P0_hexp
 
-        m_tilde = jnp.broadcast_to((m / B)[:, None], (len(m), len(z)))
-        r_tilde = jnp.reshape(
-            halo_model.mass_def.r_delta(halo_model.cosmology, m_tilde, z),
-            (len(m), len(z)),
-        )
+        x = r[:, None, None] / ((1.0 + z[None, None, :]) * r_tilde[None, :, :])
+        Pe = P_tilde[None, :, :] * (self.c500 * x) ** (-self.gamma) * (1 + (self.c500 * x) ** self.alpha) ** ((self.gamma - self.beta) / self.alpha)
+        # NaN-safe: a bare `x <= x_out` would silently zero out NaN instead of propagating it.
+        return jnp.squeeze(jnp.where(jnp.isnan(x) | (x <= self.x_out), Pe, 0.0))
 
-        # Convert the comoving radius to the calibrated physical coordinate.
-        x_tilde = r[:, None, None] / ((1.0 + z[None, None, :]) * r_tilde[None, :, :])
+    @jax.jit
+    def fourier(self, halo_model, k, m, z):
+        """
+        Compute the Fourier-space electron-pressure profile.
 
-        # Compute normalization P_500c (with hydrostatic bias)
-        h = H0 / 100.0
-        H = halo_model.cosmology.hubble_parameter(z)  # (Nz,)
-        H = jnp.atleast_1d(H)[None, None, :]  # (1, 1, Nz)
-        m_tilde_h = (m_tilde * h)[None, :, :]
-        P_tilde = (
-            1.65
-            * (h / 0.7) ** 2
-            * (H / H0) ** (8 / 3)
-            * (m_tilde_h / (0.7 * 3e14)) ** (2 / 3 + alpha_P)
-            * (h / 0.7) ** P0_hexp
-        )
+        The shape depends on :math:`x = r / [(1+z)\\, \\tilde{r}_{500c}]` alone, so a single transform of it serves
+        every halo.
 
-        # GNFW profile
-        scaled_x = c500 * x_tilde
-        Pe = (
-            P_tilde
-            * P0
-            * scaled_x ** (-gamma)
-            * (1 + scaled_x**alpha) ** ((gamma - beta) / alpha)
-        )
-        # NaN-safe: a bare `x_tilde <= x_out` would silently zero out NaN instead of propagating it.
-        Pe = jnp.where(jnp.isnan(x_tilde) | (x_tilde <= x_out), Pe, 0.0)
+        Parameters
+        ----------
+        halo_model : HaloModel
+            Halo model providing the cosmology, mass-definition conversion, and halo
+            radius.
+        k : float or jnp.ndarray
+            Comoving wavenumber(s) in :math:`\\mathrm{Mpc}^{-1}`.
+        m : float or jnp.ndarray
+            Halo mass or masses in physical :math:`M_\\odot`.
+        z : float or jnp.ndarray
+            Redshift(s).
 
-        return jnp.squeeze(Pe)
+        Returns
+        -------
+        jnp.ndarray
+            Fourier-space profile with shape :math:`(N_k, N_m, N_z)`, where
+            singleton dimensions get squeezed before return.
+        """
+        k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
+        h = halo_model.cosmology.H0 / 100.0
+        E = jnp.atleast_1d(halo_model.cosmology.hubble_parameter(z)) / halo_model.cosmology.H0
+        m_tilde = jnp.broadcast_to((m / self.B)[:, None], (len(m), len(z)))
+        r_tilde = jnp.reshape(halo_model.mass_def.r_delta(halo_model.cosmology, m_tilde, z), (len(m), len(z)))
+        # Eq. (2), times P0, shape (N_m, N_z).
+        P_tilde = self.P0 * 1.65 * (h / 0.7) ** 2 * E[None, :] ** (8 / 3) * (m_tilde * h / (0.7 * 3e14)) ** (2 / 3 + self.alpha_P) * (h / 0.7) ** self.P0_hexp
+
+        x = np.logspace(np.log10(self.x_range[0]), np.log10(self.x_range[1]), self.n_x)
+        r_com = r_tilde * (1.0 + z)[None, :]  # comoving
+        u = hankel_transform(x, ((self.c500 * x) ** (-self.gamma) * (1 + (self.c500 * x) ** self.alpha) ** ((self.gamma - self.beta) / self.alpha))[:, None, None], k[:, None, None] * r_com[None], self.x_out)
+        return jnp.squeeze(P_tilde * r_com**3 * u)
 
 
 jax.tree_util.register_pytree_node(
@@ -565,21 +528,6 @@ class B12PressureProfile(PressureProfile):
             )
         return self.update(**self._PRESETS[key])
 
-    def _fourier_radius_scale(self, halo_model, m, z):
-        m = jnp.atleast_1d(m)
-        z = jnp.atleast_1d(z)
-
-        mass_def_200c = MassDefinition(200, "critical")
-        translate_to_200c = mass_translator(
-            halo_model.mass_def, mass_def_200c, halo_model.concentration
-        )
-        m200c = jnp.reshape(
-            translate_to_200c(halo_model.cosmology, m, z), (len(m), len(z))
-        )
-        return jnp.reshape(
-            mass_def_200c.r_delta(halo_model.cosmology, m200c, z), (len(m), len(z))
-        )
-
     @jax.jit
     def real(self, halo_model, r, m, z):
         """
@@ -652,6 +600,40 @@ class B12PressureProfile(PressureProfile):
         Pe = jnp.where(jnp.isnan(x_200c) | (x_200c <= x_out), Pe, 0.0)
 
         return jnp.squeeze(Pe)
+
+
+    @jax.jit
+    def fourier(self, halo_model, k, m, z):
+        """
+        Compute the Fourier-space electron-pressure profile, by a Hankel transform of :meth:`real`.
+
+        Parameters
+        ----------
+        halo_model : HaloModel
+            Halo model providing the cosmology, mass-definition conversion, and halo
+            radius.
+        k : float or jnp.ndarray
+            Comoving wavenumber(s) in :math:`\\mathrm{Mpc}^{-1}`.
+        m : float or jnp.ndarray
+            Halo mass or masses in physical :math:`M_\\odot`.
+        z : float or jnp.ndarray
+            Redshift(s).
+
+        Returns
+        -------
+        jnp.ndarray
+            Fourier-space profile with shape :math:`(N_k, N_m, N_z)`, where
+            singleton dimensions get squeezed before return.
+        """
+        k, m, z = jnp.atleast_1d(k), jnp.atleast_1d(m), jnp.atleast_1d(z)
+        mass_def_200c = MassDefinition(200, "critical")
+        m200c = jnp.reshape(mass_translator(halo_model.mass_def, mass_def_200c, halo_model.concentration)(halo_model.cosmology, m, z), (len(m), len(z)))
+        r_com = jnp.reshape(mass_def_200c.r_delta(halo_model.cosmology, m200c, z), (len(m), len(z))) * (1.0 + z)[None, :]
+
+        # Sampled a hair inside each node so a node sitting exactly on x_out is not lost to round-off in real().
+        x = np.logspace(np.log10(self.x_range[0]), np.log10(self.x_range[1]), self.n_x)
+        f = jnp.reshape(self.real(halo_model, x[:, None, None] * (1.0 - 1e-12) * r_com[None], m, z), (len(x), len(m), len(z)))
+        return jnp.squeeze(r_com**3 * hankel_transform(x, f, k[:, None, None] * r_com[None], self.x_out))
 
 
 jax.tree_util.register_pytree_node(

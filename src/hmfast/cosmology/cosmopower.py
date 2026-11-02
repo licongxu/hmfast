@@ -11,7 +11,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from hmfast.cosmology.cosmology import Cosmology
-from hmfast.download import data_path
+from hmfast import data_path
 from hmfast.utils import Const, dopri5_integrate, log_interp1d_extrap
 
 

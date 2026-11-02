@@ -52,7 +52,7 @@ class HaloModel:
         Defaults to ``True``.
     m_range : tuple
         ``(m_min, m_max)`` in :math:`M_\\odot` spanning all mass integrals.
-        Defaults to ``(1e10, 1e15)``.
+        Defaults to ``(1e10, 5e15)``.
     n_m : int
         Number of Gauss-Legendre mass-integral nodes (static: changing it
         triggers recompilation; sweeping ``m_range`` alone does not).
@@ -68,7 +68,7 @@ class HaloModel:
                  subhalo_mass_function=None,
                  concentration=None,
                  hm_consistency=True,
-                 m_range=(1e10, 1e15), n_m=100):
+                 m_range=(1e10, 5e15), n_m=100):
         """Initialize the halo model."""
 
         # None-sentinel: avoids building these (some expensive, some cache-holding) at import time.

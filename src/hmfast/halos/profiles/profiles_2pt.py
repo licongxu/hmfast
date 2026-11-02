@@ -2,6 +2,7 @@ import jax.numpy as jnp
 
 from .cib import CIBProfile
 from .hod import GalaxyHODProfile
+from .matter import NFWMatterProfile
 
 
 def _fourier_2pt_hod(halo_model, profile1, profile2, k, m, z):
@@ -14,10 +15,8 @@ def _fourier_2pt_hod(halo_model, profile1, profile2, k, m, z):
     ng1 = jnp.atleast_1d(profile1.ng_bar(halo_model, z))
     ng2 = jnp.atleast_1d(profile2.ng_bar(halo_model, z))
 
-    _, u1 = profile1._u_k_nfw(halo_model, k, m, z)
-    _, u2 = profile2._u_k_nfw(halo_model, k, m, z)
-    u1 = jnp.reshape(u1, (len(k), len(m), len(z)))
-    u2 = jnp.reshape(u2, (len(k), len(m), len(z)))
+    # Unit-mass NFW satellite profile, shared by both legs.
+    u1 = u2 = jnp.reshape(NFWMatterProfile().fourier(halo_model, k, m, z), (len(k), len(m), len(z))) * (halo_model.cosmology.rho_x(0.0, "matter") / m)[None, :, None]
 
     sat_sat = ns1[None, :, None] * ns2[None, :, None] * u1 * u2
     sat_cen = ns1[None, :, None] * u1 + ns2[None, :, None] * u2
@@ -34,10 +33,8 @@ def _fourier_2pt_cib(halo_model, profile1, profile2, k, m, z):
     ls2 = jnp.reshape(profile2.l_sat(halo_model, m, z), (len(m), len(z)))
     lc2 = jnp.reshape(profile2.l_cen(halo_model, m, z), (len(m), len(z)))
 
-    _, u1 = profile1._u_k_nfw(halo_model, k, m, z)
-    _, u2 = profile2._u_k_nfw(halo_model, k, m, z)
-    u1 = jnp.reshape(u1, (len(k), len(m), len(z)))
-    u2 = jnp.reshape(u2, (len(k), len(m), len(z)))
+    # Unit-mass NFW satellite profile, shared by both legs.
+    u1 = u2 = jnp.reshape(NFWMatterProfile().fourier(halo_model, k, m, z), (len(k), len(m), len(z))) * (halo_model.cosmology.rho_x(0.0, "matter") / m)[None, :, None]
 
     prefactor = 1.0 / (4.0 * jnp.pi) ** 2
     sat_sat = ls1[None, :, :] * ls2[None, :, :] * u1 * u2

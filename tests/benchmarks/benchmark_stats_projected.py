@@ -25,7 +25,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from hmfast.download import data_path
+from hmfast import data_path
 from hmfast.halos.massdef import MassDefinition
 from hmfast.halos.profiles import GNFWPressureProfile, NFWMatterProfile, S12CIBProfile, Z07GalaxyHODProfile
 from hmfast.stats import Pk, cl, cl_linbias, corr_angular

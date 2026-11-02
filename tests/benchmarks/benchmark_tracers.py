@@ -26,7 +26,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from hmfast.download import data_path
+from hmfast import data_path
 from hmfast.tracers import CIBTracer, CMBLensingTracer, GalaxyLensingTracer, GalaxyTracer, tSZTracer
 
 from .._shared import ccl_cosmology, peak_err

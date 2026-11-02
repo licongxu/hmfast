@@ -15,7 +15,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from hmfast.download import data_path
+from hmfast import data_path
 from hmfast.halos.profiles import GNFWPressureProfile, NFWMatterProfile, Z07GalaxyHODProfile
 from hmfast.stats import Pk, cl
 from hmfast.tracers import GalaxyTracer, tSZTracer

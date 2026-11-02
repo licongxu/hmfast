@@ -10,7 +10,7 @@ __author__ = "Patrick Janulewicz, Licong Xu, Boris Bolliet"
 __email__ = "pj407@cam.ac.uk"
 
 
-from .download import download_emulators
+from .download import data_path, download_emulators
 
 download_emulators(emulator_set=["lcdm:v1", "ede:v2"], skip_existing=True)
 
@@ -20,4 +20,4 @@ from . import cosmology
 from . import tracers
 
 
-__all__ = ["cosmology", "halos", "tracers", "download_emulators"]
+__all__ = ["cosmology", "halos", "tracers", "data_path", "download_emulators"]

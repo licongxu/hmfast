@@ -25,7 +25,8 @@ class CIBTracer(Tracer):
     profile : CIBProfile
         Infrared emissivity profile used to model the cosmic infrared background signal.
     z_range : tuple of float
-        ``(z_min, z_max)`` over which the kernel has support.
+        ``(z_min, z_max)`` over which the kernel has support; projections start
+        at :math:`z = 10^{-5}` if ``z_min`` is lower.
     """
 
     _required_profile_type = CIBProfile

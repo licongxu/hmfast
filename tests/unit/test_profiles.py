@@ -26,8 +26,7 @@ from hmfast.halos.profiles import (
     S12CIBProfile,
     Z07GalaxyHODProfile,
 )
-from hmfast.halos.profiles.base_profile import HankelTransform
-from hmfast.utils import gauss_legendre_nodes_weights
+from hmfast.utils import gauss_legendre_nodes_weights, hankel_transform
 
 from .._shared import halo_model, shared
 
@@ -155,24 +154,17 @@ SHAPE_MATRIX_KZ = [
 
 
 class TestHaloProfileBase:
-    # HankelTransform.transform()'s output grid is the input grid plus pad_decades of extra log-spaced nodes, and matches it unpadded.
-    @pytest.mark.parametrize("pad_decades", [2.0, 0.7])
-    def test_hankel_transform_shape(self, pad_decades):
-        x_grid = jnp.logspace(-4, 1, 64)
-        f_theta = jnp.exp(-x_grid)
-        k, y_k = HankelTransform(x_grid, nu=0.5, pad_decades=pad_decades).transform(f_theta)
-        n_pad = int(np.ceil(pad_decades * np.log(10.0) / np.log(float(x_grid[1] / x_grid[0]))))
-        assert k.shape == (x_grid.shape[0] + n_pad,)
-        assert y_k.shape == k.shape
-        k0, y_k0 = HankelTransform(x_grid, nu=0.5, pad_decades=0.0).transform(f_theta)
-        assert k0.shape == x_grid.shape
-        assert y_k0.shape == k0.shape
-
-    # HankelTransform stores whatever x it's given verbatim -- no internal sorting.
-    def test_hankel_transform_requires_presorted_x(self):
-        x_unsorted = jnp.array([1.0, 0.1, 10.0, 0.5])
-        ht = HankelTransform(x_unsorted, nu=0.5)
-        assert jnp.array_equal(ht.x, x_unsorted)
+    # GNFW's single 1-D transform of its shape equals hankel_transform of real() sampled halo by halo on the same grid.
+    @pytest.mark.parametrize("x_out", [jnp.inf, 4.0])
+    def test_gnfw_self_similar_matches_per_halo(self, hm200c, x_out):
+        gnfw = GNFWPressureProfile(B=1.0, x_out=x_out)
+        k, m, z = jnp.geomspace(1e-3, 10.0, 20), jnp.geomspace(1e11, 1e15, 6), jnp.array([0.1, 1.0])
+        hm = hm200c.update(mass_def=shared(MassDefinition, 500, "critical"))
+        r = jnp.reshape(hm.mass_def.r_delta(hm.cosmology, m, z), (len(m), len(z))) * (1.0 + z)  # comoving r_500c (B = 1)
+        x = np.logspace(np.log10(gnfw.x_range[0]), np.log10(gnfw.x_range[1]), gnfw.n_x)
+        f = jnp.reshape(gnfw.real(hm, x[:, None, None] * (1.0 - 1e-12) * r[None], m, z), (len(x), len(m), len(z)))
+        per_halo = r**3 * hankel_transform(x, f, k[:, None, None] * r[None], x_out)
+        np.testing.assert_allclose(gnfw.fourier(hm, k, m, z), per_halo, rtol=1e-10, atol=1e-10 * float(jnp.max(jnp.abs(per_halo))))
 
 
 class TestMassIntegral2pt:

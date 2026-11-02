@@ -1,4 +1,4 @@
-from .base_profile import HaloProfile, HankelTransform
+from .base_profile import HaloProfile
 from .cib import CIBProfile, S12CIBProfile, M21CIBProfile
 from .density import DensityProfile, B16DensityProfile
 from .hod import GalaxyHODProfile, Z07GalaxyHODProfile

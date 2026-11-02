@@ -8,6 +8,7 @@ from jax.scipy.special import erf
 
 from hmfast.halos.profiles import HaloProfile
 from hmfast.utils import gauss_legendre_nodes_weights
+from hmfast.halos.profiles.matter import NFWMatterProfile
 
 
 class GalaxyHODProfile(HaloProfile):
@@ -296,7 +297,7 @@ class Z07GalaxyHODProfile(GalaxyHODProfile):
         Nc = self.n_cen(halo_model, m)
         ng = jnp.atleast_1d(self.ng_bar(halo_model, z))
 
-        u_m = jnp.reshape(self._u_r_nfw(halo_model, r, m, z), (len(r), len(m), len(z)))
+        u_m = jnp.reshape(NFWMatterProfile().real(halo_model, r, m, z), (len(r), len(m), len(z))) * (halo_model.cosmology.rho_x(0.0, "matter") / m)[None, :, None]
 
         return jnp.squeeze((1 / ng[None, None, :]) * (Nc[None, :, None] + Ns[None, :, None] * u_m))
 
@@ -334,8 +335,7 @@ class Z07GalaxyHODProfile(GalaxyHODProfile):
         Nc = self.n_cen(halo_model, m)
         ng = jnp.atleast_1d(self.ng_bar(halo_model, z))
 
-        _, u_m = self._u_k_nfw(halo_model, k, m, z)
-        u_m = jnp.reshape(u_m, (len(k), len(m), len(z)))
+        u_m = jnp.reshape(NFWMatterProfile().fourier(halo_model, k, m, z), (len(k), len(m), len(z))) * (halo_model.cosmology.rho_x(0.0, "matter") / m)[None, :, None]
 
         u_k = (1 / ng[None, None, :]) * (Nc[None, :, None] + Ns[None, :, None] * u_m)
         return jnp.squeeze(u_k)

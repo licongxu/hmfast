@@ -6,9 +6,10 @@ import jax.scipy as jscipy
 import mcfit
 from functools import partial
 
-from hmfast.download import data_path
+from hmfast import data_path
 from hmfast.utils import lambertw, Const, gauss_legendre_nodes_weights
 from hmfast.halos.profiles import HaloProfile
+from hmfast.halos.profiles.matter import NFWMatterProfile
 
 
 class CIBProfile(HaloProfile):
@@ -482,7 +483,7 @@ class S12CIBProfile(CIBProfile):
 
         ls = jnp.reshape(self.l_sat(halo_model, m, z), (len(m), len(z)))
         lc = jnp.reshape(self.l_cen(halo_model, m, z), (len(m), len(z)))
-        u_m = jnp.reshape(self._u_r_nfw(halo_model, r, m, z), (len(r), len(m), len(z)))
+        u_m = jnp.reshape(NFWMatterProfile().real(halo_model, r, m, z), (len(r), len(m), len(z))) * (halo_model.cosmology.rho_x(0.0, "matter") / m)[None, :, None]
 
         sat_term = (1 / (4 * jnp.pi)) * (ls[None, :, :] * u_m)
         # The central galaxy is a Dirac delta at r=0, not a constant radial offset.
@@ -518,8 +519,7 @@ class S12CIBProfile(CIBProfile):
 
         ls = jnp.reshape(self.l_sat(halo_model, m, z), (len(m), len(z)))
         lc = jnp.reshape(self.l_cen(halo_model, m, z), (len(m), len(z)))
-        _, u_m = self._u_k_nfw(halo_model, k, m, z)
-        u_m = jnp.reshape(u_m, (len(k), len(m), len(z)))
+        u_m = jnp.reshape(NFWMatterProfile().fourier(halo_model, k, m, z), (len(k), len(m), len(z))) * (halo_model.cosmology.rho_x(0.0, "matter") / m)[None, :, None]
 
         sat_term = (1 / (4 * jnp.pi)) * (ls[None, :, :] * u_m)
         cen_term = jnp.broadcast_to((1 / (4 * jnp.pi)) * lc[None, :, :], sat_term.shape)
@@ -1004,7 +1004,7 @@ class M21CIBProfile(CIBProfile):
 
         ls = jnp.reshape(self.l_sat(halo_model, m, z), (len(m), len(z)))
         lc = jnp.reshape(self.l_cen(halo_model, m, z), (len(m), len(z)))
-        u_m = jnp.reshape(self._u_r_nfw(halo_model, r, m, z), (len(r), len(m), len(z)))
+        u_m = jnp.reshape(NFWMatterProfile().real(halo_model, r, m, z), (len(r), len(m), len(z))) * (halo_model.cosmology.rho_x(0.0, "matter") / m)[None, :, None]
 
         sat_term = (1 / (4 * jnp.pi)) * (ls[None, :, :] * u_m)
         # The central galaxy is a Dirac delta at r=0, not a constant radial offset.
@@ -1041,8 +1041,7 @@ class M21CIBProfile(CIBProfile):
 
         ls = jnp.reshape(self.l_sat(halo_model, m, z), (len(m), len(z)))
         lc = jnp.reshape(self.l_cen(halo_model, m, z), (len(m), len(z)))
-        _, u_m = self._u_k_nfw(halo_model, k, m, z)
-        u_m = jnp.reshape(u_m, (len(k), len(m), len(z)))
+        u_m = jnp.reshape(NFWMatterProfile().fourier(halo_model, k, m, z), (len(k), len(m), len(z))) * (halo_model.cosmology.rho_x(0.0, "matter") / m)[None, :, None]
 
         sat_term = (1 / (4 * jnp.pi)) * (ls[None, :, :] * u_m)
         cen_term = jnp.broadcast_to((1 / (4 * jnp.pi)) * lc[None, :, :], sat_term.shape)

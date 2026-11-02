@@ -4,6 +4,7 @@ import numpy as np
 
 from hmfast.halos.massdef import MassDefinition, mass_translator
 from hmfast.halos.profiles import HaloProfile
+from hmfast.utils import hankel_transform
 
 
 class DensityProfile(HaloProfile):
@@ -369,7 +370,12 @@ class B16DensityProfile(DensityProfile):
         m_200c = jnp.reshape(mass_translator(halo_model.mass_def, mass_def_200c, halo_model.concentration)(halo_model.cosmology, m, z), (len(m), len(z)))
         r_delta = jnp.reshape(mass_def_200c.r_delta(halo_model.cosmology, m_200c, z), (len(m), len(z)))
         halo_model_200c = halo_model.update(mass_def=mass_def_200c)
-        return self._fourier_via_hankel_transform(halo_model_200c, k, m_200c, z, r_delta)
+        r_com = r_delta * (1.0 + z)[None, :]
+
+        # Sampled a hair inside each node so a node sitting exactly on x_out is not lost to round-off in real().
+        x = np.logspace(np.log10(self.x_range[0]), np.log10(self.x_range[1]), self.n_x)
+        f = jnp.reshape(self.real(halo_model_200c, x[:, None, None] * (1.0 - 1e-12) * r_com[None], m_200c, z), (len(x), len(m), len(z)))
+        return jnp.squeeze(r_com**3 * hankel_transform(x, f, k[:, None, None] * r_com[None], self.x_out))
 
 
 jax.tree_util.register_pytree_node(

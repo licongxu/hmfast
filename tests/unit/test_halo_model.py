@@ -261,7 +261,7 @@ class TestHaloModelCore:
         assert isinstance(hm.concentration, D08Concentration)
         assert hm.hm_consistency is True
         assert hm.n_m == 100
-        assert (float(hm.m_range[0]), float(hm.m_range[1])) == (1e10, 1e15)
+        assert (float(hm.m_range[0]), float(hm.m_range[1])) == (1e10, 5e15)
 
     # update() returns a new HaloModel, changing only the field passed and leaving all others identical.
     def test_update_returns_new_object_preserving_untouched_fields(self, fixed_cosmology):

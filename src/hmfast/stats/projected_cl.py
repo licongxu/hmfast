@@ -170,13 +170,10 @@ def _nonlimber_cl(cosmology, tracer1, tracer2, l, z_range, *, linear, mass_integ
     k_fine = jnp.geomspace(k_lo, k_grid[-1], n_k)
     k_max = k_fine[-1]
 
-    # Zero-pad n_fft//4 nodes on each side, as SwiftCl does, so FFTLog's periodic wrap never meets a non-zero kernel edge.
-    n_pad = n_fft // 4
-    n_tot = n_fft + 2 * n_pad
-    d_ln_chi = jnp.log(chi_max / chi_min) / (n_fft - 1)
-    node_idx = jnp.arange(n_tot) - n_pad
-    chi_nodes = chi_min * jnp.exp(d_ln_chi * node_idx)
-    in_support = (node_idx >= 0) & (node_idx <= n_fft - 1)
+    # FFTLog chi grid spans 3 decades below and 2 above the kernels (SwiftCl's margins), zero outside their support.
+    n_tot = n_fft
+    chi_nodes = 1e-3 * chi_min * jnp.exp(jnp.linspace(0.0, 1.0, n_tot) * jnp.log(1e5 * chi_max / chi_min))
+    in_support = (chi_nodes >= chi_min) & (chi_nodes <= chi_max)
     # Invert chi(z) via interpolation on a dense z grid extended to z=1200.
     z_dense = jnp.concatenate([_Z_INVERT, jnp.geomspace(_Z_INVERT[-1] + 1.0, 1200.0, 500)])
     chi_dense = cosmology.angular_diameter_distance(z_dense) * (1.0 + z_dense)

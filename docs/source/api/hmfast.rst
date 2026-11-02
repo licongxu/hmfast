@@ -5,4 +5,4 @@ hmfast
 
 .. autofunction:: download_emulators
 
-.. autofunction:: hmfast.download.data_path
+.. autofunction:: data_path

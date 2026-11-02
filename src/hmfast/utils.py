@@ -1,5 +1,6 @@
 import jax
 import jax.numpy as jnp
+import mcfit
 import numpy as np
 from jax import lax
 from functools import partial
@@ -36,7 +37,7 @@ class Const:
 
 
 # Newton's method root finder
-def newton_solver(f, x0, tol=1e-8, max_iter=25):
+def _newton_solver(f, x0, tol=1e-8, max_iter=25):
     df = jax.grad(f)
     def cond_fn(state):
         x, i = state
@@ -52,7 +53,7 @@ def newton_solver(f, x0, tol=1e-8, max_iter=25):
 
 def newton_root(f, x0, tol=1e-8, max_iter=25):
     def solve(f, x0):
-        return newton_solver(f, x0, tol=tol, max_iter=max_iter)
+        return _newton_solver(f, x0, tol=tol, max_iter=max_iter)
     # For scalar roots, use the recommended tangent_solve
     tangent_solve = lambda g, y: y / g(1.0)
     return lax.custom_root(f, x0, solve, tangent_solve=tangent_solve)
@@ -231,6 +232,44 @@ def log_interp1d_extrap(x, xp, fp):
     return jnp.exp(log_f)
 
 
+def _cubic_interp_uniform(x, x0, dx, fp, left, right):
+    """
+    Cubic convolution interpolation (Keys 1981, a = -1/2) of data on a uniform grid, along its first axis.
+
+    The grid is ``x0 + i * dx`` for ``i = 0, ..., n - 1``. The two end intervals are interpolated linearly, and
+    points outside the grid take ``left`` or ``right``. Every trailing axis of ``fp`` is an independent column
+    sharing the grid, so many columns are interpolated in one call.
+
+    Parameters
+    ----------
+    x : jnp.ndarray
+        Evaluation points, with as many axes as ``fp``; trailing axes broadcast against those of ``fp``.
+    x0 : float
+        First grid node.
+    dx : float
+        Grid spacing.
+    fp : jnp.ndarray
+        Values on the grid, shape ``(n, ...)`` with ``n >= 4``.
+    left, right : float or jnp.ndarray
+        Values below the first and above the last grid node, broadcastable to the output.
+
+    Returns
+    -------
+    jnp.ndarray
+        Interpolated values, with the broadcast shape of ``x`` and the trailing axes of ``fp``.
+    """
+    n = fp.shape[0]
+    t = (x - x0) / dx
+    at = lambda idx: jnp.take_along_axis(fp, idx, axis=0)
+    i = jnp.clip(jnp.floor(t).astype(int), 1, n - 3)
+    d = t - i
+    p0, p1, p2, p3 = at(i - 1), at(i), at(i + 1), at(i + 2)
+    f = p1 + 0.5 * d * (p2 - p0 + d * (2 * p0 - 5 * p1 + 4 * p2 - p3 + d * (3 * (p1 - p2) + p3 - p0)))
+    j = jnp.clip(jnp.floor(t).astype(int), 0, n - 2)
+    f = jnp.where((t < 1) | (t > n - 2), at(j) + (t - j) * (at(j + 1) - at(j)), f)
+    return jnp.where(t < 0, left, jnp.where(t > n - 1, right, f))
+
+
 def gauss_legendre_nodes_weights(a, b, n):
     """
     Gauss-Legendre quadrature nodes and weights on ``[a, b]``.
@@ -259,3 +298,61 @@ def gauss_legendre_nodes_weights(a, b, n):
     x_ref, w_ref = jnp.asarray(x_ref), jnp.asarray(w_ref)
     scale = 0.5 * (b - a)
     return scale * x_ref + 0.5 * (a + b), scale * w_ref
+
+_HANKEL_MATRICES = {}  # (x_min, x_max, n) -> (q nodes, transform matrix), built once per grid per process
+
+
+def hankel_transform(x, f, q, x_out=jnp.inf):
+    """
+    Spherical Hankel transform :math:`F(q) = 4\\pi \\int_0^{x_{\\rm out}} x^2 f(x)\\, j_0(q x)\\, dx` of a function
+    sampled on a log-spaced grid, interpolated to ``q``.
+
+    The integral stops at ``x_out`` or at the end of the grid, whichever comes first. At low :math:`q` it is done by
+    direct quadrature of the same samples, and :math:`q` below the transform's own grid takes the :math:`q = 0` value.
+
+    Parameters
+    ----------
+    x : np.ndarray
+        Log-spaced sample points, shape ``(n,)``.
+    f : jnp.ndarray
+        Samples, shape ``(n, ...)``; every trailing axis is an independent function on the same grid.
+    q : jnp.ndarray
+        Points at which to evaluate the transform, with as many axes as ``f``; trailing axes broadcast against
+        those of ``f``.
+    x_out : float, optional
+        Truncation point; ``f`` is taken to vanish beyond it.
+
+    Returns
+    -------
+    jnp.ndarray
+        Transform at ``q``, with the broadcast shape of ``q`` and the trailing axes of ``f``.
+    """
+    x = np.asarray(x, dtype=np.float64)
+    h = np.log(x[1] / x[0])
+    key = (x[0], x[-1], len(x))
+    if key not in _HANKEL_MATRICES:
+        # Zero-pad 2 decades past x[-1]; linear on a fixed grid, so its matrix (the transform of the identity) does every column in one product.
+        n_pad = int(np.ceil(2.0 * np.log(10.0) / h))
+        with jax.ensure_compile_time_eval():
+            hankel = mcfit.Hankel(x[0] * np.exp(h * np.arange(len(x) + n_pad)), nu=0.5, lowring=True, backend="jax")
+            q_n, y = hankel(jnp.pad(jnp.eye(len(x)), [(0, 0), (0, n_pad)]), extrap=False)
+        _HANKEL_MATRICES[key] = (np.asarray(q_n), np.asarray(y).T)
+    q_native, matrix = _HANKEL_MATRICES[key]
+    col = lambda a: jnp.reshape(a, (-1,) + (1,) * (f.ndim - 1))
+
+    # Log-trapezoid end weight at the truncation point, clipped to the grid edge; O(h^2) instead of O(h).
+    s = jnp.log(jnp.minimum(x_out, x[-1]) / x[0]) / h
+    s = jnp.where(jnp.abs(s - jnp.round(s)) < 1e-6, jnp.round(s), s)
+    i = col(jnp.arange(len(x)))
+    w = jnp.where(i < jnp.floor(s), 1.0, jnp.where(i == jnp.floor(s), 0.5 + s - jnp.floor(s), 0.0))
+    moment = h * w * col(x) ** 3 * f
+
+    # Below q = 1 / x_s the native transform loses accuracy, so those nodes take direct quadrature of the same samples.
+    u = jnp.tensordot(matrix, w * col(x) ** 0.5 * f, axes=1) * col(jnp.sqrt(jnp.pi / (2.0 * q_native)))
+    x_s = jnp.max(jnp.where(w > 0, col(x), 0.0))
+    u_direct = jnp.tensordot(jnp.sinc(q_native[:, None] * x[None, :] / jnp.pi), moment, axes=1)
+    u = jnp.where(col(q_native) <= 1.0 / x_s, u_direct, u)
+
+    # Cubic in ln q on the native grid, with the q -> 0 value below it.
+    lq = np.log(q_native)
+    return 4.0 * jnp.pi * _cubic_interp_uniform(jnp.log(q), lq[0], lq[1] - lq[0], u, jnp.sum(moment, axis=0)[None], u[-1][None])
