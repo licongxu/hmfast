@@ -8,7 +8,7 @@ import numpy as np
 
 from hmfast.halos.massdef import MassDefinition, mass_translator
 from hmfast.halos.profiles import HaloProfile
-from hmfast.utils import Const, hankel_transform
+from hmfast.utils import Const, hankel_transform, inside_truncation
 
 
 class PressureProfile(HaloProfile):
@@ -244,7 +244,7 @@ class GNFWPressureProfile(PressureProfile):
         x = r[:, None, None] / ((1.0 + z[None, None, :]) * r_tilde[None, :, :])
         Pe = P_tilde[None, :, :] * (self.c500 * x) ** (-self.gamma) * (1 + (self.c500 * x) ** self.alpha) ** ((self.gamma - self.beta) / self.alpha)
         # NaN-safe: a bare `x <= x_out` would silently zero out NaN instead of propagating it.
-        return jnp.squeeze(jnp.where(jnp.isnan(x) | (x <= self.x_out), Pe, 0.0))
+        return jnp.squeeze(jnp.where(inside_truncation(x, self.x_out), Pe, 0.0))
 
     @jax.jit
     def fourier(self, halo_model, k, m, z):
@@ -597,7 +597,7 @@ class B12PressureProfile(PressureProfile):
 
         Pe = P_200c * P0 * p_x
         # NaN-safe: a bare `x_200c <= x_out` would silently zero out NaN instead of propagating it.
-        Pe = jnp.where(jnp.isnan(x_200c) | (x_200c <= x_out), Pe, 0.0)
+        Pe = jnp.where(inside_truncation(x_200c, x_out), Pe, 0.0)
 
         return jnp.squeeze(Pe)
 
@@ -632,7 +632,9 @@ class B12PressureProfile(PressureProfile):
 
         # Sampled a hair inside each node so a node sitting exactly on x_out is not lost to round-off in real().
         x = np.logspace(np.log10(self.x_range[0]), np.log10(self.x_range[1]), self.n_x)
-        f = jnp.reshape(self.real(halo_model, x[:, None, None] * (1.0 - 1e-12) * r_com[None], m, z), (len(x), len(m), len(z)))
+        # 1e-5 is representable in float32. 1e-12 rounds away, so the boundary
+        # sample was evaluated a ulp outside x_out and dropped on TPU.
+        f = jnp.reshape(self.real(halo_model, x[:, None, None] * (1.0 - 1e-5) * r_com[None], m, z), (len(x), len(m), len(z)))
         return jnp.squeeze(r_com**3 * hankel_transform(x, f, k[:, None, None] * r_com[None], self.x_out))
 
 

@@ -6,9 +6,6 @@ from hmfast.halos.profiles import MatterProfile, NFWMatterProfile
 from hmfast.utils import Const
 
 
-jax.config.update("jax_enable_x64", True)
-
-
 class GalaxyLensingTracer(Tracer):
     """
     Galaxy weak lensing tracer.

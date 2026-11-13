@@ -11,6 +11,8 @@ import jax.numpy as jnp
 import mcfit
 import numpy as np
 
+from hmfast.precision import numpy_real_dtype
+
 
 # Bessel order of the flat-sky Hankel kernel for each angular correlation type.
 _ANGULAR_NU = {"NN": 0, "NG": 2, "GG+": 0, "GG-": 4}
@@ -19,7 +21,7 @@ _ANGULAR_NU = {"NN": 0, "NG": 2, "GG+": 0, "GG-": 4}
 def _log_grid(x, name):
     """Return ``x`` as a concrete 1D numpy array, checking it is log-uniformly spaced."""
     try:
-        x = np.asarray(x, dtype=np.float64)
+        x = np.asarray(x, dtype=numpy_real_dtype())
     except jax.errors.TracerArrayConversionError:
         raise ValueError(
             f"`{name}` must be concrete (e.g. a numpy array), not traced: the FFTLog plan is built from its values."
@@ -35,7 +37,7 @@ def _log_grid(x, name):
 @functools.lru_cache(maxsize=None)
 def _transform(kind, x_bytes, nu, extrap):
     """Jitted mcfit transform along axis 0, built once per grid outside any trace."""
-    x = np.frombuffer(x_bytes, dtype=np.float64)
+    x = np.frombuffer(x_bytes, dtype=numpy_real_dtype())
     # mcfit plans on concrete values, so keep its setup concrete even when first reached under a trace.
     with jax.ensure_compile_time_eval():
         if kind == "P2xi":

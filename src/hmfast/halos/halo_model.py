@@ -16,8 +16,6 @@ from hmfast.halos.profiles.profiles_2pt import _fourier_2pt
 from hmfast.cosmology import CosmoPowerCosmology
 from hmfast.utils import gauss_legendre_nodes_weights
 
-jax.config.update("jax_enable_x64", True)
-
 
 class HaloModel:
     """

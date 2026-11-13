@@ -5,8 +5,6 @@ from hmfast.tracers.base_tracer import Tracer
 from hmfast.halos.profiles import GalaxyHODProfile, Z07GalaxyHODProfile
 from hmfast.utils import Const
 
-# Ensure high precision for cosmological integrations
-jax.config.update("jax_enable_x64", True)
 
 class GalaxyTracer(Tracer):
     """

@@ -1,9 +1,11 @@
+import warnings
+from functools import partial
+
 import jax
 import jax.numpy as jnp
 import mcfit
 import numpy as np
 from jax import lax
-from functools import partial
 
 
 # This file is primarily to implement functions/units that are needed for this package but are not implemented in JAX
@@ -232,6 +234,26 @@ def log_interp1d_extrap(x, xp, fp):
     return jnp.exp(log_f)
 
 
+def _gather_along0(values, index):
+    """Gather ``values`` along axis 0.
+
+    ``take_along_axis`` for a short table and a large index is about 10 ms on
+    this TPU. Indexing the table directly is one gather and stays under 0.2 ms.
+    A trailing shape of all ones is a single shared column.
+    """
+    trail = values.shape[1:]
+    if not trail:
+        return values[index]
+    if all(size == 1 for size in trail):
+        return values.reshape((values.shape[0],))[index]
+    if index.shape[-len(trail):] != trail:
+        index = jnp.broadcast_to(index, index.shape[:-len(trail)] + trail)
+    n_columns = int(np.prod(trail, dtype=int))
+    table = values.reshape((values.shape[0], n_columns))
+    gathered = table[index.reshape((-1, n_columns)), jnp.arange(n_columns)]
+    return gathered.reshape(index.shape)
+
+
 def _cubic_interp_uniform(x, x0, dx, fp, left, right):
     """
     Cubic convolution interpolation (Keys 1981, a = -1/2) of data on a uniform grid, along its first axis.
@@ -260,14 +282,17 @@ def _cubic_interp_uniform(x, x0, dx, fp, left, right):
     """
     n = fp.shape[0]
     t = (x - x0) / dx
-    at = lambda idx: jnp.take_along_axis(fp, idx, axis=0)
+    at = lambda idx: _gather_along0(fp, idx)
     i = jnp.clip(jnp.floor(t).astype(int), 1, n - 3)
     d = t - i
     p0, p1, p2, p3 = at(i - 1), at(i), at(i + 1), at(i + 2)
     f = p1 + 0.5 * d * (p2 - p0 + d * (2 * p0 - 5 * p1 + 4 * p2 - p3 + d * (3 * (p1 - p2) + p3 - p0)))
     j = jnp.clip(jnp.floor(t).astype(int), 0, n - 2)
-    f = jnp.where((t < 1) | (t > n - 2), at(j) + (t - j) * (at(j + 1) - at(j)), f)
-    return jnp.where(t < 0, left, jnp.where(t > n - 1, right, f))
+    linear = at(j) + (t - j) * (at(j + 1) - at(j))
+    # lax.select, not jnp.where: where is an outlined call and breaks fusion on TPU.
+    f = jax.lax.select((t < 1) | (t > n - 2), linear, f)
+    f = jax.lax.select(t > n - 1, jnp.broadcast_to(right, f.shape), f)
+    return jax.lax.select(t < 0, jnp.broadcast_to(left, f.shape), f)
 
 
 def gauss_legendre_nodes_weights(a, b, n):
@@ -299,7 +324,164 @@ def gauss_legendre_nodes_weights(a, b, n):
     scale = 0.5 * (b - a)
     return scale * x_ref + 0.5 * (a + b), scale * w_ref
 
+def inside_truncation(x, x_out):
+    """Whether a radius is inside ``x_out``, including the boundary.
+
+    ``x = r / r_delta`` computed in float32 can land a few ulps above the
+    truncation value when the sample was meant to sit on it. A relative pad of
+    ``1e-5`` keeps that boundary sample. The pad is far smaller than the
+    radial grid spacing, and a NaN radius stays NaN.
+    """
+    return jnp.isnan(x) | (x <= x_out * (1.0 + 1e-5))
+
+
+def pairwise_sum(values, axis=0):
+    """Sum ``values`` along ``axis`` by a balanced tree.
+
+    A sequential sum in float32 drops digits when the terms cancel or span many
+    decades. Pairing them keeps those digits. The length of ``axis`` is static.
+    """
+    values = jnp.moveaxis(values, axis, 0)
+
+    def add(block):
+        n = block.shape[0]
+        if n == 1:
+            return block[0]
+        mid = n // 2
+        return add(block[:mid]) + add(block[mid:])
+
+    return add(values)
+
+
+def pairwise_contract(matrix, samples):
+    """Contract ``matrix`` (m, n) with ``samples`` (n, ...) by a pairwise sum on ``n``."""
+    matrix = jnp.asarray(matrix, dtype=samples.dtype)
+
+    def add(mat, samp):
+        n = samp.shape[0]
+        if n == 1:
+            # Keep the matrix axis in front. A bare (m,) times a trailing
+            # vector would broadcast from the right and move that axis.
+            lead = mat[:, 0].reshape((mat.shape[0],) + (1,) * samp[0].ndim)
+            return lead * samp[0]
+        mid = n // 2
+        return add(mat[:, :mid], samp[:mid]) + add(mat[:, mid:], samp[mid:])
+
+    return add(matrix, samples)
+
+
 _HANKEL_MATRICES = {}  # (x_min, x_max, n) -> (q nodes, transform matrix), built once per grid per process
+
+
+def _truncation_steps(x64, h, x_out):
+    """Number of log-steps from ``x64[0]`` to the truncation, snapped to an integer.
+
+    A truncation that lands on a grid node is an integer step count. Float32
+    ``log`` misses that integer by several ulps, which drops the boundary
+    sample, so the count is formed in float64 whenever ``x_out`` is a concrete
+    number. A traced ``x_out`` keeps the JAX path with a snap wide enough for
+    float32.
+    """
+    limit = _concrete_float(x_out)
+    if limit is None:
+        s = jnp.log(jnp.minimum(x_out, x64[-1]) / x64[0]) / h
+        return jnp.where(jnp.abs(s - jnp.round(s)) < 1e-4, jnp.round(s), s)
+    if not np.isfinite(limit):
+        s = np.log(x64[-1] / x64[0]) / h
+    else:
+        s = np.log(min(limit, x64[-1]) / x64[0]) / h
+    if abs(s - round(s)) < 1e-4:
+        s = round(s)
+    return s
+
+
+def _concrete_float(value):
+    """Python float for a concrete number, or None when ``value`` is traced."""
+    if isinstance(value, (float, int, np.floating, np.integer)):
+        return float(value)
+    try:
+        array = np.asarray(value)
+    except Exception:
+        return None
+    if array.shape != () or not np.issubdtype(array.dtype, np.number):
+        return None
+    return float(array)
+
+
+def _cubic_basis(fraction):
+    """Weights on the samples at ``i-1, i, i+1, i+2`` for fraction ``t - i``."""
+    d2 = fraction * fraction
+    d3 = d2 * fraction
+    return (
+        -0.5 * fraction + d2 - 0.5 * d3,
+        1.0 - 2.5 * d2 + 1.5 * d3,
+        0.5 * fraction + 2.0 * d2 - 1.5 * d3,
+        -0.5 * d2 + 0.5 * d3,
+    )
+
+
+def _cubic_weight_matrix(index, fraction, n_source):
+    """Rows are cubic stencils. Applying this matrix is the interpolation.
+
+    A direct ``table[index]`` compiles to a multi-millisecond gather once it is
+    inlined into the profile. The same stencil as a matrix product stays on the
+    matrix unit.
+    """
+    offset = jnp.arange(n_source)[None, :] - index[:, None]
+    below, at, above, high = _cubic_basis(fraction)
+    return (
+        (offset == -1) * below[:, None]
+        + (offset == 0) * at[:, None]
+        + (offset == 1) * above[:, None]
+        + (offset == 2) * high[:, None]
+    )
+
+
+def _exact_cubic(table, log_q, lq0, dlq, left, right):
+    """Cubic at each entry of ``log_q``.
+
+    The stencil is a matrix product. Points off the left or right of the table
+    take ``left`` or ``right``; those are the ``q -> 0`` integral and the last
+    sample, and a cubic extrapolation there is wrong.
+    """
+    n_source = table.shape[0]
+    leading = log_q.shape[0] if log_q.ndim else 1
+    query = jnp.reshape(log_q, (leading, -1))
+    left = jnp.reshape(left, (-1,))
+    right = jnp.reshape(right, (-1,))
+    rows = []
+    for j in range(leading):
+        coordinate = (query[j] - lq0) / dlq
+        bin_index = jnp.clip(jnp.floor(coordinate).astype(jnp.int32), 1, n_source - 3)
+        fraction = coordinate - bin_index.astype(coordinate.dtype)
+        weights = _cubic_weight_matrix(bin_index, fraction, n_source)
+        if table.shape[1] == 1:
+            row = weights @ table[:, 0]
+            row_left = jnp.broadcast_to(left, row.shape)
+            row_right = jnp.broadcast_to(right, row.shape)
+        else:
+            row = jnp.einsum("cs,sc->c", weights, table)
+            row_left, row_right = left, right
+        row = jax.lax.select(coordinate < 0, row_left, row)
+        row = jax.lax.select(coordinate > n_source - 1, row_right, row)
+        rows.append(row)
+    return jnp.reshape(jnp.stack(rows, 0), log_q.shape)
+
+
+@jax.jit
+def _hankel_device(flat, q, matrix_w, sinc_w, q_native, moment_coeff, lq0, dlq, x_s, scale):
+    """Matrix product and interpolation.
+
+    The end weights already sit in the matrices. The cubic is two further
+    products: resample onto the query spacing, then a per-column shift.
+    """
+    u = jnp.matmul(matrix_w, flat) * jnp.sqrt(jnp.pi / (2.0 * q_native))[:, None]
+    u_direct = jnp.matmul(sinc_w, flat)
+    u = jnp.where(q_native[:, None] <= 1.0 / x_s, u_direct, u)
+    log_q = jnp.log(q)
+    moment_sum = jnp.matmul(moment_coeff[None, :], flat)[0]
+    interpolated = _exact_cubic(u, log_q, lq0, dlq, moment_sum, u[-1])
+    return 4.0 * jnp.pi * interpolated * scale
 
 
 def hankel_transform(x, f, q, x_out=jnp.inf):
@@ -327,32 +509,72 @@ def hankel_transform(x, f, q, x_out=jnp.inf):
     jnp.ndarray
         Transform at ``q``, with the broadcast shape of ``q`` and the trailing axes of ``f``.
     """
-    x = np.asarray(x, dtype=np.float64)
-    h = np.log(x[1] / x[0])
-    key = (x[0], x[-1], len(x))
+    x64 = np.asarray(x, dtype=np.float64)
+    h = np.log(x64[1] / x64[0])
+    key = (x64[0], x64[-1], len(x64))
     if key not in _HANKEL_MATRICES:
-        # Zero-pad 2 decades past x[-1]; linear on a fixed grid, so its matrix (the transform of the identity) does every column in one product.
+        # Plan in float64. The FFTLog matrix entries span many decades, and a
+        # float32 plan rounds away the digits the transform is a difference of.
         n_pad = int(np.ceil(2.0 * np.log(10.0) / h))
         with jax.ensure_compile_time_eval():
-            hankel = mcfit.Hankel(x[0] * np.exp(h * np.arange(len(x) + n_pad)), nu=0.5, lowring=True, backend="jax")
-            q_n, y = hankel(jnp.pad(jnp.eye(len(x)), [(0, 0), (0, n_pad)]), extrap=False)
-        _HANKEL_MATRICES[key] = (np.asarray(q_n), np.asarray(y).T)
-    q_native, matrix = _HANKEL_MATRICES[key]
-    col = lambda a: jnp.reshape(a, (-1,) + (1,) * (f.ndim - 1))
-
-    # Log-trapezoid end weight at the truncation point, clipped to the grid edge; O(h^2) instead of O(h).
-    s = jnp.log(jnp.minimum(x_out, x[-1]) / x[0]) / h
-    s = jnp.where(jnp.abs(s - jnp.round(s)) < 1e-6, jnp.round(s), s)
-    i = col(jnp.arange(len(x)))
-    w = jnp.where(i < jnp.floor(s), 1.0, jnp.where(i == jnp.floor(s), 0.5 + s - jnp.floor(s), 0.0))
-    moment = h * w * col(x) ** 3 * f
-
-    # Below q = 1 / x_s the native transform loses accuracy, so those nodes take direct quadrature of the same samples.
-    u = jnp.tensordot(matrix, w * col(x) ** 0.5 * f, axes=1) * col(jnp.sqrt(jnp.pi / (2.0 * q_native)))
-    x_s = jnp.max(jnp.where(w > 0, col(x), 0.0))
-    u_direct = jnp.tensordot(jnp.sinc(q_native[:, None] * x[None, :] / jnp.pi), moment, axes=1)
-    u = jnp.where(col(q_native) <= 1.0 / x_s, u_direct, u)
-
-    # Cubic in ln q on the native grid, with the q -> 0 value below it.
-    lq = np.log(q_native)
-    return 4.0 * jnp.pi * _cubic_interp_uniform(jnp.log(q), lq[0], lq[1] - lq[0], u, jnp.sum(moment, axis=0)[None], u[-1][None])
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message="use backend='jax' if desired")
+                hankel = mcfit.Hankel(x64[0] * np.exp(h * np.arange(len(x64) + n_pad)), nu=0.5, lowring=True, backend="numpy")
+                q_n, y = hankel(np.pad(np.eye(len(x64)), [(0, 0), (0, n_pad)]), extrap=False)
+        q_native = np.asarray(q_n)
+        matrix = np.asarray(y).T
+        phase = q_native[:, None] * x64[None, :] / np.pi
+        sinc = np.sinc(phase)
+        _HANKEL_MATRICES[key] = (q_native, matrix, sinc, x64, h)
+    q_native, matrix, sinc, x64, h = _HANKEL_MATRICES[key]
+    # One scale per column. The integrand is a difference of large samples;
+    # dividing that scale out keeps the difference inside the working dtype.
+    scale = jnp.max(jnp.abs(f), axis=0)
+    scale = jnp.where(scale > 0, scale, 1.0)
+    f = f / scale
+    # The end-weight is constant for a concrete truncation, so it is folded into
+    # the matrix. A device-side mask next to the interpolation compiles to a
+    # ~10 ms kernel on TPU; the multiply and the gather alone are ~0.15 ms.
+    s = _truncation_steps(x64, h, x_out)
+    if isinstance(s, (float, int, np.floating)):
+        index = np.arange(len(x64))
+        floor_s = np.floor(s)
+        weight = np.where(index < floor_s, 1.0, np.where(index == floor_s, 0.5 + s - floor_s, 0.0))
+        coeff = weight * np.sqrt(x64)
+        moment_coeff = h * weight * x64 ** 3
+        matrix_w = matrix * coeff[None, :]
+        sinc_w = sinc * moment_coeff[None, :]
+        x_s = float(np.max(np.where(weight > 0, x64, 0.0)))
+        flat = f.reshape((f.shape[0], -1))
+        dtype = flat.dtype
+        lq = np.log(q_native)
+        return _hankel_device(
+            flat,
+            q,
+            jnp.asarray(matrix_w, dtype=dtype),
+            jnp.asarray(sinc_w, dtype=dtype),
+            jnp.asarray(q_native),
+            jnp.asarray(moment_coeff, dtype=dtype),
+            float(lq[0]),
+            float(lq[1] - lq[0]),
+            x_s,
+            scale,
+        )
+    else:
+        col = lambda a: jnp.reshape(a, (-1,) + (1,) * (f.ndim - 1))
+        i = col(jnp.arange(len(x64)))
+        w = jnp.where(i < jnp.floor(s), 1.0, jnp.where(i == jnp.floor(s), 0.5 + s - jnp.floor(s), 0.0))
+        moment = h * w * col(jnp.asarray(x64)) ** 3 * f
+        samples = w * col(jnp.asarray(x64)) ** 0.5 * f
+        u = jnp.tensordot(jnp.asarray(matrix, dtype=samples.dtype), samples, axes=(1, 0)) * col(jnp.sqrt(jnp.pi / (2.0 * q_native)))
+        x_s = jnp.max(jnp.where(w > 0, col(jnp.asarray(x64)), 0.0))
+        u_direct = jnp.tensordot(jnp.asarray(sinc, dtype=moment.dtype), moment, axes=(1, 0))
+        u = jnp.where(col(q_native) <= 1.0 / x_s, u_direct, u)
+        flat_u = jnp.reshape(u, (u.shape[0], -1))
+        lq = np.log(q_native)
+        log_q = jnp.log(q)
+        moment_sum = jnp.reshape(jnp.sum(moment, axis=0), (-1,))
+        interpolated = _exact_cubic(
+            flat_u, log_q, float(lq[0]), float(lq[1] - lq[0]), moment_sum, jnp.reshape(u[-1], (-1,))
+        )
+        return 4.0 * jnp.pi * interpolated * scale

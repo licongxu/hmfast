@@ -7,7 +7,6 @@ from jax.scipy.special import sici, erf
 from hmfast.tracers.base_tracer import Tracer
 from hmfast.utils import Const
 from hmfast.halos.profiles import MatterProfile, NFWMatterProfile
-jax.config.update("jax_enable_x64", True)
 
 
 class CMBLensingTracer(Tracer):

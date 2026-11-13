@@ -11,10 +11,42 @@ import mcfit
 import numpy as np
 
 from hmfast.halos.profiles.hod import GalaxyHODProfile
-from hmfast.utils import log_interp1d_extrap
+from hmfast.utils import log_interp1d_extrap, pairwise_sum
 
 from . import projected_cl as _cl
 from .pk import Pk as _Pk
+
+
+def _log_product(factors, extra_log=0.0):
+    """Sign and log-absolute-value of a product, without forming the product.
+
+    A zero factor gives sign 0 and log ``-inf``. A NaN factor stays NaN.
+    """
+    sign = jnp.ones_like(factors[0])
+    log_abs = jnp.zeros_like(factors[0]) + extra_log
+    for factor in factors:
+        sign = sign * jnp.where(factor < 0.0, -1.0, jnp.where(factor > 0.0, 1.0, factor))
+        log_abs = log_abs + jnp.where(factor == 0.0, -jnp.inf, jnp.log(jnp.abs(factor)))
+    return sign, log_abs
+
+
+def _sum_from_logs(sign, log_abs, weight):
+    """Sum ``sign * exp(log_abs) * weight`` over axis 0.
+
+    ``weight`` broadcasts over that axis. The exponential is shifted by the
+    largest log so values near the float32 floor are not flushed to zero
+    before they are added.
+    """
+    sign = sign * jnp.where(weight < 0.0, -1.0, jnp.where(weight > 0.0, 1.0, weight))
+    logs = jnp.where(weight == 0.0, -jnp.inf, log_abs + jnp.log(jnp.abs(weight)))
+    has_nan = jnp.any(jnp.isnan(logs), axis=0)
+    finite = jnp.isfinite(logs)
+    scale = jnp.max(jnp.where(finite, logs, -jnp.inf), axis=0)
+    usable = jnp.isfinite(scale)
+    scale_safe = jnp.where(usable, scale, 0.0)
+    acc = pairwise_sum(jnp.where(finite, sign * jnp.exp(logs - scale_safe), 0.0), axis=0)
+    total = jnp.where(usable, acc * jnp.exp(scale_safe), 0.0)
+    return jnp.where(has_nan, jnp.nan, total)
 
 
 def _pair_pk(halo_model, tracer_a, tracer_b):
@@ -246,13 +278,16 @@ def cov_cng(tk, halo_model, l1, l2, tracer1, tracer2=None, tracer3=None, tracer4
             (l1.size, l2.size),
         )
 
-        kernels = kernel12[:, None] * kernel34[None, :]  # (N_l1, N_l2)
-        weight = jnp.squeeze(hm.cosmology.comoving_volume_element(z_i) / chi ** 8)
+        # chi**8 and the four kernels sit many decades apart. Form the product in
+        # log space so float32 does not flush it to zero before the line-of-sight sum.
+        volume = jnp.squeeze(hm.cosmology.comoving_volume_element(z_i))
+        return _log_product(
+            (T, kernel12[:, None], kernel34[None, :], volume),
+            extra_log=-8.0 * jnp.log(chi),
+        )
 
-        return T * (kernels * weight)
-
-    integrand = jax.vmap(get_cov_slice)(z, kernels12, kernels34)  # (Nz, N_l1, N_l2)
-    cov = jnp.sum(integrand * z_gl_w[:, None, None], axis=0) / (4.0 * jnp.pi * f_sky)
+    signs, logs = jax.vmap(get_cov_slice)(z, kernels12, kernels34)  # (Nz, N_l1, N_l2)
+    cov = _sum_from_logs(signs, logs, z_gl_w[:, None, None]) / (4.0 * jnp.pi * f_sky)
 
     return jnp.squeeze(cov)
 
@@ -434,14 +469,15 @@ def cov_ssc(pk, halo_model, l1, l2, tracer1, tracer2=None, tracer3=None, tracer4
         ), (l2.size,))  # (N_l2,)
         response_outer = response1[:, None] * response2[None, :]  # (N_l1, N_l2)
 
-        kernels = kernel12[:, None] * kernel34[None, :]  # (N_l1, N_l2)
         sigma2_b_i = jnp.squeeze(sigma2_b_fn(z_i))
-        weight = jnp.squeeze(hm.cosmology.comoving_volume_element(z_i) / chi ** 6)
-
-        return response_outer * (kernels * weight * sigma2_b_i)
+        volume = jnp.squeeze(hm.cosmology.comoving_volume_element(z_i))
+        return _log_product(
+            (response_outer, kernel12[:, None], kernel34[None, :], volume, sigma2_b_i),
+            extra_log=-6.0 * jnp.log(chi),
+        )
 
     # No 1/(4*pi*f_sky) prefactor: the footprint enters only through sigma2_b.
-    integrand = jax.vmap(get_cov_slice)(z, kernels12, kernels34)  # (Nz, N_l1, N_l2)
-    cov = jnp.sum(integrand * z_gl_w[:, None, None], axis=0)
+    signs, logs = jax.vmap(get_cov_slice)(z, kernels12, kernels34)  # (Nz, N_l1, N_l2)
+    cov = _sum_from_logs(signs, logs, z_gl_w[:, None, None])
 
     return jnp.squeeze(cov)

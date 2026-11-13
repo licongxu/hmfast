@@ -10,10 +10,9 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from hmfast.precision import real_dtype
 from hmfast.tracers.cmb_lensing import CMBLensingTracer
-from hmfast.utils import gauss_legendre_nodes_weights
-
-jax.config.update("jax_enable_x64", True)
+from hmfast.utils import Const, gauss_legendre_nodes_weights
 
 
 # ------------------------------------------------------------------
@@ -53,7 +52,7 @@ def _halo_model_z(cosmology, z):
 
 def _dispatch_by_ell(l, l_limber, nonlimber_fn, limber_fn):
     """Route each multipole to the non-Limber (l < l_limber) or Limber (l >= l_limber) engine."""
-    l_arr = jnp.atleast_1d(jnp.asarray(l, dtype=jnp.float64))
+    l_arr = jnp.atleast_1d(jnp.asarray(l, dtype=real_dtype()))
 
     # l_limber is a plain scalar, so this resolves at trace time and leaves l traceable.
     if float(l_limber) <= 0.0:
@@ -69,7 +68,7 @@ def _dispatch_by_ell(l, l_limber, nonlimber_fn, limber_fn):
     idx_low = [i for i, li in enumerate(l_vals) if li < l_limber]
     idx_high = [i for i, li in enumerate(l_vals) if li >= l_limber]
 
-    result = jnp.zeros(len(l_vals), dtype=jnp.float64)
+    result = jnp.zeros(len(l_vals), dtype=real_dtype())
     if idx_low:
         low_idx = jnp.array(idx_low)
         result = result.at[low_idx].set(jnp.atleast_1d(nonlimber_fn(l_arr[low_idx])))
@@ -120,7 +119,7 @@ def _hankel_A_table(l_arr, p, der_bessel):
 
 def _f_ell(l, der_angles):
     """Angular prefactor f_l^(a): 1, l(l+1), or sqrt((l+2)!/(l-2)!), exact to l=10 and in its (l+1/2)^2 expansion above."""
-    l = jnp.asarray(l, dtype=jnp.float64)
+    l = jnp.asarray(l, dtype=real_dtype())
     if der_angles == 0:
         return jnp.ones_like(l)
     if der_angles == 1:
@@ -147,7 +146,7 @@ def _nonlimber_cl(cosmology, tracer1, tracer2, l, z_range, *, linear, mass_integ
         D = jnp.sqrt(P_z / P_zfid)
         return D if mass_integral is None else D * mass_integral(tracer, k, _halo_model_z(cosmology, z)[0])
 
-    l_arr = jnp.atleast_1d(jnp.asarray(l, dtype=jnp.float64))
+    l_arr = jnp.atleast_1d(jnp.asarray(l, dtype=real_dtype()))
     z_min, z_max = jnp.asarray(z_range[0]), jnp.asarray(z_range[1])
 
     # Widen the range (never narrow) to each tracer's own support, since each Delta_l is projected separately.
@@ -340,7 +339,9 @@ def _limber_cl(cosmology, tracer1, tracer2, l, z_range, n_z, pk_fn, linear_bias=
     kernel1, kernel2 = _limber_pair_kernels(cosmology, tracer1, tracer2, l, z, chi, P_grid, pk_fn, z_range[1],
                                             linear_bias)
 
-    limber_weight = cosmology.comoving_volume_element(z) / chi**4
+    # dV/dzdOmega = chi^2 * c / H, so dividing by chi^4 is c / (H chi^2). The
+    # expanded quotient cancels in the float32 derivative even though the value is fine.
+    limber_weight = (Const.c / 1e3) / (cosmology.hubble_parameter(z) * chi**2)
     integrand = P_grid * limber_weight[:, None] * kernel1 * kernel2
     return jnp.squeeze(jnp.sum(integrand * z_gl_w[:, None], axis=0))
 

@@ -1,4 +1,5 @@
 import difflib
+import math
 from collections import namedtuple
 from functools import partial
 
@@ -7,9 +8,16 @@ import jax.numpy as jnp
 import numpy as np
 from mcfit import TophatVar
 
+from hmfast.precision import numpy_real_dtype
 from hmfast.utils import Const, gauss_legendre_nodes_weights
 
-jax.config.update("jax_enable_x64", True)
+# Host float64. Casting Mpc**3 (~1e67) or the G*M_sun product through float32
+# overflows or loses the digits, even though the densities themselves fit.
+_RHO_CRIT_PER_H2 = (3.0 * 1.0e6 * Const.Mpc_over_m) / (8.0 * math.pi * Const.G * Const.M_sun)
+_PHOTON_DENSITY_PREFAC = (4.0 * Const.sigma_B * Const.Mpc_over_m**3) / (Const.c**3 * Const.M_sun)
+# Kelvin per eV. Forming m*eV/k_B in SI underflows the float32 reverse pass (the
+# denominator is ~1e-22, and its square is ~1e-44).
+_EV_OVER_KB = Const.eV / Const.k_B
 
 
 _FUNCTION_NAMES = ("hubble_parameter", "pk_linear", "angular_diameter_distance", "pk_nonlinear", "growth_factor")
@@ -322,7 +330,7 @@ class Cosmology:
 
         # Power spectra at the requested redshifts, shape: (n_k, n_z)
         # numpy, not jnp: fixed by the settings, so it stays concrete for mcfit to plan on.
-        k_grid = np.geomspace(*self.k_range, self.n_k)
+        k_grid = np.geomspace(*self.k_range, self.n_k).astype(numpy_real_dtype(), copy=False)
         pk_grid = jnp.reshape(self.pk(k_grid, z_grid, linear=True), (len(k_grid), len(z_grid)))
 
         # mcfit plans on concrete values, so build the transform eagerly even under a trace.
@@ -519,15 +527,11 @@ class Cosmology:
             Critical density in :math:`M_\\odot \\, \\mathrm{Mpc}^{-3}`
         """
         
-        # Get Hubble parameter    
-        H_z = self.hubble_parameter(z)
+        # H(z) is in km/s/Mpc. The unit conversion is a host constant so the
+        # SI factors never enter the working float dtype.
+        return _RHO_CRIT_PER_H2 * self.hubble_parameter(z) ** 2 
         
-        # Convert H(z) from km/s/Mpc to s^-1 inside the prefactor.
-        G, M_sun, Mpc_over_m = Const.G, Const.M_sun, Const.Mpc_over_m
-        rho_crit_factor = (3.0 / (8.0 * jnp.pi * G * M_sun)) * (1e6 * Mpc_over_m)
-        
-        return rho_crit_factor * H_z**2 
-        
+    @partial(jax.jit, static_argnames=("species",))
     def rho_x(self, z, species):
         """
         Physical (not comoving) density of a species at redshift :math:`z`, from the cosmological parameters.
@@ -552,11 +556,11 @@ class Cosmology:
             Physical density in :math:`M_\\odot \\, \\mathrm{Mpc}^{-3}`, with the shape of ``z``.
         """
         p = {**self._fixed_params(), **self.params}
-        sigma_B, c, M_sun, Mpc = Const.sigma_B, Const.c, Const.M_sun, Const.Mpc_over_m
+        M_sun, Mpc = Const.M_sun, Const.Mpc_over_m
         rho_crit_100 = 3.0e10 * Mpc / (8.0 * np.pi * Const.G * M_sun)  # critical density for H0 = 100 km/s/Mpc
         rho_crit_0 = rho_crit_100 * (p["H0"] / 100.0) ** 2
         T_cmb = p.get("T_cmb", 0.0)
-        rho_photons = 4.0 * sigma_B * T_cmb**4 / c**3 * Mpc**3 / M_sun
+        rho_photons = _PHOTON_DENSITY_PREFAC * T_cmb**4
         rho_cb = (p["omega_b"] + p["omega_cdm"]) * rho_crit_100
         rho_ur = p.get("N_ur", 0.0) * 7.0 / 8.0 * (4.0 / 11.0) ** (4.0 / 3.0) * rho_photons
         rho_k = p.get("Omega_k", 0.0) * rho_crit_0
@@ -566,7 +570,7 @@ class Cosmology:
         def rho_nu(zp1):
             if not has_nu:
                 return 0.0 * zp1
-            y = p["m_ncdm"] * Const.eV / (Const.k_B * p["T_ncdm"] * T_cmb * zp1)
+            y = (p["m_ncdm"] / T_cmb) * _EV_OVER_KB / (p["T_ncdm"] * zp1)
             return self._deg_ncdm * 7.0 / 8.0 * p["T_ncdm"] ** 4 * rho_photons * zp1**4 * _fermi_dirac_energy(y)
 
         zp1 = 1.0 + jnp.asarray(z)

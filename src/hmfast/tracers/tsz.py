@@ -6,8 +6,6 @@ from hmfast.tracers.base_tracer import Tracer
 from hmfast.utils import Const
 from hmfast.halos.profiles import PressureProfile, GNFWPressureProfile
 
-jax.config.update("jax_enable_x64", True)
-
 
 class tSZTracer(Tracer):
     """

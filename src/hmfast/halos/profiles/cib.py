@@ -264,20 +264,25 @@ class S12CIBProfile(CIBProfile):
         T_d_z = T0 * (1 + z) ** alpha
     
         x = -(3. + beta + gamma) * jnp.exp(-(3. + beta + gamma))
-        # nu0 in GHz
-        nu0_GHz = 1e-9 * k_B * T_d_z / h * (3. + beta + gamma + lambertw(x))
+        # k_B/h in GHz/K, evaluated on the host. k_B*T/h in SI underflows float32.
+        nu0_GHz = (1e-9 * k_B / h) * T_d_z * (3. + beta + gamma + lambertw(x))
         # convert all nu, nu0 to Hz for Planck
         nu_Hz   = nu * 1e9      # If input is GHz!
         nu0_Hz  = nu0_GHz * 1e9
     
-        def B_nu(nu_Hz, T):
-            return (2 * h * nu_Hz ** 3 / c ** 2) / (jnp.exp(h * nu_Hz / (k_B * T)) - 1)
-    
-        
+        def log_expm1(x):
+            # expm1 overflows past ~88 in float32; ln(e^x - 1) = x to that precision.
+            return jnp.where(x > 40.0, x, jnp.log(jnp.expm1(jnp.clip(x, 1e-6, 40.0))))
+
+        def planck_ratio(nu_a, nu_b, T):
+            """B(nu_a) / B(nu_b). The 2h/c^2 prefactor is ~1e-50 and cancels, so it stays in the log."""
+            log_ratio = 3.0 * jnp.log(nu_a / nu_b) - log_expm1(h * nu_a / (k_B * T)) + log_expm1(h * nu_b / (k_B * T))
+            return jnp.exp(jnp.clip(log_ratio, -80.0, 80.0))
+
         Theta = jnp.where(
             nu_Hz >= nu0_Hz,
             (nu_Hz / nu0_Hz) ** (-gamma),
-            (nu_Hz / nu0_Hz) ** beta * (B_nu(nu_Hz, T_d_z) / B_nu(nu0_Hz, T_d_z))
+            (nu_Hz / nu0_Hz) ** beta * planck_ratio(nu_Hz, nu0_Hz, T_d_z)
         )
         
         return Theta

@@ -4,6 +4,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from hmfast.utils import pairwise_sum
+
 
 
 # -------------------------
@@ -115,6 +117,51 @@ def _kr_pkr(hm, k, kp, z_arr, cth):
         kr.shape + (nz,),
     )
     return k_b, kp_b, kr, pkr
+
+
+def _tree_level_trispectrum(hm, k, kp, z_arr, n_theta):
+    """Parallelogram tree-level trispectrum, with the cancelling diagrams summed per angle.
+
+    The ``1113`` and ``1122`` diagrams are each ~1e4 times their sum wherever one
+    leg is much larger than the other. Subtracting them after the fact loses the
+    result in float32. The weights of the angle average sum to one, so the closed
+    piece of ``X`` and ``P_4`` are accumulated inside the same sum, and only then
+    multiplied by ``P(k)^2``.
+    """
+    cth, wgt = _theta_quadrature(n_theta)
+    k_b, kp_b, kr, pkr = _kr_pkr(hm, k, kp, z_arr, cth)
+    r = kp[None, :] / k[:, None]
+    r_b = r[:, :, None]
+    cth_b = cth[None, None, :]
+    closed = 1.75 * (1.0 + r_b ** 2)
+    closed_inv = 1.75 * (1.0 + 1.0 / r_b ** 2)
+
+    def _intd(radius):
+        numerator = 5.0 * radius + (7.0 - 2.0 * radius ** 2) * cth_b
+        denominator = 1.0 + radius ** 2 + 2.0 * radius * cth_b
+        angular = 3.0 / 7.0 * radius + 0.5 * (1.0 + radius ** 2) * cth_b + 4.0 / 7.0 * radius * cth_b ** 2
+        return numerator / denominator * angular
+
+    alive = kr != 0.0
+    # cos(angle between a leg and k+k') from the same cosine used to build |k+k'|.
+    # Reconstructing it from the three magnitudes cancels k^2 - kr^2 in float32.
+    mu_k = jnp.where(alive, -(k_b + kp_b * cth_b) / kr, 0.0)
+    mu_p = jnp.where(alive, -(kp_b + k_b * cth_b) / kr, 0.0)
+    intd_uv = jnp.where(alive, _intd(r_b), 0.0)
+    intd_vu = jnp.where(alive, _intd(1.0 / r_b), 0.0)
+    f2_k = jnp.where(alive, _F2(k_b, kr, mu_k), 13.0 / 28.0)
+    f2_p = jnp.where(alive, _F2(kp_b, kr, mu_p), 13.0 / 28.0)
+    n_z = len(z_arr)
+    p_k = jnp.reshape(hm.cosmology.pk(k, z_arr, linear=True), (len(k), 1, n_z))
+    p_kp = jnp.reshape(hm.cosmology.pk(kp, z_arr, linear=True), (1, len(kp), n_z))
+    weight = wgt[None, None, :, None]
+    bracket_u = (4.0 / 9.0) * p_kp[:, :, None, :] * (intd_uv - closed)[..., None] + 8.0 * pkr * f2_k[..., None] ** 2
+    bracket_v = (4.0 / 9.0) * p_k[:, :, None, :] * (intd_vu - closed_inv)[..., None] + 8.0 * pkr * f2_p[..., None] ** 2
+    bracket_x = 16.0 * pkr * (f2_k * f2_p)[..., None]
+    acc_u = pairwise_sum(weight * bracket_u, axis=2)
+    acc_v = pairwise_sum(weight * bracket_v, axis=2)
+    acc_x = pairwise_sum(weight * bracket_x, axis=2)
+    return p_k ** 2 * acc_u + p_kp ** 2 * acc_v + p_k * p_kp * acc_x
 
 
 # -------------------------
@@ -648,7 +695,7 @@ class Tk:
         cth, wgt = _theta_quadrature(self.n_theta)
         _, _, _, pkr = _kr_pkr(hm, k, kp, z_arr, cth)
         wgt = wgt[None, None, :, None]
-        return jnp.sum(pkr * wgt, axis=2)
+        return pairwise_sum(pkr * wgt, axis=2)
 
     @jax.jit
     def tk_2h(self, halo_model, k_u, k_v, z, profile1, profile2=None, profile3=None, profile4=None):
@@ -762,9 +809,13 @@ class Tk:
         """
         cth, wgt = _theta_quadrature(self.n_theta)
         k_b, kp_b, kr, pkr = _kr_pkr(hm, k, kp, z_arr, cth)
-        wgt = wgt[None, None, :]
-        f2_kkp = jnp.where(kr == 0.0, 13.0 / 28.0, _F2(k_b, kr, _mu(k_b, kr, kp_b)))
-        return jnp.sum(pkr * (f2_kkp * wgt)[..., None], axis=2)
+        cth_b = cth[None, None, :]
+        alive = kr != 0.0
+        # Same cosine that built |k+kp|. The three-magnitude formula cancels in float32.
+        mu_k = jnp.where(alive, -(k_b + kp_b * cth_b) / kr, 0.0)
+        f2_kkp = jnp.where(alive, _F2(k_b, kr, mu_k), 13.0 / 28.0)
+        terms = pkr * (f2_kkp * wgt[None, None, :])[..., None]
+        return pairwise_sum(terms, axis=2)
 
     def _Bpt_kernel(self, hm, k, kp, z_arr):
         """
@@ -881,15 +932,18 @@ class Tk:
         """
         cth, wgt = _theta_quadrature(self.n_theta)
         k_b, kp_b, kr, pkr = _kr_pkr(hm, k, kp, z_arr, cth)
+        cth_b = cth[None, None, :]
         wgt = wgt[None, None, :]
+        alive = kr != 0.0
+        mu_k = jnp.where(alive, -(k_b + kp_b * cth_b) / kr, 0.0)
+        mu_p = jnp.where(alive, -(kp_b + k_b * cth_b) / kr, 0.0)
 
-        # F2 between leg k (or kp) and the (negative of the) internal
-        # propagator -kr, whose opposite side is the other leg (kp or k).
-        f2_kkp = jnp.where(kr == 0.0, 13.0 / 28.0, _F2(k_b, kr, _mu(k_b, kr, kp_b)))
-        f2_kpk = jnp.where(kr == 0.0, 13.0 / 28.0, _F2(kp_b, kr, _mu(kp_b, kr, k_b)))
+        # F2 between leg k (or kp) and the internal propagator kr.
+        f2_kkp = jnp.where(alive, _F2(k_b, kr, mu_k), 13.0 / 28.0)
+        f2_kpk = jnp.where(alive, _F2(kp_b, kr, mu_p), 13.0 / 28.0)
 
-        P4A = jnp.sum(pkr * (f2_kkp ** 2 * wgt)[..., None], axis=2)
-        P4X = jnp.sum(pkr * (f2_kkp * f2_kpk * wgt)[..., None], axis=2)
+        P4A = pairwise_sum(pkr * (f2_kkp ** 2 * wgt)[..., None], axis=2)
+        P4X = pairwise_sum(pkr * (f2_kkp * f2_kpk * wgt)[..., None], axis=2)
         return P4A, P4X
 
     @jax.jit
@@ -943,24 +997,9 @@ class Tk:
         k_us, k_vs = jnp.atleast_1d(k_u), jnp.atleast_1d(k_v)
         nu, nv, nz = len(k_us), len(k_vs), len(z_arr)
 
-        P_u = jnp.reshape(hm.cosmology.pk(k_us, z_arr, linear=True), (nu, 1, nz))
-        P_v = jnp.reshape(hm.cosmology.pk(k_vs, z_arr, linear=True), (1, nv, nz))
-
-        # "1113" diagram (tree-level F3-type kernel), symmetrized k_u <-> k_v
-        X_uv = _X3(k_us, k_vs, self.n_theta)[:, :, None]                            # (Nu, Nv, 1)
-        X_vu = jnp.swapaxes(_X3(k_vs, k_us, self.n_theta), 0, 1)[:, :, None]        # (Nu, Nv, 1)
-        t1113 = 4.0 / 9.0 * P_u ** 2 * P_v * X_uv + 4.0 / 9.0 * P_v ** 2 * P_u * X_vu
-
-        # "1122" diagram (two F2-type vertices), symmetrized k_u <-> k_v
-        P4A_uv, P4X_uv = self._P4_kernel(hm, k_us, k_vs, z_arr)  # (Nu, Nv, Nz)
-        P4A_vu, P4X_vu = self._P4_kernel(hm, k_vs, k_us, z_arr)  # (Nv, Nu, Nz)
-        P4A_vu, P4X_vu = jnp.swapaxes(P4A_vu, 0, 1), jnp.swapaxes(P4X_vu, 0, 1)
-        t1122 = (
-            8.0 * (P_u ** 2 * P4A_uv + P_u * P_v * P4X_uv)
-            + 8.0 * (P_v ** 2 * P4A_vu + P_v * P_u * P4X_vu)
-        )
-
-        T_pt = t1113 + t1122  # (Nu, Nv, Nz)
+        # "1113" and "1122" cancel by ~1e4 when the two legs are very different.
+        # _tree_level_trispectrum sums that cancellation inside the angle average.
+        T_pt = _tree_level_trispectrum(hm, k_us, k_vs, z_arr, self.n_theta)
 
         I1 = jnp.reshape(hm.mass_integral(k_us, z_arr, profile1, bias_order=1), (nu, 1, nz))
         I2 = jnp.reshape(hm.mass_integral(k_us, z_arr, profile2, bias_order=1), (nu, 1, nz))

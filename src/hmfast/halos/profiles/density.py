@@ -4,7 +4,7 @@ import numpy as np
 
 from hmfast.halos.massdef import MassDefinition, mass_translator
 from hmfast.halos.profiles import HaloProfile
-from hmfast.utils import hankel_transform
+from hmfast.utils import hankel_transform, inside_truncation
 
 
 class DensityProfile(HaloProfile):
@@ -339,7 +339,7 @@ class B16DensityProfile(DensityProfile):
 
         rho_gas = rho0 * rho_crit_z * f_b * f_free * p_x
         # NaN-safe: a bare `x_200c <= self.x_out` would silently zero out NaN instead of propagating it.
-        rho_gas = jnp.where(jnp.isnan(x_200c) | (x_200c <= self.x_out), rho_gas, 0.0)
+        rho_gas = jnp.where(inside_truncation(x_200c, self.x_out), rho_gas, 0.0)
 
         return jnp.squeeze(rho_gas)
 
@@ -374,7 +374,9 @@ class B16DensityProfile(DensityProfile):
 
         # Sampled a hair inside each node so a node sitting exactly on x_out is not lost to round-off in real().
         x = np.logspace(np.log10(self.x_range[0]), np.log10(self.x_range[1]), self.n_x)
-        f = jnp.reshape(self.real(halo_model_200c, x[:, None, None] * (1.0 - 1e-12) * r_com[None], m_200c, z), (len(x), len(m), len(z)))
+        # 1e-5 is representable in float32. 1e-12 rounds away, so the boundary
+        # sample was evaluated a ulp outside x_out and dropped on TPU.
+        f = jnp.reshape(self.real(halo_model_200c, x[:, None, None] * (1.0 - 1e-5) * r_com[None], m_200c, z), (len(x), len(m), len(z)))
         return jnp.squeeze(r_com**3 * hankel_transform(x, f, k[:, None, None] * r_com[None], self.x_out))
 
 

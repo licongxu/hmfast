@@ -12,6 +12,7 @@ import numpy as np
 
 from hmfast.cosmology.cosmology import Cosmology
 from hmfast import data_path
+from hmfast.precision import real_dtype
 from hmfast.utils import Const, dopri5_integrate, log_interp1d_extrap
 
 
@@ -40,7 +41,7 @@ class _EmulatorLoader:
             np.lib.format.read_magic(arr)
             np.lib.format.read_array_header_1_0(arr)
             fpz = _NoTFUnpickler(arr).load().item()
-        as_jnp = lambda x: jnp.asarray(x, dtype=jnp.float64)
+        as_jnp = lambda x: jnp.asarray(x, dtype=real_dtype())
         self.parameters = list(fpz["parameters"])
         self.n_layers = fpz["n_layers"]
         self.parameters_mean, self.parameters_std = as_jnp(fpz["param_train_mean"]), as_jnp(fpz["param_train_std"])
@@ -172,7 +173,18 @@ class _EmulatorSet:
         return 10.0 ** y if self.v2 else y
 
     def on_z_bg(self, key, z, p):
-        return self.mask(p, jnp.interp(z, self.z_bg, self.background(key, p), left=jnp.nan, right=jnp.nan))
+        # z_bg is uniform, so the index is arithmetic. jnp.interp binary-searches
+        # it, and that 13-step loop in the same program as a Hankel gather makes
+        # the gather kernels about 2 ms each on TPU.
+        grid = self.z_bg
+        y = self.background(key, p)
+        dz = float(grid[1] - grid[0])
+        t = jnp.asarray(z) / dz
+        i = jnp.clip(jnp.floor(t).astype(jnp.int32), 0, grid.size - 2)
+        d = t - i
+        out = y[i] * (1.0 - d) + y[i + 1] * d
+        out = jnp.where((z < grid[0]) | (z > grid[-1]), jnp.nan, out)
+        return self.mask(p, out)
 
     def emulated_pk(self, key, k, z, p):
         inputs = self.inputs(p)
